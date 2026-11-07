@@ -45,7 +45,7 @@ describe("triggerActionDenial — the wiring-time gate (#358)", () => {
 	// Being an instance IS the requirement for these — they dispatch into the instance's own DO.
 	it("allows every action that needs no declared capability", () => {
 		for (const action of TRIGGER_ACTIONS) {
-			if (action === "run_browse" || action === "run_local_browser" || action === "generate_application_materials" || action === "start_application_fill" || action === "run_po_triage") continue;
+			if (action === "run_browse" || action === "run_local_browser" || action === "generate_application_materials" || action === "start_application_fill" || action === "find_original_posting" || action === "run_po_triage") continue;
 			expect(triggerActionDenial(action, caps({}))).toBeNull();
 			expect(triggerActionRequirement(action)).toBeNull();
 		}
@@ -73,12 +73,17 @@ describe("triggerActionOffers — what the console picker renders", () => {
 		expect(browse?.requires).toContain("BROWSER_TASK");
 		// …and local browser research, which needs runtime "local_browser" (#962), and tailoring,
 		// which needs runtime "local_artifact" (#956).
-		expect(offers.filter((o) => !o.available).map((o) => o.action).sort()).toEqual(["generate_application_materials", "run_browse", "run_local_browser", "run_po_triage", "start_application_fill"]);
+		expect(offers.filter((o) => !o.available).map((o) => o.action).sort()).toEqual(["find_original_posting", "generate_application_materials", "run_browse", "run_local_browser", "run_po_triage", "start_application_fill"]);
 	});
 
 	it("marks everything but the local CLI actions available on a browser-task agent", () => {
 		const offers = triggerActionOffers(caps({ workflow: "BROWSER_TASK", runtime: "browser" }));
-		expect(offers.filter((o) => !o.available).map((o) => o.action)).toEqual(["run_local_browser", "generate_application_materials", "start_application_fill", "run_po_triage"]);
+		expect(offers.filter((o) => !o.available).map((o) => o.action)).toEqual(["run_local_browser", "generate_application_materials", "start_application_fill", "find_original_posting", "run_po_triage"]);
+	});
+
+	it("finding an original posting is offered to a local browser agent only (#1608)", () => {
+		expect(triggerActionDenial("find_original_posting", caps({ runtime: "local_browser" }))).toBeNull();
+		expect(triggerActionDenial("find_original_posting", caps({ runtime: "local_apply" }))).toMatch(/research original job postings/);
 	});
 
 	it("product-owner triage is offered to a coding agent only (#1027)", () => {

@@ -35,6 +35,7 @@ const ACTION_LABELS: Record<TriggerAction, string> = {
 	run_local_browser: "Run browser research",
 	generate_application_materials: "Tailor application materials",
 	start_application_fill: "Fill the application",
+	find_original_posting: "Find the original posting",
 	start_loop: "Take the next turn",
 	run_po_triage: "Product-owner triage",
 };
@@ -64,6 +65,7 @@ const REQUIREMENTS: Partial<Record<TriggerAction, ActionRequirement>> = {
 	run_local_browser: { runtime: "local_browser", does: "run local browser research" },
 	generate_application_materials: { runtime: "local_artifact", does: "tailor application materials" },
 	start_application_fill: { runtime: "local_apply", does: "fill job applications" },
+	find_original_posting: { runtime: "local_browser", does: "research original job postings" },
 	// #1027: triages the coder's own GitHub backlog and queues coding runs.
 	run_po_triage: { workflow: "CODING_SESSION", does: "triage a coder's issues" },
 };

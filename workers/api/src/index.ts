@@ -99,6 +99,7 @@ import { redactStoredPanes } from "./lib/pane-redaction-sweep.js";
 import { notifyMachineWarnings, notifyRecoveredMachines } from "./lib/machine-warnings.js";
 import { expireStaleTakeovers } from "./lib/browser-takeovers.js";
 import { runLeadBrowserVerification } from "./lib/job-lead-browser-verification.js";
+import { runOriginalFinder } from "./lib/original-finder/finder.js";
 import { dispatchQueuedRunnerUpdates } from "./lib/runner-update.js";
 import { syncLeadWritebacks } from "./lib/local-artifact/store.js";
 import { routeRunEvents } from "./lib/run-event-routing.js";
@@ -491,6 +492,8 @@ export default {
 		ctx.waitUntil(expireStaleTakeovers(env).catch((err) => logUnhandled(env, err, { path: "scheduled:browser-takeovers", method: "CRON" })));
 		// #1030: settle finished browser verifications of Gmail leads, then dispatch the ones due.
 		ctx.waitUntil(runLeadBrowserVerification(env).catch((err) => logUnhandled(env, err, { path: "scheduled:lead-browser-verification", method: "CRON" })));
+		// #1608: settle finished Original Finder research runs, then dispatch the next lead (one at a time, under the daily cap).
+		ctx.waitUntil(runOriginalFinder(env).catch((err) => logUnhandled(env, err, { path: "scheduled:original-finder", method: "CRON" })));
 		ctx.waitUntil(dispatchQueuedRunnerUpdates(env).catch((err) => logUnhandled(env, err, { path: "scheduled:runner-update-workflow", method: "CRON" })));
 		// Backstop for the lead writeback (#953): applications that moved in the last 10 minutes.
 		ctx.waitUntil(syncLeadWritebacks(env, Date.now() - 10 * 60_000).catch((err) => logUnhandled(env, err, { path: "scheduled:application-lead-writeback", method: "CRON" })));

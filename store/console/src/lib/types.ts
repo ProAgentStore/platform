@@ -52,6 +52,7 @@ export type TriggerAction =
 	| "run_local_browser"
 	| "generate_application_materials"
 	| "start_application_fill"
+	| "find_original_posting"
 	| "log_event" | "start_loop" | "run_po_triage";
 
 export interface CustomSurface {

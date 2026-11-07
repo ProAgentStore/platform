@@ -20,7 +20,7 @@ export interface InstanceToolsCtx {
 /** Every action `create_instance_trigger` accepts. Pinned to the API's `TRIGGER_ACTIONS` by a test (#1581). */
 export const TRIGGER_ACTION_NAMES = [
 	"create_task", "add_knowledge", "log_event", "sync_connector", "run_pipeline", "insert_record", "run_browse",
-	"run_local_browser", "generate_application_materials", "start_application_fill", "start_loop", "run_po_triage",
+	"run_local_browser", "generate_application_materials", "start_application_fill", "find_original_posting", "start_loop", "run_po_triage",
 ] as const;
 
 export const triggerConfigSchema = z.object({

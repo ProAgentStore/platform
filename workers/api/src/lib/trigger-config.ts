@@ -90,6 +90,8 @@ const ACTION_KEYS: Record<TriggerAction, readonly string[]> = {
 	generate_application_materials: [],
 	// #957: the payload IS the materials_ready event; the policy lives in the instance settings.
 	start_application_fill: [],
+	// #1608: the payload IS the job.lead.original_missing event; the scope and budget live in the instance settings.
+	find_original_posting: [],
 	// #968: `objective` is the STANDING instruction the owner wrote once ("review what finished and
 	// decide the next step"); the event's own facts are appended by the executor, so the wiring does
 	// not have to restate them and cannot go stale when the payload shape grows.
@@ -117,6 +119,7 @@ export const MAPPING_TARGETS: Record<TriggerAction, readonly string[]> = {
 	run_local_browser: ["objective"],
 	generate_application_materials: [],
 	start_application_fill: [],
+	find_original_posting: [],
 	// A webhook may carry the instruction for this one turn (#968), as it may for research.
 	start_loop: ["objective"],
 	run_po_triage: [],
@@ -274,6 +277,7 @@ export function validateTriggerConfig(action: TriggerAction, type: TriggerType, 
 		if (action === "run_browse" && !/^https?:\/\//i.test(strValue(raw.url))) problems.push("A scheduled browser run needs a start URL beginning with http:// or https://.");
 		if (action === "run_local_browser" && !strValue(raw.objective)) problems.push("A scheduled research run needs an objective — what it should find.");
 		if (action === "generate_application_materials") problems.push("Tailoring needs an approved lead to work on, which a schedule cannot supply — connect the Scout's job.lead.apply_requested event to this agent instead.");
+		if (action === "find_original_posting") problems.push("Finding an original posting needs a lead with none, which a schedule cannot supply — connect the Scout's job.lead.original_missing event to this agent instead.");
 		if (action === "start_application_fill") problems.push("Filling needs an application whose materials are ready, which a schedule cannot supply — connect the Tailor's job.application.materials_ready event to this agent instead.");
 	}
 	return problems;

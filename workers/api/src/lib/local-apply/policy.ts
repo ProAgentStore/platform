@@ -302,10 +302,13 @@ export interface GateCheck {
 	why?: string;
 }
 
+/** Does the text contain one of these (lowercase) phrases? Empty text matches nothing. Shared with the Original Finder's scope (#1608). */
+export const includesAny = (text: string | undefined, list: readonly string[]): boolean => !!text && list.some((t) => text.toLowerCase().includes(t));
+
 export function evaluateSubmitGate(i: GateInput): { allowed: boolean; checks: GateCheck[] } {
 	const a = i.settings.autoSubmit;
 	const app = i.application;
-	const has = (text: string | undefined, list: string[]) => !!text && list.some((t) => text.toLowerCase().includes(t));
+	const has = includesAny;
 	const host = hostOfUrl(app.leadUrl);
 	const salary = typeof app.lead.salary === "number" ? app.lead.salary : null;
 	const approved = i.approval?.usable === true;

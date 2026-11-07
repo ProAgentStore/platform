@@ -457,3 +457,34 @@ describe("following a job board's Apply link to the original posting (#1607)", (
 		});
 	});
 });
+
+describe("the Original Finder's find must be a page the run opened (#1608)", () => {
+	const ATS = "https://careers.smartrecruiters.com/endeavour/12345";
+	const OTHER = "https://careers.smartrecruiters.com/endeavour/99999";
+	const pages = { [ATS]: { title: "Platform Engineer" }, [OTHER]: { title: "Other" }, "https://www.google.com/search?q=x": {} };
+	const find = (b: BrowserBridge, url: string, fields: Record<string, unknown>) => b.callTool("record_finding", { title: "Platform Engineer", url, evidence: "Platform Engineer. Build the platform.", fields });
+
+	it("stamps original_url and original_host from the page it actually opened, whatever the model claimed", async () => {
+		const b = new BrowserBridge(fakeBrowser(pages, { snapshot: "- heading \"x\" [ref=e0]" }).tools, fakeHost({ allow: ["smartrecruiters.com", "google.com"] }).host);
+		await b.callTool("browser_navigate", { url: ATS });
+		const r = await find(b, `${ATS}/#details`, { original: "found", original_url: "https://evil.example/x", original_host: "evil.example" });
+		expect(r.isError).toBeUndefined();
+		expect(b.findings[0].fields).toMatchObject({ original: "found", original_url: ATS, original_host: "careers.smartrecruiters.com" });
+	});
+
+	it("refuses a found original on a page that was never opened, even on a host that was", async () => {
+		const b = new BrowserBridge(fakeBrowser(pages, { snapshot: "- heading \"x\" [ref=e0]" }).tools, fakeHost({ allow: ["smartrecruiters.com"] }).host);
+		await b.callTool("browser_navigate", { url: ATS });
+		const r = await find(b, OTHER, { original: "found" });
+		expect(r.isError).toBe(true);
+		expect(textOf(r)).toMatch(/opened in this run/);
+		expect(b.findings).toHaveLength(0);
+	});
+
+	it("keeps no original_url on a not_found finding", async () => {
+		const b = new BrowserBridge(fakeBrowser(pages, { snapshot: "- heading \"x\" [ref=e0]" }).tools, fakeHost({ allow: ["smartrecruiters.com"] }).host);
+		await b.callTool("browser_navigate", { url: ATS });
+		await find(b, ATS, { original: "not_found", original_url: OTHER });
+		expect(b.findings[0].fields).toEqual({ original: "not_found" });
+	});
+});

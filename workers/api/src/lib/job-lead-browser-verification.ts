@@ -21,7 +21,8 @@
 import { type BrowserVerificationSettings, readBrowserVerification } from "./browser-verification.js";
 import { closeLiveTakeoverFor, requestTakeover } from "./browser-takeovers.js";
 import { deepLinkFor } from "./console-links.js";
-import { BROWSER_VERIFICATION_OUTCOMES, type BrowserVerificationOutcome, JOB_LEAD_ORIGINAL_MISSING_EVENT, type OriginalCandidate, cleanVerifiedName, nameGroundedIn, originalMissingEvent, squashName } from "./job-lead-triage.js";
+import { BROWSER_VERIFICATION_OUTCOMES, type BrowserVerificationOutcome, JOB_LEAD_ORIGINAL_MISSING_EVENT, type OriginalCandidate, cleanVerifiedName, nameGroundedIn, originalFromRun, originalMissingEvent, squashName } from "./job-lead-triage.js";
+export { originalFromRun };
 import { deliverEvent } from "./connections.js";
 import { getLocalBrowserRun, listDomainConsent, type LocalBrowserRun, readLocalBrowserSettings } from "./local-browser/store.js";
 import { localBrowserCapability, startLocalBrowserRun } from "./local-browser/start.js";
@@ -143,28 +144,6 @@ export function namesFromRun(run: LocalBrowserRun | null): { title?: string; com
 	const title = pick("job_title");
 	const company = pick("job_company");
 	return { ...(title ? { title } : {}), ...(company ? { company } : {}) };
-}
-
-/**
- * What a finished ACTIVE run found behind the board ad's Apply link (#1607): the original posting it landed on, a Quick Apply, or nothing.
- * Untrusted page text, so this only shapes it - `acceptOriginal` (in the lead's trusted writer) decides whether it is the employer's own live posting of this job.
- * `original_url` is stamped by the runner from the page it actually reached, never the model's word; the description is that finding's evidence.
- */
-export function originalFromRun(run: LocalBrowserRun | null): OriginalCandidate {
-	if (run?.status !== "completed") return { kind: "none" };
-	const findings = (run.result?.findings ?? []).filter((f) => typeof f.fields?.original === "string");
-	const external = findings.find((f) => f.fields.original === "external" && typeof f.fields.original_url === "string");
-	if (external) {
-		const title = cleanVerifiedName(external.fields.original_title);
-		return {
-			kind: "external",
-			url: String(external.fields.original_url),
-			...(title && nameGroundedIn(title, external.evidence) ? { title } : {}),
-			description: external.evidence,
-			live: external.fields.original_live === true,
-		};
-	}
-	return findings.some((f) => f.fields.original === "quick_apply") ? { kind: "quick_apply" } : { kind: "none" };
 }
 
 /** The job board page's own title as the run read it off an ACTIVE posting (#1607) - `gateLocation` reads a SEEK location from it. */

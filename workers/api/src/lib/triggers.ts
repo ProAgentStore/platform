@@ -296,6 +296,10 @@ export async function executeTriggerAction(
 		// on the event id and the application leaves materials_ready once. No runner → 503, so the
 		// outbox retries. Deferred like the Tailor.
 		resultPayload = await startApplicationFillForTrigger(env, target.instance_id, target.user_id, payload, config);
+	} else if (target.action === "find_original_posting") {
+		// #1608: the payload is #1607's job.lead.original_missing. Queued, not researched, here: the cron paces the runs.
+		const { queueOriginalFinding } = await import("./original-finder/finder.js");
+		resultPayload = await queueOriginalFinding(env, target.instance_id, target.user_id, payload);
 	} else if (target.action === "start_loop") {
 		// #968 — have this agent take its NEXT TURN. The whole decision lives in `run-wake-start.ts`
 		// beside its pure half, because this dispatch chain is long enough already.
@@ -526,6 +530,7 @@ function successMessage(action: TriggerAction, payload: unknown): string {
 	if (action === "run_local_browser") return result.skipped ? `research run skipped — ${stringValue(result.reason) || "runner offline / busy"}` : `started research run ${stringValue(result.runId).slice(0, 8)}`;
 	if (action === "generate_application_materials") return `application ${stringValue(result.applicationId).slice(0, 8)} ${stringValue(result.outcome) || "started"} (${stringValue(result.status) || "?"})`;
 	if (action === "start_application_fill") return `application ${stringValue(result.applicationId).slice(0, 8)} fill ${stringValue(result.outcome) || "started"} (${stringValue(result.mode) || stringValue(result.status) || "?"})`;
+	if (action === "find_original_posting") return `lead ${stringValue(result.leadId)} ${stringValue(result.outcome) || "queued"} for original-posting research`;
 	if (action === "run_browse") return result.skipped ? `browser run skipped — ${stringValue(result.reason) || "runner offline / busy"}` : `started browser run (task ${stringValue(result.taskId).slice(0, 8)})`;
 	if (action === "run_po_triage") return result.skipped === true ? `triage skipped — ${stringValue(result.reason)}` : `triage ${result.dryRun ? "(dry run) " : ""}report ${stringValue(result.reportId).slice(0, 8)}${stringValue(result.gate) ? ` — held: ${stringValue(result.gate)}` : ""}`;
 	if (action === "log_event" && stringValue(result.message)) return stringValue(result.message).slice(0, 300);

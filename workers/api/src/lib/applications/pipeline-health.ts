@@ -16,6 +16,7 @@ import { emailPermitted } from "../connectors/gmail.js";
 import { jobsAccountProblem } from "../jobs-app.js";
 import { listGmailScoutReceipts } from "../gmail-scout/receipts.js";
 import { gmailLeadIntakeRejection, readGmailScoutLeadRecords } from "../gmail-scout/scan.js";
+import { type FinderFact, finderFacts, finderProblems } from "../original-finder/health.js";
 
 export { GMAIL_SCOUT_SCAN_INTERVAL_MS };
 /** A source silent for longer than two scheduled scans is stale. */
@@ -35,7 +36,11 @@ export type PipelineProblemCode =
 	| "source_stale"
 	| "source_junk_leads"
 	| "jobs_sync_failing"
-	| "jobs_not_connected";
+	| "jobs_not_connected"
+	| "finder_edge_disabled"
+	| "finder_edge_dead_letters"
+	| "finder_failing"
+	| "finder_backlog";
 
 export interface PipelineProblem {
 	code: PipelineProblemCode;
@@ -114,8 +119,8 @@ const utc = (v: string | null): number => (v ? Date.parse(v.includes("T") ? v : 
 const iso = (v: string | null): string | null => (Number.isFinite(utc(v)) ? new Date(utc(v)).toISOString() : null);
 
 /** Pure: the facts in, every problem out. */
-export function pipelineHealthFrom(input: { pipeline: { scouts: string[]; tailors: string[]; runners: string[] }; edges: EdgeFact[]; sources: SourceFact[]; now: number; jobsSync?: JobsSyncFact[]; jobsConnection?: JobsConnectionFact[] }): PipelineHealth {
-	const problems: PipelineProblem[] = [];
+export function pipelineHealthFrom(input: { pipeline: { scouts: string[]; tailors: string[]; runners: string[] }; edges: EdgeFact[]; sources: SourceFact[]; now: number; jobsSync?: JobsSyncFact[]; jobsConnection?: JobsConnectionFact[]; finders?: FinderFact[] }): PipelineHealth {
+	const problems: PipelineProblem[] = finderProblems(input.finders ?? [], input.now);
 	for (const e of input.edges) {
 		if (!e.enabled) problems.push({ code: "edge_disabled", connectionId: e.id, message: `The ${e.eventType === "job.application.materials_ready" ? "Tailor → Runner" : "Scout → Tailor"} connection ${e.id} is disabled, so nothing moves along it until it is re-enabled.` });
 		if (e.dead > 0) problems.push({ code: "edge_dead_letters", connectionId: e.id, message: `${e.dead} hand-off${e.dead === 1 ? "" : "s"} on connection ${e.id} failed permanently and can be replayed.` });
@@ -187,7 +192,7 @@ export async function pipelineHealth(env: Env, uid: string, pipeline: { scouts: 
 			...pipeline.tailors.map(async (instanceId) => ({ instanceId, role: "Tailor" as const, problem: await jobsAccountProblem(env, { userId: uid, instanceId }, "save_tailored_application").catch(() => null) })),
 		])
 	).flatMap((f) => (f.problem ? [{ instanceId: f.instanceId, role: f.role, reason: f.problem.reason }] : []));
-	return pipelineHealthFrom({ pipeline, edges, sources, now, jobsSync, jobsConnection });
+	return pipelineHealthFrom({ pipeline, edges, sources, now, jobsSync, jobsConnection, finders: await finderFacts(env, uid, pipeline.scouts, now).catch(() => []) });
 }
 
 /**

@@ -258,11 +258,24 @@ export function refHref(snapshot: string, ref: string): string | null {
 const QUICK_APPLY_NAME = /^(quick|easy)\s+apply\b/i;
 const APPLY_NAME = /^apply\b/i;
 
+/** A page address for comparison: no fragment, no trailing slash. */
+function pageKey(url: string): string {
+	try {
+		const u = new URL(url);
+		u.hash = "";
+		return u.href.replace(/\/$/, "");
+	} catch {
+		return url;
+	}
+}
+
 export class BrowserBridge {
 	private actions = 0;
 	private pages = 0;
 	private lastSnapshot = "";
 	private readonly visited = new Set<string>();
+	/** Every page the browser actually showed, keyed by its address without the fragment: what a "found" original must be (#1608). */
+	private readonly opened = new Map<string, { url: string; host: string }>();
 	/** The host of the page the browser is on now — not the last NEW host: a Set keeps first-insertion order. */
 	private here: string | null = null;
 	readonly findings: LocalBrowserFinding[] = [];
@@ -503,6 +516,7 @@ export class BrowserBridge {
 		const host = hostOf(state.url);
 		if (!host) return;
 		this.visited.add(host);
+		this.opened.set(pageKey(state.url), { url: state.url, host });
 		this.here = host;
 		this.host.emit({ type: "browser.navigated", url: state.url, domain: host, detail: redactDetail({ title: state.title }) });
 	}
@@ -536,6 +550,13 @@ export class BrowserBridge {
 			if (this.apply.landing.url.length > 2000) return text("The page the apply link led to has a URL too long to record. Record original=none.", true);
 			fields.original_url = this.apply.landing.url;
 			fields.original_host = this.apply.landing.host;
+		} else if (fields.original === "found") {
+			// The Original Finder's find (#1608): the page it cites must be one this run opened - observed, never the model's claim.
+			const page = this.opened.get(pageKey(url));
+			if (!page) return text("original=found must cite the exact address of a posting page you opened in this run (the url of that page). Open the posting, then record it; or record original=not_found.", true);
+			if (page.url.length > 2000) return text("That page's URL is too long to record. Record original=not_found.", true);
+			fields.original_url = page.url;
+			fields.original_host = page.host;
 		} else {
 			delete fields.original_url;
 			delete fields.original_host;

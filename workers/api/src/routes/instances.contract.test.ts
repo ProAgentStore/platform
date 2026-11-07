@@ -375,6 +375,9 @@ const ROUTES = [
 	"POST /:instanceId/job-applications/rekey",
 	"POST /:instanceId/job-leads/manual-url",
 	"POST /:instanceId/job-leads/:recordId/triage",
+	"GET /:instanceId/original-finder/settings",
+	"PUT /:instanceId/original-finder/settings",
+	"GET /:instanceId/original-finder",
 	"GET /:instanceId/application-tailor/settings",
 	"PUT /:instanceId/application-tailor/settings",
 	"GET /:instanceId/application-tailor/uploaded-sources",
@@ -612,6 +615,7 @@ const OWNERSHIP: Record<string, string[]> = {
 	],
 	"instances-coder-brain.ts": ["GET /:instanceId/coder-brain", "PUT /:instanceId/coder-brain", "GET /:instanceId/auto-pickup", "PUT /:instanceId/auto-pickup", "GET /:instanceId/issue-quarantines", "POST /:instanceId/issue-quarantines/release", "GET /:instanceId/coder-questions", "GET /:instanceId/po-triage/reports"],
 	"instances-description.ts": ["GET /:instanceId/description"],
+	"instances-original-finder.ts": ["GET /:instanceId/original-finder/settings", "PUT /:instanceId/original-finder/settings", "GET /:instanceId/original-finder"],
 	"instances-application-tailor.ts": [
 		"GET /:instanceId/application-tailor/settings",
 		"PUT /:instanceId/application-tailor/settings",
@@ -984,6 +988,9 @@ const GATES: Record<string, [number, number]> = {
 	// #1002's execution projection uses requireOwnedInstance before every dependent read.
 	"GET /:instanceId/description": [401, 404],
 	// Application Tailor (#956): every route opens with the instance-owner check.
+	"GET /:instanceId/original-finder/settings": [401, 404],
+	"PUT /:instanceId/original-finder/settings": [401, 404],
+	"GET /:instanceId/original-finder": [401, 404],
 	"GET /:instanceId/application-tailor/settings": [401, 404],
 	"PUT /:instanceId/application-tailor/settings": [401, 404],
 	"GET /:instanceId/application-tailor/uploaded-sources": [401, 404],

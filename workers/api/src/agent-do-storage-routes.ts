@@ -32,6 +32,7 @@ import {
 	type JobLeadTriageAction,
 } from "./lib/job-lead-triage.js";
 import type { CollectionRecord } from "./agent-storage-types.js";
+import { type FinderCandidate, NO_ORIGINAL_REASONS, type NoOriginalReason, planOriginalFinding } from "./lib/original-finder/match.js";
 
 // ── Collections ─────────────────────────────────────────────────────────────
 
@@ -227,6 +228,27 @@ export async function applyJobLeadBrowserVerification(engine: Pick<AgentStorageE
 	if (!plan.ok) return json({ error: plan.error, stale: true }, 409);
 	const updated = plan.patch ? await engine.recordUpdate(JOB_LEAD_COLLECTION, record.id, plan.patch) : record;
 	return json({ record: updated, transitioned: plan.transitioned, status: plan.to });
+}
+
+/**
+ * Record the Original Finder's result on a lead (#1608) - `planOriginalFinding`, inside the Scout's DO so it is serialized with
+ * triage and every other write. The strict match rule runs HERE, whatever the Finder's dispatcher decided. Only `verification`
+ * is written: the lead's status and lifecycle version (and so every Apply event identity) are untouched.
+ */
+export async function applyOriginalFinding(engine: Pick<AgentStorageEngine, "recordGet" | "recordUpdate">, id: string, request: Request): Promise<Response> {
+	const b = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+	const raw = b?.found && typeof b.found === "object" && !Array.isArray(b.found) ? (b.found as Record<string, unknown>) : null;
+	const text = (v: unknown) => (typeof v === "string" ? v : undefined);
+	const found: FinderCandidate | null = raw ? { kind: "external", url: text(raw.url) ?? "", title: text(raw.title), description: text(raw.description), live: raw.live === true, location: text(raw.location), posted: text(raw.posted) } : null;
+	const none = typeof b?.none === "string" && (NO_ORIGINAL_REASONS as readonly string[]).includes(b.none) ? (b.none as NoOriginalReason) : null;
+	if (!found && !none) return json({ error: `found (a candidate) or none (${NO_ORIGINAL_REASONS.join(" | ")}) is required` }, 400);
+	const record = await engine.recordGet(JOB_LEAD_COLLECTION, decodeURIComponent(id));
+	if (!record) return json({ error: "Not found" }, 404);
+	const searched = typeof b?.searched === "string" ? b.searched : undefined;
+	const plan = planOriginalFinding(record, found ? { found, searched } : { none: none as NoOriginalReason, searched });
+	if (!plan.applied) return json({ applied: false, outcome: plan.outcome, why: plan.why });
+	await engine.recordUpdate(JOB_LEAD_COLLECTION, record.id, plan.patch);
+	return json({ applied: true, outcome: plan.outcome, ...(plan.rejected ? { rejected: plan.rejected } : {}) });
 }
 
 /** Every lead in the collection, page by page (the engine caps a page at 200). */

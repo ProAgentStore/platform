@@ -47,7 +47,8 @@ function statusOf(err: unknown): number | undefined {
  *  carries data between agents, it does not run an external connector sync. */
 /** `generate_application_materials` (#956): an approved lead → the Application Tailor. */
 /** `start_application_fill` (#957): materials ready → the Application Runner. */
-export const CONNECTION_ACTIONS: readonly TriggerAction[] = ["insert_record", "run_pipeline", "create_task", "add_knowledge", "generate_application_materials", "start_application_fill"];
+/** `find_original_posting` (#1608): a lead with no original posting → the Original Finder. */
+export const CONNECTION_ACTIONS: readonly TriggerAction[] = ["insert_record", "run_pipeline", "create_task", "add_knowledge", "generate_application_materials", "start_application_fill", "find_original_posting"];
 
 export interface ConnectionRow {
 	id: string;

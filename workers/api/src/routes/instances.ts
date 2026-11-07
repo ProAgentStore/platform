@@ -54,6 +54,7 @@ import { registerDeployStatusRoutes } from "./instances-deploy.js";
 import { registerIdentityResyncRoutes } from "./instances-identity.js";
 import { registerJobLeadRoutes } from "./instances-job-leads.js";
 import { registerApplicationTailorRoutes } from "./instances-application-tailor.js";
+import { registerOriginalFinderRoutes } from "./instances-original-finder.js";
 import { registerApplicationRunnerRoutes } from "./instances-application-runner.js";
 import { registerApplicationsRoutes } from "./instances-applications.js";
 import { registerFleetRoutes } from "./instances-fleet.js";
@@ -1251,6 +1252,7 @@ registerDeployStatusRoutes(instanceRoutes);
 // Owner-initiated seed-personality resync (#496 AC2). Mounted from its own module.
 registerIdentityResyncRoutes(instanceRoutes);
 registerJobLeadRoutes(instanceRoutes); // explicit human job-lead triage → durable connection handoff (#955)
+registerOriginalFinderRoutes(instanceRoutes); // lead with no original posting → research it on the owner's runner (#1608)
 registerApplicationTailorRoutes(instanceRoutes); // approved lead → local tailored résumé + cover letter → materials_ready (#956)
 registerApplicationRunnerRoutes(instanceRoutes); // materials_ready → local CLI fills the application under a bounded write policy (#957)
 registerApplicationsRoutes(instanceRoutes); // the Applications queue, typed actions and trace across Scout → Tailor → Runner (#958)

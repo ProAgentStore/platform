@@ -20,6 +20,7 @@ import { jobPostingIdentity } from "../job-lead-triage.js";
 import { gateLocation } from "../local-apply/submission-gate.js";
 import type { JobsPushOutcome } from "./receipts.js";
 import { logEvent } from "../events.js";
+import { clipMarked } from "../clip-marked.js";
 
 export const JOBS_PUSH_BATCH = 50;
 /** Leads whose tracked values are brought up to date per pass: the rest wait for the next one, so a backlog is never one long request. */
@@ -66,6 +67,8 @@ function tracking(data: Record<string, unknown>): Pick<JobsLead, "verification_s
 /** Why Jobs has no original for a verified-live lead (`no_original_reason`, <= 500 chars), or undefined. */
 function noOriginalReason(data: Record<string, unknown>): string | undefined {
 	const v = record(data.verification);
+	// The Original Finder's verdict (#1608) is more specific than why the Scout found none: `not_found` / `out_of_scope`, and what was searched.
+	if (typeof v.no_original_reason === "string" && v.no_original_reason) return clipMarked(`${v.no_original_reason}${typeof v.original_searched === "string" && v.original_searched ? `: ${v.original_searched}` : ""}`, 500, { within: true });
 	if (v.original === "quick_apply") return "SEEK Quick Apply: no employer posting";
 	if (v.original === "none") return typeof v.original_rejected === "string" ? `No usable original (${v.original_rejected})` : "No apply link leaves the job board";
 	return undefined;

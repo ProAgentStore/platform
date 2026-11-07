@@ -1281,4 +1281,5 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.212": "sha256:ebd56f188f369bc6bf91447b72d76e58dc1d8799407f13279dce881b83ef748b", // Correct the legacy accountCreation argument's capability claim; its executor was retired in #1422.
 	"0.1.213": "sha256:b53ef8eb6086d1a94586e7b553701ae9041d4c3c75b59ecdc791d89c57280fb3", // create_instance_trigger accepts start_loop and run_po_triage, the actions list_trigger_actions already reported (#1581).
 	"0.1.214": "sha256:64f273031437613ef56a51d9469d003c0c0b3adde2d512e9ef59848e987897ce", // #1610: repair_job_leads and rekey_job_applications, the one-off job identity repairs, dry run by default and confirm-gated.
+	"0.1.215": "sha256:7d281b6d09380163faaab49b41034be42813ffee88a9299fd982cd378e0a7285", // #1608: create_instance_trigger accepts find_original_posting (the Original Finder connection action); no tool added.
 };

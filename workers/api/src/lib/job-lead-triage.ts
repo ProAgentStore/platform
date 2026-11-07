@@ -20,6 +20,7 @@
  * has moved since is refused as stale rather than applied to a state nobody looked at.
  */
 import type { CollectionRecord } from "../agent-storage-types.js";
+import type { LocalBrowserFinding } from "./local-browser/contract.js";
 
 export const JOB_LEAD_COLLECTION = "job_leads";
 export const JOB_LEAD_APPLY_EVENT = "job.lead.apply_requested";
@@ -460,6 +461,29 @@ export function acceptOriginal(candidate: OriginalCandidate | null | undefined, 
 	// A description publish_lead would refuse is not published cut short: the runner's evidence is 4000 characters at most, so this is a guard.
 	if (!description || description.length > ORIGINAL_DESCRIPTION_MAX) return { original: "none", rejected: "no_description" };
 	return { original: "external", url: `${url.origin}${url.pathname}${url.search}`, host, description };
+}
+
+/**
+ * What a finished ACTIVE run found behind the board ad's Apply link (#1607): the original posting it landed on, a Quick Apply, or nothing.
+ * Untrusted page text, so this only shapes it - `acceptOriginal` (in the lead's trusted writer) decides whether it is the employer's own live posting of this job.
+ * `original_url` is stamped by the runner from the page it actually reached, never the model's word; the description is that finding's evidence.
+ * `reported` is the value the run's finding carries: `external` after the Scout's Apply link, `found` from the Original Finder's search (#1608).
+ */
+export function originalFromRun(run: { status: string; result: { findings: LocalBrowserFinding[] } | null } | null, reported: "external" | "found" = "external"): OriginalCandidate {
+	if (run?.status !== "completed") return { kind: "none" };
+	const findings = (run.result?.findings ?? []).filter((f) => typeof f.fields?.original === "string");
+	const external = findings.find((f) => f.fields.original === reported && typeof f.fields.original_url === "string");
+	if (external) {
+		const title = cleanVerifiedName(external.fields.original_title);
+		return {
+			kind: "external",
+			url: String(external.fields.original_url),
+			...(title && nameGroundedIn(title, external.evidence) ? { title } : {}),
+			description: external.evidence,
+			live: external.fields.original_live === true,
+		};
+	}
+	return findings.some((f) => f.fields.original === "quick_apply") ? { kind: "quick_apply" } : { kind: "none" };
 }
 
 export type BrowserVerificationPlan =

@@ -677,6 +677,13 @@ components:
         retainDays: { type: integer, minimum: 0, maximum: 3650, description: Days to keep a generated folder; 0 = until the owner deletes it. }
         maxMinutes: { type: integer, minimum: 1, maximum: 60 }
         stallMinutes: { type: integer, minimum: 1, maximum: 60, nullable: true, description: "Minutes without a new event before the owner is told the run stalled (#1107). Null: automatic — half of maxMinutes, at most 10, at least 5." }
+    OriginalFinderSettings:
+      type: object
+      properties:
+        dailyCap: { type: integer, minimum: 0, maximum: 50, description: "Research runs started per rolling 24 hours, retries included. Default 10; 0 researches nothing." }
+        roles: { type: array, items: { type: string }, description: "Target roles (lowercase phrases a lead's title must contain). Empty follows the Application Runner's auto-submit roles." }
+        locations: { type: array, items: { type: string }, description: "When set, the lead's location must contain one. Empty follows the Runner's." }
+        exclude: { type: array, items: { type: string }, description: "No title, company or rationale may contain one; united with the Runner's exclusions." }
     ApplicationArtifact:
       type: object
       properties:
@@ -10224,6 +10231,76 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+
+  # ── Original Finder (#1608) ───────────────────────────────────────────────
+
+  /v1/instances/{instanceId}/original-finder/settings:
+    get:
+      summary: Read the Original Finder settings
+      description: |
+        The Finder's daily research budget and the scope of leads worth researching. Stored at
+        `agent_instances.config.originalFinder`. With no `roles` of its own the Finder uses the roles,
+        locations and exclusions of the owner's Application Runner (`applicationRunner.autoSubmit`).
+      operationId: getOriginalFinderSettings
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200":
+          description: The effective settings.
+          content:
+            application/json:
+              schema: { type: object, properties: { settings: { $ref: "#/components/schemas/OriginalFinderSettings" }, error: { type: string } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Update the Original Finder settings
+      description: Patch semantics. Refused (400, never clamped) - a `dailyCap` outside 0-50, or a list that is not up to 50 short phrases.
+      operationId: updateOriginalFinderSettings
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OriginalFinderSettings" }
+      responses:
+        "200":
+          description: The stored settings.
+          content:
+            application/json:
+              schema: { type: object, properties: { settings: { $ref: "#/components/schemas/OriginalFinderSettings" } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/original-finder:
+    get:
+      summary: The Original Finder's queue, budget and scope
+      description: |
+        The leads queued by the Scout's `job.lead.original_missing` connection and what became of each
+        (`queued`, `dispatched`, `found`, `not_found`, `out_of_scope`, `failed`, `superseded`), the research
+        budget used in the last 24 hours, and the scope in force. Research is paced one lead at a time.
+      operationId: getOriginalFinder
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200":
+          description: The Finder's state.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  settings: { $ref: "#/components/schemas/OriginalFinderSettings" }
+                  scope: { type: object, properties: { roles: { type: array, items: { type: string } }, locations: { type: array, items: { type: string } }, exclude: { type: array, items: { type: string } }, source: { type: string, enum: [finder, runner, none] } } }
+                  budget: { type: object, properties: { dailyCap: { type: integer }, usedToday: { type: integer }, remaining: { type: integer } } }
+                  counts: { type: object, additionalProperties: { type: integer } }
+                  leads: { type: array, items: { type: object } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   # ── Application Tailor (#956) ─────────────────────────────────────────────
 
