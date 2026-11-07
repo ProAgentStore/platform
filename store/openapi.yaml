@@ -475,10 +475,14 @@ components:
       allOf:
         - $ref: "#/components/schemas/BrowserSettingsValues"
         - type: object
-          required: [agentDefaults, effective, sources, requiredCli, explained]
+          required: [agentDefaults, effective, launchPath, sources, requiredCli, explained]
           properties:
             agentDefaults: { $ref: "#/components/schemas/BrowserSettingsValues" }
             effective: { $ref: "#/components/schemas/BrowserSettingsValues" }
+            launchPath:
+              type: string
+              enum: [managed, legacy]
+              description: managed when the effective engine or profile is set (the runner then uses its own managed browser profile, never the owner's everyday profile); legacy otherwise.
             sources:
               type: object
               properties:

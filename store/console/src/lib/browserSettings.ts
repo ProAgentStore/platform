@@ -13,6 +13,7 @@ export type BrowserSettingSource = "instance" | "agent" | "runner";
 export interface BrowserSettingsView extends BrowserSettings {
 	agentDefaults: BrowserSettings;
 	effective: BrowserSettings;
+	launchPath: "managed" | "legacy";
 	sources: Record<BrowserSettingKey, BrowserSettingSource> & { websiteAccess?: BrowserSettingSource };
 	requiredCli: string;
 	explained: string;

@@ -3,8 +3,10 @@ import { api } from "@proagentstore/sdk/client";
 import Button from "../../components/Button";
 import Card from "../../components/Card";
 import LoadFailed from "../../components/LoadFailed";
+import LocalBrowserProfileFields from "./LocalBrowserProfileFields";
 import LocalBrowserWebsiteFields from "./LocalBrowserWebsiteFields";
 import { type SettingsForm, authModeChoices, engineAuthLabel, formFromSettings, patchFromForm, TONE_CLASS } from "../../lib/localBrowser";
+import type { BrowserSettingsView } from "../../lib/browserSettings";
 import type { LocalBrowserConsentEntry, LocalBrowserConsentList, LocalBrowserRunList, LocalBrowserSettingsResponse, LocalBrowserSettingsSaved } from "../../lib/types";
 
 const input = "bg-paper border border-line rounded px-2 py-1.5 text-sm";
@@ -26,6 +28,7 @@ export default function LocalBrowserSection({ instanceId }: { instanceId: string
 	const [form, setForm] = useState<SettingsForm | null>(null);
 	const [consent, setConsent] = useState<LocalBrowserConsentEntry[]>([]);
 	const [lastAuth, setLastAuth] = useState<string | null>(null);
+	const [launch, setLaunch] = useState<Pick<BrowserSettingsView, "launchPath" | "sources"> | null>(null);
 	const [error, setError] = useState("");
 	const [msg, setMsg] = useState("");
 	const [saving, setSaving] = useState(false);
@@ -49,6 +52,10 @@ export default function LocalBrowserSection({ instanceId }: { instanceId: string
 	useEffect(() => {
 		load();
 	}, [load]);
+	// Extra read: while it loads or fails there is no warning and the consent checkbox behaves as before.
+	useEffect(() => {
+		api<BrowserSettingsView>(`/v1/instances/${instanceId}/browser-settings`).then(setLaunch, () => setLaunch(null));
+	}, [instanceId]);
 
 	if (error && !data) return <LoadFailed what="local browser settings" detail={error} onRetry={load} />;
 	if (!data || !form) return null;
@@ -154,23 +161,14 @@ export default function LocalBrowserSection({ instanceId }: { instanceId: string
 				</div>
 			</fieldset>
 
-			<fieldset className="mb-3">
-				<legend className="text-xs font-semibold mb-1">Browser</legend>
-				<div className="flex flex-col gap-1 text-sm">
-					<label className="flex gap-2 items-center">
-						<input type="radio" checked={form.browserProfile === "isolated"} onChange={() => set({ browserProfile: "isolated" })} /> A fresh browser with no sign-ins
-					</label>
-					<label className="flex gap-2 items-center">
-						<input type="radio" checked={form.browserProfile === "default"} onChange={() => set({ browserProfile: "default" })} /> My own browser profile, with my sign-ins
-					</label>
-					{form.browserProfile === "default" && (
-						<label className="flex gap-2 items-center text-xs text-muted ml-5">
-							<input type="checkbox" checked={profileAllowed} onChange={(e) => decide({ scope: "signed_in_profile", decision: e.target.checked ? "allow" : null })} />
-							I allow research in my signed-in profile (a run waits for this otherwise)
-						</label>
-					)}
-				</div>
-			</fieldset>
+			<LocalBrowserProfileFields
+				instanceId={instanceId}
+				browserProfile={form.browserProfile}
+				profileAllowed={profileAllowed}
+				launch={launch}
+				onProfile={(browserProfile) => set({ browserProfile })}
+				onConsent={(allow) => decide({ scope: "signed_in_profile", decision: allow ? "allow" : null })}
+			/>
 
 			<LocalBrowserWebsiteFields websiteAccess={data.effective?.browserWebsiteAccess} allowDomains={cap.allowDomains} form={form} sites={sites} set={set} decide={(body) => void decide(body)} />
 

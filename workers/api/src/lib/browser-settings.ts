@@ -30,7 +30,9 @@ export function browserSettingsView(config: Record<string, unknown>, agentConfig
 	const agentDefaults = readFields(caps);
 	const effective: BrowserSettings = { mode: overrides.mode ?? agentDefaults.mode, engine: overrides.engine ?? agentDefaults.engine, profile: overrides.profile ?? agentDefaults.profile, websiteAccess: overrides.websiteAccess ?? agentDefaults.websiteAccess };
 	const source = (key: keyof BrowserSettings) => overrides[key] ? "instance" as const : agentDefaults[key] ? "agent" as const : "runner" as const;
-	return { ...overrides, agentDefaults, effective, sources: { mode: source("mode"), engine: source("engine"), profile: source("profile"), websiteAccess: source("websiteAccess") }, requiredCli: effective.websiteAccess ? BROWSER_WEBSITE_ACCESS_MIN_CLI : effective.engine || effective.profile ? BROWSER_SETTINGS_MIN_CLI : BROWSER_MODE_MIN_CLI, explained: BROWSER_SETTINGS_EXPLAINED };
+	// Mirrors BrowserSessions.managed() (packages/browser-runner/src/browser-sessions.ts): the runner takes its managed launch path, which never uses the owner's own browser profile, when an engine or profile policy is set. `mode` alone does not.
+	const launchPath = effective.engine || effective.profile ? "managed" as const : "legacy" as const;
+	return { ...overrides, agentDefaults, effective, launchPath, sources: { mode: source("mode"), engine: source("engine"), profile: source("profile"), websiteAccess: source("websiteAccess") }, requiredCli: effective.websiteAccess ? BROWSER_WEBSITE_ACCESS_MIN_CLI : effective.engine || effective.profile ? BROWSER_SETTINGS_MIN_CLI : BROWSER_MODE_MIN_CLI, explained: BROWSER_SETTINGS_EXPLAINED };
 }
 
 export async function readBrowserSettings(env: Env, instanceId: string, uid: string) {

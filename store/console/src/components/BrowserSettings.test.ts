@@ -6,7 +6,7 @@ import { browserCapabilitiesPatch, type BrowserSettingsView } from "../lib/brows
 import { BrowserLaunchDetails, type BrowserLaunchReceipt } from "./BrowserSessionReceipt";
 
 const view = (overrides: Partial<BrowserSettingsView> = {}) => renderToStaticMarkup(createElement(BrowserModeSettings, {
-	data: { mode: null, engine: null, profile: null, agentDefaults: { mode: null, engine: null, profile: null }, effective: { mode: null, engine: null, profile: null }, sources: { mode: "runner", engine: "runner", profile: "runner" }, requiredCli: "0.4.196", explained: "Browser settings.", ...overrides },
+	data: { mode: null, engine: null, profile: null, agentDefaults: { mode: null, engine: null, profile: null }, effective: { mode: null, engine: null, profile: null }, launchPath: "legacy", sources: { mode: "runner", engine: "runner", profile: "runner" }, requiredCli: "0.4.196", explained: "Browser settings.", ...overrides },
 	saving: false, message: "", onChange: () => undefined,
 }));
 

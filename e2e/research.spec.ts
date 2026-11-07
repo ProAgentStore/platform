@@ -23,13 +23,13 @@ type Pause = { reason: "consent_required" | "captcha" | "login_required" | "acce
 type Failure = { errorCode: string; error: string };
 
 /** A signed-in owner with one local browser research agent, and a run that finishes on cue. */
-async function mockResearchAgent(page: Page, opts: { pause?: Pause; failure?: Failure; screenshotsOff?: boolean } = {}) {
+async function mockResearchAgent(page: Page, opts: { pause?: Pause; failure?: Failure; screenshotsOff?: boolean; ownProfile?: "instance" | "agent" | "legacy" | "fail" } = {}) {
 	await page.addInitScript((t) => window.localStorage.setItem("pags:session", t), TOKEN);
 	const recorded: Recorded = { settingsPuts: [], runPosts: [], saves: [], consentPuts: [], resumes: 0 };
 	const state = { started: !!(opts.pause || opts.failure), finished: false, saved: false, allowDomains: [] as string[], pause: opts.pause ?? null, failure: opts.failure ?? null };
 
 	const settings = () => ({
-		settings: state.allowDomains.length ? { access: { allowDomains: state.allowDomains } } : {},
+		settings: { ...(state.allowDomains.length ? { access: { allowDomains: state.allowDomains } } : {}), ...(opts.ownProfile ? { browserProfile: "default" } : {}) },
 		effective: null,
 		problem: null,
 		capability: { engines: ["claude", "codex"], mode: "research_only", subscriptionOnly: true, resultSchema: { id: "findings", version: 1 }, limits: { maxMinutes: 15, maxPages: 30, maxActions: 200, maxConcurrent: 1 }, allowDomains: [], denyDomains: [], collection: { name: "job_leads" } },
@@ -106,6 +106,14 @@ async function mockResearchAgent(page: Page, opts: { pause?: Pause; failure?: Fa
 			return json({ settings: settings().settings, effective: null });
 		}
 		if (path === `${base}/settings`) return json(settings());
+		// #1603: the effective browser settings the own-profile warning reads.
+		if (path === "/v1/instances/inst-1/browser-settings" && opts.ownProfile === "fail") return json({ error: "boom" }, 500);
+		if (path === "/v1/instances/inst-1/browser-settings" && opts.ownProfile) {
+			const managed = opts.ownProfile !== "legacy";
+			const src = opts.ownProfile === "instance" ? "instance" : opts.ownProfile === "agent" ? "agent" : "runner";
+			const v = { mode: null, engine: managed ? "chrome" : null, profile: null, websiteAccess: null };
+			return json({ ...v, engine: opts.ownProfile === "instance" ? "chrome" : null, agentDefaults: v, effective: v, launchPath: managed ? "managed" : "legacy", sources: { mode: "runner", engine: src, profile: "runner", websiteAccess: "runner" }, requiredCli: "0.4.198", explained: "" });
+		}
 		if (path === `${base}/consent` && method === "PUT") {
 			recorded.consentPuts.push(route.request().postDataJSON());
 			return json({ consent: [] });
@@ -426,4 +434,45 @@ test("research replay respects the run's recorded screenshots-off mode", async (
 	await page.goto(`/console/instances/inst-1/research/${RUN_ID}`);
 	await expect(page.getByTestId("replay-empty")).toContainText("Screenshots were off for this run");
 	await expect(page.getByRole("slider", { name: "Frame" })).toHaveCount(0);
+});
+
+test.describe("own browser profile on the managed launch path (#1603)", () => {
+	const CHECKBOX = "I allow research in my signed-in profile (a run waits for this otherwise)";
+	test("an engine set by the owner shows the warning and withholds the consent checkbox", async ({ page }) => {
+		await mockResearchAgent(page, { ownProfile: "instance" });
+		await page.goto("/console/instances/inst-1/settings");
+		const notice = page.getByTestId("own-profile-notice");
+		await expect(notice).toContainText("Your own profile is not used while a browser or profile is set in Browser settings");
+		await expect(notice.getByRole("link", { name: "Open Browser settings" })).toHaveAttribute("href", "/console/instances/inst-1/settings");
+		await expect(page.getByLabel(CHECKBOX)).toHaveCount(0);
+	});
+	test("an agent default uses the agent wording", async ({ page }) => {
+		await mockResearchAgent(page, { ownProfile: "agent" });
+		await page.goto("/console/instances/inst-1/settings");
+		await expect(page.getByTestId("own-profile-notice")).toContainText("this agent's default browser or profile applies");
+	});
+	test("the legacy path keeps the consent checkbox, with no warning", async ({ page }) => {
+		await mockResearchAgent(page, { ownProfile: "legacy" });
+		await page.goto("/console/instances/inst-1/settings");
+		await expect(page.getByLabel(CHECKBOX)).toBeVisible();
+		await expect(page.getByTestId("own-profile-notice")).toHaveCount(0);
+	});
+	test("a failed browser-settings read shows no warning and keeps the consent checkbox", async ({ page }) => {
+		await mockResearchAgent(page, { ownProfile: "fail" });
+		await page.goto("/console/instances/inst-1/settings");
+		await expect(page.getByLabel(CHECKBOX)).toBeVisible();
+		await expect(page.getByTestId("own-profile-notice")).toHaveCount(0);
+	});
+	for (const width of [320, 375, 390]) {
+		test(`mobile — the warning fits at ${width}px and its link clears 24px`, async ({ page }) => {
+			await page.setViewportSize({ width, height: 812 });
+			await mockResearchAgent(page, { ownProfile: "instance" });
+			await page.goto("/console/instances/inst-1/settings");
+			const link = page.getByTestId("own-profile-notice").getByRole("link", { name: "Open Browser settings" });
+			await expect(link).toBeVisible();
+			const box = await link.boundingBox();
+			expect(box && Math.min(box.width, box.height), "the warning link is under 24px").toBeGreaterThanOrEqual(24);
+			await expectFits(page, width, "settings with the own-profile warning");
+		});
+	}
 });
