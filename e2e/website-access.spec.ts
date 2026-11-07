@@ -81,7 +81,7 @@ test("denying a website is an explicit saved choice, never an approval", async (
 test("mobile — agent website settings save exact hosts and show revocable allow and deny decisions", async ({ page }) => {
 	await page.setViewportSize({ width: 375, height: 812 });
 	const { writes } = await mock(page);
-	await page.goto("/console/instances/inst-1/settings");
+	await page.goto("/console/instances/inst-1/settings?subtab=browser");
 	const card = page.getByTestId("browser-mode-settings");
 	await expect(card).toContainText("Effective access: Ask once for each new website (from agent)");
 	const select = card.getByRole("combobox", { name: "Website access", exact: true });

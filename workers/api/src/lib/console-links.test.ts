@@ -99,7 +99,7 @@ describe("deepLinkFor — every notification subject opens a real page (#894)", 
 		expect(links.deepLinkFor(s["coding-session"])).toBe("/console/instances/i1/coding/x2");
 		expect(links.deepLinkFor(s.builds)).toBe("/console/instances/i1/coding?builds=x2");
 		// A skipped trigger opens where triggers are configured, not the Board.
-		expect(links.deepLinkFor(s.triggers)).toBe("/console/instances/i1/settings");
+		expect(links.deepLinkFor(s.triggers)).toBe("/console/instances/i1/settings?subtab=automation");
 		// A sign-in with no known run still opens the instance's Coding tab, never the console home.
 		expect(links.deepLinkFor({ kind: "engine-sign-in", instanceId: "i1", sessionId: null })).toBe("/console/instances/i1/coding");
 		expect(links.deepLinkFor(s["secure-input"])).toBe("/console/instances/i1/secure-inputs/x2");

@@ -100,12 +100,10 @@ describe("the control is wired in", () => {
 		expect(card).not.toMatch(/runs? stopped\b/);
 	});
 
-	it("is mounted on the Settings tab, ABOVE the Danger zone", () => {
+	it("is mounted in the General sub-tab, ABOVE the Danger zone (the sub-tab itself is render-tested in SettingsTab.test.ts)", () => {
 		// Anchored on the HEADING, not the words "Danger zone" — two doc comments upstream mention
 		// it, and indexOf would have measured a comment rather than the card.
 		const heading = 'text-danger">Danger zone';
-		expect(tab).toContain('import MiscellaneousSection from "./settings/MiscellaneousSection"');
-		expect(tab).toContain("<MiscellaneousSection");
 		expect(misc).toContain("<PauseCard instanceId={instanceId}");
 		expect(misc).toContain(heading);
 		expect(misc.indexOf("<PauseCard")).toBeLessThan(misc.indexOf(heading));

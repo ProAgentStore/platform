@@ -31,7 +31,7 @@ async function mock(page: Page, coding = true, readback: { load?: Readback } = {
 
 test("coding Pilot policy is Sonnet-only and leaves Brain and CLI settings independent", async ({ page }) => {
 	const writes = await mock(page);
-	await page.goto("/console/instances/inst-1/settings");
+	await page.goto("/console/instances/inst-1/settings?subtab=agent");
 	const card = page.getByTestId("pilot-model-card");
 	await expect(card.getByLabel("Pilot model")).toHaveText("Sonnet 4.6");
 	await expect(card).toContainText(SONNET);
@@ -49,7 +49,7 @@ for (const load of ["legacy", "invalid", "haiku"] as const) {
 	test(`Pilot load with ${load} 200 response shows a retryable API version error`, async ({ page }) => {
 		const readback: { load?: Readback } = { load };
 		const writes = await mock(page, true, readback);
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=agent");
 		const card = page.getByTestId("pilot-model-card");
 		await expect(card).toContainText("The API did not return a supported Pilot policy");
 		await expect(card).toContainText("Retry after the API is updated");
@@ -66,7 +66,7 @@ for (const load of ["legacy", "invalid", "haiku"] as const) {
 
 test("a repository chat instance has no coding Pilot policy card", async ({ page }) => {
 	await mock(page, false);
-	await page.goto("/console/instances/inst-1/settings");
+	await page.goto("/console/instances/inst-1/settings?subtab=agent");
 	await expect(page.getByTestId("brain-model-card")).toBeVisible();
 	await expect(page.getByTestId("pilot-model-card")).toHaveCount(0);
 });
@@ -75,7 +75,7 @@ test.describe("Pilot policy on a phone", () => {
 	test.use({ viewport: { width: 390, height: 600 } });
 	test("mobile — read-only Pilot policy fits the Settings card", async ({ page }) => {
 		const writes = await mock(page);
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=agent");
 		const card = page.getByTestId("pilot-model-card");
 		await expect(card.getByLabel("Pilot model")).toHaveText("Sonnet 4.6");
 		await card.scrollIntoViewIfNeeded();

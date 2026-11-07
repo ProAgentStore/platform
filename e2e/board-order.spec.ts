@@ -106,7 +106,7 @@ test.describe("board order is run order in the console (#1099)", () => {
 
 	test("Run next moves a queued objective to the top of the queue it shows", async ({ page }) => {
 		const mock = await mockBoard(page);
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=automation");
 		const queue = page.getByTestId("loop-queue");
 		await expect(queue.getByTestId("loop-queue-entry").first()).toContainText("Fix the login");
 		await queue.getByTestId("loop-queue-entry").filter({ hasText: "URGENT: leads dropped" }).getByRole("button", { name: "Run next" }).click();

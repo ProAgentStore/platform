@@ -21,7 +21,7 @@ describe("runnerUpgradeMessage names the machine (#524)", () => {
 		expect(msg).toContain(REPO_SEARCH_MIN_CLI);
 		// The pin is the only reason the other machine is not being used, and the failure is the
 		// owner's only chance to discover it exists.
-		expect(msg).toMatch(/pinned to that machine \(Settings → Runs on\)/);
+		expect(msg).toMatch(/pinned to that machine \(Settings → Automation\)/);
 		expect(msg).not.toContain(AIR);
 	});
 

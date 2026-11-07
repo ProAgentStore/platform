@@ -32,7 +32,7 @@ async function mock(page: Page, refuse = false) {
 test("mobile — screenshot capture and form blur save independently at 375px", async ({ page }) => {
 	await page.setViewportSize({ width: 375, height: 812 });
 	const { puts } = await mock(page);
-	await page.goto("/console/instances/inst-1/settings");
+	await page.goto("/console/instances/inst-1/settings?subtab=browser");
 	const card = page.getByTestId("browser-screenshot-settings");
 	const capture = card.getByRole("checkbox", { name: "Capture screenshots for run replay" });
 	const blur = card.getByRole("checkbox", { name: "Blur form fields" });
@@ -69,7 +69,7 @@ test("mobile — screenshot capture and form blur save independently at 375px", 
 
 test("a refused blur change keeps the saved value and shows the error", async ({ page }) => {
 	const { puts } = await mock(page, true);
-	await page.goto("/console/instances/inst-1/settings");
+	await page.goto("/console/instances/inst-1/settings?subtab=browser");
 	const card = page.getByTestId("browser-screenshot-settings");
 	const blur = card.getByRole("checkbox", { name: "Blur form fields" });
 	await blur.click();

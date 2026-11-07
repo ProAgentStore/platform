@@ -6,6 +6,7 @@ import type { RepoState } from "./repo-status";
 import { isEngineBusy } from "./engine-busy";
 import { repoForSession } from "./session-open";
 import { repoTitle } from "./repo-title";
+import { agentSettingsPath } from "./agent-settings-link";
 import AgentStatusBadge from "./AgentStatusBadge";
 
 /**
@@ -142,7 +143,7 @@ export function useCodingTabHeader({
 					{/* Agent settings = the instance-level Settings tab. While a coding session is
 					    open, CodingTab overrides the parent header (which holds the tab bar), so this
 					    is the way back to it. Labeled on desktop (primary), and in the mobile menu. */}
-					<button type="button" onClick={() => navigate(`/instances/${instanceId}/settings`)} title="Agent settings" aria-label="Agent settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent hidden sm:flex items-center gap-1"><Settings size={13} /><span>Settings</span></button>
+					<button type="button" onClick={() => navigate(agentSettingsPath(instanceId))} title="Agent settings" aria-label="Agent settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent hidden sm:flex items-center gap-1"><Settings size={13} /><span>Settings</span></button>
 					<div className="relative">
 						<button type="button" onClick={() => setSessionMenuOpen((v) => !v)} title="Session settings" aria-label="Session settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent sm:hidden"><Settings size={13} /></button>
 						<button type="button" onClick={() => setSettingsRepoId(openRepo?.id || openSession.repoId)} title="Repo settings" aria-label="Repo settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent hidden sm:flex items-center gap-1"><FolderCog size={13} /><span>Repo</span></button>
@@ -154,7 +155,7 @@ export function useCodingTabHeader({
 									<div className="absolute right-0 top-full mt-1 z-50 min-w-44 bg-panel border border-line rounded-lg shadow-lg py-1 sm:hidden">
 										<button
 											type="button"
-											onClick={() => { setSessionMenuOpen(false); navigate(`/instances/${instanceId}/settings`); }}
+											onClick={() => { setSessionMenuOpen(false); navigate(agentSettingsPath(instanceId)); }}
 											className="w-full text-left px-3 py-2 text-sm text-muted hover:bg-panel-hover flex items-center gap-2"
 										>
 											<Settings size={14} /> Agent settings

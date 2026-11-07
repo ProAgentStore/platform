@@ -55,7 +55,7 @@ async function mock(page: Page, refuse = false) {
 test("mobile — instance browser mode persists, clears to inherited, and fits at 375px", async ({ page }) => {
 	await page.setViewportSize({ width: 375, height: 812 });
 	const { instancePuts } = await mock(page);
-	await page.goto("/console/instances/inst-1/settings");
+	await page.goto("/console/instances/inst-1/settings?subtab=browser");
 	const card = page.getByTestId("browser-mode-settings");
 	const select = card.getByRole("combobox", { name: "Browser mode", exact: true });
 	await expect(card).toContainText("Effective setting: Headless browser (from agent)");
@@ -79,7 +79,7 @@ test("mobile — instance browser mode persists, clears to inherited, and fits a
 
 test("a refused mode change keeps the stored choice and displays the error", async ({ page }) => {
 	const { instancePuts } = await mock(page, true);
-	await page.goto("/console/instances/inst-1/settings");
+	await page.goto("/console/instances/inst-1/settings?subtab=browser");
 	const card = page.getByTestId("browser-mode-settings");
 	await card.getByRole("combobox", { name: "Browser mode", exact: true }).selectOption("headed");
 	await expect(card).toContainText("Mode change refused for this test");
@@ -115,7 +115,7 @@ test("template browser mode saves only its capability and can return to runner d
 test("mobile — browser and profile persist independently at 375px while actual launch stays truthful", async ({ page }) => {
 	await page.setViewportSize({ width: 375, height: 812 });
 	const { instancePuts } = await mock(page);
-	await page.goto("/console/instances/inst-1/settings");
+	await page.goto("/console/instances/inst-1/settings?subtab=browser");
 	const card = page.getByTestId("browser-mode-settings");
 	const engine = card.getByRole("combobox", { name: "Browser", exact: true });
 	const profile = card.getByRole("combobox", { name: "Browser profile", exact: true });

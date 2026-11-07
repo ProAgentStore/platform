@@ -98,7 +98,7 @@ export function resumeVerdict(current: string | null | undefined): LifecycleVerd
  * on the console control, so the sentence is actionable from either.
  */
 export const PAUSED_RUN_REFUSAL =
-	"this agent is paused, so no new run can start — resume it first (Settings → Pause, or resume_instance). Pausing does not touch its subscription, repos, documents or history.";
+	"this agent is paused, so no new run can start — resume it first (Settings → General → Pause, or resume_instance). Pausing does not touch its subscription, repos, documents or history.";
 
 /**
  * The run-admission gate: may a run start on an instance in this status?

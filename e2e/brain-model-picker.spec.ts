@@ -51,7 +51,7 @@ test.describe("Settings Brain model picker (#1284)", () => {
 		test(`mobile — the whole select and its arrow stay inside the Settings content at ${width}px, with the real options`, async ({ page }) => {
 			await mock(page);
 			await page.setViewportSize({ width, height: 900 });
-			await page.goto("/console/instances/inst-1/settings");
+			await page.goto("/console/instances/inst-1/settings?subtab=agent");
 			const select = page.getByLabel("Brain model");
 			await expect(select).toBeVisible();
 

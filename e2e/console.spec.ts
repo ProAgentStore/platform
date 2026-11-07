@@ -1339,7 +1339,7 @@ test.describe("ProAgentStore Console smoke", () => {
 		// The override control is ONE per section, deliberately not one per field — a per-field
 		// toggle would rebuild the per-agent sprawl this change exists to remove.
 		await mockSignedInConsole(page);
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=general");
 		// Wait for the control to EXIST — it renders "Loading your voice settings…" until the GET
 		// lands, because clicking before then let the response overwrite the choice.
 		const usingDefaults = page.getByRole("radio", { name: /Using your defaults/ }).first();
@@ -1376,7 +1376,7 @@ test.describe("ProAgentStore Console smoke", () => {
 				body: JSON.stringify({ voiceSettings: { speed: 130, sttMode: "openai" }, hasOverride: false }),
 			});
 		});
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=general");
 		// While in flight the radios do not exist, so there is nothing to click too early.
 		await expect(page.getByRole("radio", { name: /Customise for this agent/ }).first()).toHaveCount(0);
 		await expect(page.getByText(/Loading your voice settings/)).toBeVisible();
@@ -2047,7 +2047,7 @@ test.describe("ProAgentStore Console smoke", () => {
 
 	test("the Danger zone names the instance it cancels, and its siblings survive (#742)", async ({ page }) => {
 		await mockSignedInConsole(page, { instances: CODER_PAIR });
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=general");
 		const scope = page.locator("#inst-unsubscribe-scope");
 		await expect(scope).toContainText("Cancels Coder Lead only.");
 		await expect(scope).toContainText("Your 1 other instance of Coder keeps running.");
@@ -2061,7 +2061,7 @@ test.describe("ProAgentStore Console smoke", () => {
 
 	test("the Danger zone says the subscription ends on the last instance (#742)", async ({ page }) => {
 		await mockSignedInConsole(page, { instances: [CODER_PAIR[0]] });
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=general");
 		const scope = page.locator("#inst-unsubscribe-scope");
 		// The one case where something beyond the instance changes, and it must READ differently
 		// from the case above — that difference is the whole point of the ticket.
@@ -2072,7 +2072,7 @@ test.describe("ProAgentStore Console smoke", () => {
 
 	test("the confirm dialog carries the same scope statement as the panel (#742)", async ({ page }) => {
 		await mockSignedInConsole(page, { instances: CODER_PAIR });
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=general");
 		// Wait for the roster to land first. Before it does the panel shows the no-count
 		// statement — true, and deliberately claiming nothing it cannot support — so reading it
 		// too early compares the dialog against the wrong branch.
@@ -2091,7 +2091,7 @@ test.describe("ProAgentStore Console smoke", () => {
 	test("instance settings show webhook and cron triggers", async ({ page }) => {
 		await mockSignedInConsole(page);
 
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=automation");
 		await expect(page.getByRole("heading", { name: "Triggers" })).toBeVisible();
 		await expect(page.getByText("Daily digest")).toBeVisible();
 		await expect(page.getByRole("button", { name: "Run now" }).first()).toBeVisible();
@@ -2099,7 +2099,7 @@ test.describe("ProAgentStore Console smoke", () => {
 
 	test("trigger form exposes run_pipeline + insert_record with their config inputs (#134)", async ({ page }) => {
 		await mockSignedInConsole(page);
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=automation");
 		await expect(page.getByRole("heading", { name: "Triggers" })).toBeVisible();
 
 		// Scope to the Triggers card. Teamwork (#182) also offers run_pipeline and also has an
@@ -2136,7 +2136,7 @@ test.describe("ProAgentStore Console smoke", () => {
 
 	test("an action this agent cannot perform is offered as disabled, with the reason (#358)", async ({ page }) => {
 		await mockSignedInConsole(page);
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=automation");
 		await expect(page.getByRole("heading", { name: "Triggers" })).toBeVisible();
 
 		const triggersCard = page
@@ -2162,7 +2162,7 @@ test.describe("ProAgentStore Console smoke", () => {
 
 	test("schedule editor previews the next runs in local time AND UTC (#18)", async ({ page }) => {
 		await mockSignedInConsole(page);
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=automation");
 		await expect(page.getByRole("heading", { name: "Triggers" })).toBeVisible();
 
 		const triggersCard = page
@@ -2186,7 +2186,7 @@ test.describe("ProAgentStore Console smoke", () => {
 
 	test("payload mapping is offered for the actions that have mappable fields (#16)", async ({ page }) => {
 		await mockSignedInConsole(page);
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=automation");
 		const triggersCard = page
 			.locator("div")
 			.filter({ has: page.getByRole("heading", { name: "Triggers" }) })
@@ -2204,7 +2204,7 @@ test.describe("ProAgentStore Console smoke", () => {
 
 	test("trigger run history shows what ran, what failed and the sync counts (#19)", async ({ page }) => {
 		await mockSignedInConsole(page);
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=automation");
 		await expect(page.getByText("Daily digest")).toBeVisible();
 
 		const digest = page.locator("div.bg-paper").filter({ hasText: "Daily digest" }).first();
@@ -2286,7 +2286,7 @@ test.describe("ProAgentStore Console smoke", () => {
 			});
 		});
 
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=automation");
 		await expect(page.getByRole("heading", { name: "Teamwork" })).toBeVisible();
 
 		// The wired predicate is on the row, not buried in a config blob.
@@ -2338,7 +2338,7 @@ test.describe("ProAgentStore Console smoke", () => {
 			});
 		});
 
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=automation");
 		await expect(page.getByRole("heading", { name: "Teamwork" })).toBeVisible();
 		await expect(page.getByText("Proposed by the agent — it carries no authority until you confirm it.")).toBeVisible();
 
@@ -3452,6 +3452,24 @@ async function measureOverflow(page: Page) {
 	});
 }
 
+/**
+ * Settings sub-tab URLs for the two sweeps below (#1589). The default fixture instance (runtime `browser`) shows all six; a Gmail
+ * Scout (`local_browser`, `sourceMode: gmail`) and a coding agent fill the Agent, Browser and Automation sub-tabs with the
+ * content they exist for, which the default fixture never renders.
+ */
+const SETTINGS_SWEEP_FIXTURES = [
+	{
+		name: "Gmail Scout",
+		instances: [{ id: "inst-1", agent_id: "agent-1", name: "Gmail Job Search Scout", status: "active", slug: "job-search-scout", category: "productivity", icon_bg: "#7c3aed", sourceMode: "gmail", capabilities: { surfaces: ["chat", "settings"], runtime: "local_browser" } }],
+		subtabs: ["agent", "browser", "automation", "notifications", "instructions", "general"],
+	},
+	{
+		name: "coding agent",
+		instances: [{ id: "inst-1", agent_id: "a-coder", name: "pags platform", agentName: "Repo Coder", status: "active", slug: "coder", category: "developer", icon_bg: "#0f766e", capabilities: { surfaces: ["coding"], runtime: "coding" } }],
+		subtabs: ["agent", "automation", "notifications", "instructions", "general"],
+	},
+];
+
 test.describe("mobile — no horizontal overflow (regression guard for the missing-w-full bug)", () => {
 	// Phones. The bug (page container sizing to max-content instead of the viewport)
 	// only shows below the sm: breakpoint (640px) and needs real content to trigger.
@@ -3471,7 +3489,12 @@ test.describe("mobile — no horizontal overflow (regression guard for the missi
 		"/console/instances/inst-1", // Assistant/chat
 		"/console/instances/inst-1/board", // apply board
 		"/console/instances/inst-1/knowledge",
-		"/console/instances/inst-1/settings",
+		"/console/instances/inst-1/settings?subtab=agent",
+		"/console/instances/inst-1/settings?subtab=browser",
+		"/console/instances/inst-1/settings?subtab=automation",
+		"/console/instances/inst-1/settings?subtab=notifications",
+		"/console/instances/inst-1/settings?subtab=instructions",
+		"/console/instances/inst-1/settings?subtab=general",
 		"/console/profile",
 		"/console/preferences",
 		"/console/notifications",
@@ -3482,6 +3505,22 @@ test.describe("mobile — no horizontal overflow (regression guard for the missi
 	];
 
 	for (const width of WIDTHS) {
+		for (const fixture of SETTINGS_SWEEP_FIXTURES) {
+			for (const subtab of fixture.subtabs) {
+				test(`no horizontal scroll at ${width}px — Settings ${subtab} (${fixture.name})`, async ({ page }) => {
+					await page.setViewportSize({ width, height: 812 });
+					await mockSignedInConsole(page, { instances: fixture.instances });
+					await page.goto(`/console/instances/inst-1/settings?subtab=${subtab}`);
+					await page.waitForLoadState("networkidle");
+					await page.locator("main").waitFor();
+					await page.waitForTimeout(300);
+					const { mainOv, docOv, wide } = await measureOverflow(page);
+					expect(mainOv, `<main> overflows by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
+					expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
+					expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+				});
+			}
+		}
 		for (const route of routes) {
 			test(`no horizontal scroll at ${width}px — ${route}`, async ({ page }) => {
 				await page.setViewportSize({ width, height: 812 });
@@ -4468,7 +4507,12 @@ test.describe("mobile — every control clears the 24px minimum target (#389)", 
 		"/console/instances/inst-1",
 		"/console/instances/inst-1/board",
 		"/console/instances/inst-1/knowledge",
-		"/console/instances/inst-1/settings",
+		"/console/instances/inst-1/settings?subtab=agent",
+		"/console/instances/inst-1/settings?subtab=browser",
+		"/console/instances/inst-1/settings?subtab=automation",
+		"/console/instances/inst-1/settings?subtab=notifications",
+		"/console/instances/inst-1/settings?subtab=instructions",
+		"/console/instances/inst-1/settings?subtab=general",
 		"/console/profile",
 		"/console/preferences",
 		"/console/notifications",
@@ -4511,6 +4555,21 @@ test.describe("mobile — every control clears the 24px minimum target (#389)", 
 			}
 			return findings;
 		}, min);
+	}
+
+	for (const fixture of SETTINGS_SWEEP_FIXTURES) {
+		for (const subtab of fixture.subtabs) {
+			test(`no target under ${MIN_TARGET}px on Settings ${subtab} (${fixture.name})`, async ({ page }) => {
+				await page.setViewportSize({ width: 390, height: 812 });
+				await mockSignedInConsole(page, { instances: fixture.instances });
+				await page.goto(`/console/instances/inst-1/settings?subtab=${subtab}`);
+				await page.waitForLoadState("networkidle");
+				await page.locator("main").waitFor();
+				await page.waitForTimeout(300);
+				const findings = await measureTargets(page, MIN_TARGET);
+				expect(findings, `targets under ${MIN_TARGET}px: ${findings.join(" · ")}`).toEqual([]);
+			});
+		}
 	}
 
 	for (const route of routes) {
@@ -6021,7 +6080,7 @@ test.describe("mobile — the Runner card separates connected from attached (#53
 				}],
 			}),
 		}));
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=automation");
 		await page.waitForLoadState("networkidle");
 		await page.waitForTimeout(400);
 	}
@@ -6599,7 +6658,7 @@ test.describe("mobile — pausing a teamwork edge (#667)", () => {
 			return json(route, { supervision: [link()] });
 		});
 
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=automation");
 		await expect(page.getByRole("heading", { name: "Teamwork" })).toBeVisible();
 		return wired;
 	}
@@ -6843,7 +6902,7 @@ test.describe("Repo — connect on Settings, manage on the Repo tab (#727)", () 
 
 	test("the Settings tab is where a repository is connected", async ({ page }) => {
 		const posted = await mockRepo(page);
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=general");
 
 		await expect(page.getByRole("heading", { name: "Repositories" })).toBeVisible();
 		await addForm(page).fill("https://github.com/owner/fresh");
@@ -6887,7 +6946,7 @@ test.describe("Repo — connect on Settings, manage on the Repo tab (#727)", () 
 
 	test("the add form exists in exactly one place", async ({ page }) => {
 		await mockRepo(page);
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=general");
 		await expect(addForm(page)).toHaveCount(1);
 		await page.goto("/console/instances/inst-1/repo");
 		await expect(addForm(page)).toHaveCount(0);
@@ -6897,7 +6956,7 @@ test.describe("Repo — connect on Settings, manage on the Repo tab (#727)", () 
 		await mockRepo(page, {
 			instances: [{ id: "inst-1", name: "Job Application Assistant", slug: "job-application-assistant", category: "productivity", capabilities: { surfaces: ["apply"], runtime: "browser", workflow: "apply" } }],
 		});
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=general");
 		await expect(page.getByRole("heading", { name: "Instance name" })).toBeVisible();
 		await expect(page.getByRole("heading", { name: "Repositories" })).toHaveCount(0);
 		await expect(addForm(page)).toHaveCount(0);
@@ -6906,7 +6965,7 @@ test.describe("Repo — connect on Settings, manage on the Repo tab (#727)", () 
 	for (const width of [320, 390]) {
 		test(`mobile — the connect panel fits at ${width}px`, async ({ page }) => {
 			await mockRepo(page, { width });
-			await page.goto("/console/instances/inst-1/settings");
+			await page.goto("/console/instances/inst-1/settings?subtab=general");
 			await expect(page.getByRole("heading", { name: "Repositories" })).toBeVisible();
 
 			// The input and the Index button share a row; at 320px that row is the whole reason to
@@ -7073,7 +7132,7 @@ test.describe("Settings — which coding engine and model this agent runs (#792)
 	async function openSettings(page: Page, opts: { width?: number; instances?: Array<Record<string, unknown>> } = {}) {
 		if (opts.width) await page.setViewportSize({ width: opts.width, height: 800 });
 		const mock = await mockSignedInConsole(page, { instances: opts.instances ?? CODER });
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=agent");
 		return mock;
 	}
 
@@ -7119,7 +7178,7 @@ test.describe("Settings — which coding engine and model this agent runs (#792)
 
 	test("is not shown for an agent that does not code", async ({ page }) => {
 		await mockSignedInConsole(page);
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=general");
 		await expect(page.getByRole("heading", { name: "Instance name" })).toBeVisible();
 		await expect(page.getByRole("heading", { name: "Coding engine", exact: true })).toHaveCount(0);
 	});

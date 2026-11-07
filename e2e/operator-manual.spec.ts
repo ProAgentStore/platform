@@ -45,7 +45,7 @@ async function mock(page: Page, inherited: string, account = "") {
 test.describe("the operator manual in Settings (#1237)", () => {
 	test("the template's manual is shown, read-only, above this instance's own — and only the instance's own is saved", async ({ page }) => {
 		const { puts } = await mock(page, STANDARD);
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=instructions");
 		const card = page.getByTestId("operator-manual");
 		await expect(card.getByTestId("operator-manual-inherited")).toContainText("Inherited from template");
 		await expect(card.getByTestId("operator-manual-inherited")).toContainText(STANDARD);
@@ -57,7 +57,7 @@ test.describe("the operator manual in Settings (#1237)", () => {
 
 	test("with no template manual, there is no inherited section — just the instance's own", async ({ page }) => {
 		await mock(page, "");
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=instructions");
 		const card = page.getByTestId("operator-manual");
 		await expect(card.getByRole("textbox", { name: "This instance's operator manual" })).toBeVisible();
 		await expect(card.getByTestId("operator-manual-inherited")).toHaveCount(0);
@@ -69,7 +69,7 @@ const MACHINES = "Machines: Mac mini, pink laptop, Dell. Main only, no PRs.";
 test.describe("the account-level operator manual (#1238)", () => {
 	test("an instance's Settings shows the account's manual first, then the template's, read-only, above its own", async ({ page }) => {
 		await mock(page, STANDARD, MACHINES);
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=instructions");
 		const card = page.getByTestId("operator-manual");
 		await expect(card.getByTestId("operator-manual-account")).toContainText("Inherited from your account");
 		await expect(card.getByTestId("operator-manual-account")).toContainText(MACHINES);
@@ -82,7 +82,7 @@ test.describe("the account-level operator manual (#1238)", () => {
 
 	test("with only an account manual there is no template section", async ({ page }) => {
 		await mock(page, "", MACHINES);
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=instructions");
 		const card = page.getByTestId("operator-manual");
 		await expect(card.getByTestId("operator-manual-account")).toContainText(MACHINES);
 		await expect(card.getByTestId("operator-manual-inherited")).toHaveCount(0);

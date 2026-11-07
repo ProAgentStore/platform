@@ -235,7 +235,7 @@ export function readiness({ view, botMissing, runner }: ReadinessInput): Readine
 /** The runner half: a gated push needs CLI 0.4.179+, and an old one's missing SHA cannot be recovered from branch HEAD. */
 export function runnerWarning(r: RunnerReading): string | null {
 	const update = `Update it with \`pags update\`. A gated push needs CLI ${MIN_GATED_RUNNER} or newer, and a missing SHA cannot be recovered from the branch head, so those notes stay held.`;
-	if (!r.node) return `No runner is pinned or resolved, so its CLI version cannot be checked. Pin a machine on the Settings tab. A gated push needs CLI ${MIN_GATED_RUNNER} or newer.`;
+	if (!r.node) return `No runner is pinned or resolved, so its CLI version cannot be checked. Pin a machine in Settings → Automation. A gated push needs CLI ${MIN_GATED_RUNNER} or newer.`;
 	const cmp = r.version ? compareVersions(r.version, MIN_GATED_RUNNER) : null;
 	if (cmp !== null && cmp < 0) return `The runner on ${r.node} is ${r.version}. ${update}`;
 	if (r.connected !== true) return `The runner on ${r.node} is ${r.connected === false ? "offline" : "not reporting"}; start it with \`pags up\` so a push can carry its SHA.`;

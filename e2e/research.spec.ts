@@ -194,7 +194,7 @@ test.describe("Research tab — local browser research (#946, #947)", () => {
 		await expect(page.getByRole("list", { name: "Setup checklist" })).toContainText("claude was signed in (subscription)");
 
 		// 2. Settings: allow one site. Research-only is the only mode there is to choose.
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=agent");
 		const section = page.locator("div", { has: page.getByRole("heading", { name: "Local browser research" }) }).last();
 		await section.getByLabel(/Allowed sites/).fill("seek.com.au");
 		await section.getByRole("button", { name: "Save research settings" }).click();
@@ -420,7 +420,7 @@ test.describe("mobile — the research screens fit a phone (#946)", () => {
 		test(`mobile — the Local browser research settings fit at ${width}px`, async ({ page }) => {
 			await page.setViewportSize({ width, height: 812 });
 			await mockResearchAgent(page);
-			await page.goto("/console/instances/inst-1/settings");
+			await page.goto("/console/instances/inst-1/settings?subtab=agent");
 			const section = page.locator("div", { has: page.getByRole("heading", { name: "Local browser research" }) }).last();
 			await expect(section.getByRole("button", { name: "Save research settings" })).toBeVisible();
 			await expectFits(page, width, "settings section");
@@ -440,7 +440,7 @@ test.describe("own browser profile on the managed launch path (#1603)", () => {
 	const CHECKBOX = "I allow research in my signed-in profile (a run waits for this otherwise)";
 	test("an engine set by the owner shows the warning and withholds the consent checkbox", async ({ page }) => {
 		await mockResearchAgent(page, { ownProfile: "instance" });
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=agent");
 		const notice = page.getByTestId("own-profile-notice");
 		await expect(notice).toContainText("Your own profile is not used while a browser or profile is set in Browser settings");
 		await expect(notice.getByRole("link", { name: "Open Browser settings" })).toHaveAttribute("href", "/console/instances/inst-1/settings");
@@ -448,18 +448,18 @@ test.describe("own browser profile on the managed launch path (#1603)", () => {
 	});
 	test("an agent default uses the agent wording", async ({ page }) => {
 		await mockResearchAgent(page, { ownProfile: "agent" });
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=agent");
 		await expect(page.getByTestId("own-profile-notice")).toContainText("this agent's default browser or profile applies");
 	});
 	test("the legacy path keeps the consent checkbox, with no warning", async ({ page }) => {
 		await mockResearchAgent(page, { ownProfile: "legacy" });
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=agent");
 		await expect(page.getByLabel(CHECKBOX)).toBeVisible();
 		await expect(page.getByTestId("own-profile-notice")).toHaveCount(0);
 	});
 	test("a failed browser-settings read shows no warning and keeps the consent checkbox", async ({ page }) => {
 		await mockResearchAgent(page, { ownProfile: "fail" });
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=agent");
 		await expect(page.getByLabel(CHECKBOX)).toBeVisible();
 		await expect(page.getByTestId("own-profile-notice")).toHaveCount(0);
 	});
@@ -467,7 +467,7 @@ test.describe("own browser profile on the managed launch path (#1603)", () => {
 		test(`mobile — the warning fits at ${width}px and its link clears 24px`, async ({ page }) => {
 			await page.setViewportSize({ width, height: 812 });
 			await mockResearchAgent(page, { ownProfile: "instance" });
-			await page.goto("/console/instances/inst-1/settings");
+			await page.goto("/console/instances/inst-1/settings?subtab=agent");
 			const link = page.getByTestId("own-profile-notice").getByRole("link", { name: "Open Browser settings" });
 			await expect(link).toBeVisible();
 			const box = await link.boundingBox();

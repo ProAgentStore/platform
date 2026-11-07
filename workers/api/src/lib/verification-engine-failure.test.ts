@@ -74,7 +74,7 @@ describe("readableVerificationDetail (stored rows)", () => {
 			"found expired",
 			"The verification run ended failed (runner_lost): The runner went offline during the run.",
 			"The verification run ended failed (engine_failed).",
-			"Browser verification is off for this Scout. Turn it on in Settings → Browser verification (set_instance_browser_verification).",
+			"Browser verification is off for this Scout. Turn it on in Settings → Browser (set_instance_browser_verification).",
 			"Codex usage limit reached. Resets at 2026-11-08 14:05 +11:00 (Australia/Melbourne).",
 			"",
 		]) expect(readableVerificationDetail(d, AT, ZONE, NOW)).toBe(d);

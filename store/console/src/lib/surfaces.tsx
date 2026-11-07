@@ -375,7 +375,7 @@ export const SURFACES: SurfaceDef[] = [
 		show: () => true,
 		scroll: true,
 		render: ({ instanceId, instanceName, isApply, isCoding, isRepo, caps, onUnsubscribe }) => (
-			<SettingsTab instanceId={instanceId} instanceName={instanceName} isApply={isApply} isCoding={isCoding} isRepo={isRepo} isLocalBrowser={caps.runtime === "local_browser"} isGmailScout={isGmailScout(caps)} takesScreenshots={takesBrowserScreenshots(caps)} onUnsubscribe={onUnsubscribe} />
+			<SettingsTab instanceId={instanceId} instanceName={instanceName} isApply={isApply} isCoding={isCoding} isRepo={isRepo} isLocalBrowser={caps.runtime === "local_browser"} isGmailScout={isGmailScout(caps)} takesScreenshots={takesBrowserScreenshots(caps)} caps={caps} onUnsubscribe={onUnsubscribe} />
 		),
 	},
 	{

@@ -36,7 +36,7 @@ async function open(page: Page, size: { width: number; height: number }) {
 		if (path === "/v1/instances/inst-1/coding/engine-choice") return json({ defaultEngineId: "claude", engines: [{ id: "claude", label: "Claude Code", command: "claude", clientType: "claude", model: null, modelSelectable: true, suggestions: [] }], lastObserved: null, appliesTo: "" });
 		return json({});
 	});
-	await page.goto("/console/instances/inst-1/settings");
+	await page.goto("/console/instances/inst-1/settings?subtab=automation");
 	await page.getByRole("button", { name: "History" }).click();
 	await page.getByRole("button", { name: "payload", exact: true }).click();
 	await expect(page.locator("pre").filter({ hasText: "field23" })).toBeVisible();

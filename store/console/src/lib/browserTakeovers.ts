@@ -64,6 +64,6 @@ export function takeoverLine(t: BrowserTakeover, now = Date.now()): { text: stri
 /** May the remote view be opened from here? The server refuses too; this says why before trying. */
 export function remoteViewBlocked(t: BrowserTakeover, device: "mobile" | "desktop"): string | null {
 	if (!isLive(t)) return "This takeover is closed.";
-	if (device === "mobile" && !t.mobileAllowed) return "Taking over from a phone is off for this agent — take over at the machine, or allow it in Settings → Browser verification.";
+	if (device === "mobile" && !t.mobileAllowed) return "Taking over from a phone is off for this agent — take over at the machine, or allow it in Settings → Browser.";
 	return null;
 }

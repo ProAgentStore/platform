@@ -514,7 +514,7 @@ async function standingConfigFor(ctx: SupervisionCtx, instanceId: string): Promi
  */
 export const MAX_ACTS_PER_SUBORDINATE = 5;
 
-const NO_SUBORDINATES = "You do not supervise any agents yet. Add a supervision link in Settings first.";
+const NO_SUBORDINATES = "You do not supervise any agents yet. Add a supervision link in Settings → Automation first.";
 
 export const SUPERVISION_TOOLS: ToolDef[] = [
 	{
@@ -862,7 +862,7 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 		untrustedOutput: false,
 		description:
 			"PROPOSE the standing direction for an agent you supervise — one or two sentences saying what that agent is FOR (\"finish the voice port and keep the suite green\"), not a task for today. It is durable: it survives this conversation and is shown to you on every later turn. " +
-			"You cannot overwrite a direction your OWNER set — only they can change or clear that, and what you record here is a PROPOSAL until they confirm it in Settings. " +
+			"You cannot overwrite a direction your OWNER set — only they can change or clear that, and what you record here is a PROPOSAL until they confirm it in Settings → Automation. " +
 			"This is not where work goes: to make something happen now, use delegate_goal. Direction is what the goals are in service OF.",
 		jsonSchema: {
 			type: "object",

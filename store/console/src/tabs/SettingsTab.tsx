@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, type ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
 import LoadFailed from "../components/LoadFailed";
 import BrainModelCard from "../components/BrainModelCard";
 import PilotModelCard from "../components/PilotModelCard";
@@ -15,6 +16,14 @@ import { invalidateVoiceConfig } from "@proagentstore/sdk/hooks";
 import type { SettingsField } from "../lib/types";
 import type { RosterInstance } from "../lib/unsubscribeScope";
 import { type DisabledRecord, MY_INSTANCES_WITH_PAUSED } from "../lib/instancePause";
+import {
+	searchWithSettingsSubtab,
+	SETTINGS_SUBTAB_LABELS,
+	settingsSubtabFromSearch,
+	visibleSettingsSubtabs,
+	type SettingsSubtab,
+	type SettingsSubtabCaps,
+} from "../lib/settingsSubtab";
 
 // Import refactored modules
 import InstanceInfo from "./settings/InstanceInfo";
@@ -29,6 +38,8 @@ import BrowserModeSection from "./settings/BrowserModeSection";
 import GmailScoutSection from "./settings/GmailScoutSection";
 import CoderBrainSection from "./settings/CoderBrainSection";
 import AutoPickupSection from "./settings/AutoPickupSection";
+import OperatorManualCard from "../components/OperatorManualCard";
+import ConnectionGuide from "../components/ConnectionGuide";
 
 interface Props {
 	instanceId: string;
@@ -42,10 +53,19 @@ interface Props {
 	isGmailScout?: boolean;
 	/** The agent runs a browser, so the screenshot switch applies (#1064). */
 	takesScreenshots?: boolean;
+	/** What decides which sub-tabs show (`lib/settingsSubtab.ts`): the same caps surfaces.tsx derives the booleans above from. */
+	caps: SettingsSubtabCaps;
 	onUnsubscribe: () => void;
 }
 
-export default function SettingsTab({ instanceId, instanceName, isApply, isCoding, isRepo, isLocalBrowser, isGmailScout, takesScreenshots, onUnsubscribe }: Props) {
+export default function SettingsTab({ instanceId, instanceName, isApply, isCoding, isRepo, isLocalBrowser, isGmailScout, takesScreenshots, caps, onUnsubscribe }: Props) {
+	const [searchParams, setSearchParams] = useSearchParams();
+	const subtabs = visibleSettingsSubtabs(caps);
+	const active = settingsSubtabFromSearch(searchParams, caps);
+	// A sub-tab mounts on first visit and stays mounted (hidden) after, so its drafts and fetches survive switching (#1589).
+	const [visited, setVisited] = useState<ReadonlySet<SettingsSubtab>>(() => new Set([active]));
+	if (!visited.has(active)) setVisited(new Set([...visited, active]));
+	const selectSubtab = (id: SettingsSubtab) => setSearchParams(searchWithSettingsSubtab(searchParams, id));
 	const [maintMsg, setMaintMsg] = useState("");
 	const [resyncMsg, setResyncMsg] = useState("");
 	const [agentFields, setAgentFields] = useState<SettingsField[]>([]);
@@ -239,12 +259,129 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 		}
 	};
 
+	const panels: Record<SettingsSubtab, ReactNode> = {
+		agent: (
+			<>
+				<Section id="agent-settings">
+					<AgentSettingsSection
+						agentFields={agentFields}
+						agentSettings={agentSettings}
+						settingsMsg={settingsMsg}
+						onSettingChange={(id, value) => setAgentSettings((s) => ({ ...s, [id]: value }))}
+						onSaveSetting={saveSetting}
+					/>
+				</Section>
+
+				{/* #1043: the Brain (advisory, may use an API key) and the Coding engine (the subscription CLI that
+				    writes code, #1042) are two different things, set in two separate sections. */}
+				<section aria-labelledby="settings-brain-heading" data-testid="settings-brain-section">
+					<h2 id="settings-brain-heading" className="text-lg font-semibold mb-2">Brain — advises and orchestrates</h2>
+					<BrainModelCard instanceId={instanceId} />
+					{isCoding && <CoderBrainSection instanceId={instanceId} />}
+					{isCoding && <AutoPickupSection instanceId={instanceId} />}
+				</section>
+				{isCoding && <Section id="pilot-model"><PilotModelCard instanceId={instanceId} /></Section>}
+				{isCoding && (
+					<section aria-labelledby="settings-coding-heading" data-testid="settings-coding-section" className="border-t border-line pt-4 mt-2">
+						<h2 id="settings-coding-heading" className="text-lg font-semibold mb-2">Coding — edits, tests and deploys</h2>
+						<CodingEngineCard instanceId={instanceId} />
+					</section>
+				)}
+				{isLocalBrowser && <Section id="local-browser"><LocalBrowserSection instanceId={instanceId} /></Section>}
+				{isGmailScout && <Section id="gmail-scout"><GmailScoutSection instanceId={instanceId} /></Section>}
+			</>
+		),
+		browser: (
+			<>
+				{isLocalBrowser && <Section id="browser-verification"><BrowserVerificationSection instanceId={instanceId} /></Section>}
+				{takesScreenshots && <Section id="browser-screenshots"><BrowserScreenshotsSection instanceId={instanceId} /></Section>}
+				{takesScreenshots && <Section id="browser-mode"><BrowserModeSection instanceId={instanceId} /></Section>}
+			</>
+		),
+		automation: (
+			<>
+				<Section id="runner"><RunnerPanel instanceId={instanceId} /></Section>
+				{isCoding && <Section id="actions-runner"><ActionsRunnerCard instanceId={instanceId} /></Section>}
+				<Section id="teamwork"><TeamworkSection instanceId={instanceId} /></Section>
+				<Section id="loop-presets"><LoopPresetsSection instanceId={instanceId} /></Section>
+				<Section id="loop-runs"><LoopRunsSection instanceId={instanceId} /></Section>
+				<Section id="triggers"><TriggersSection instanceId={instanceId} driveGrants={driveGrants} workdriveGrants={workdriveGrants} /></Section>
+			</>
+		),
+		// What this agent may tell the owner, and where (#992) — every agent has notifications,
+		// so this is ungated, like Behaviour.
+		notifications: <Section id="notification-policy"><NotificationPolicySection instanceId={instanceId} /></Section>,
+		instructions: (
+			<>
+				{/* Operator manual — the template's, inherited, above this instance's own (#1237) */}
+				<Section id="operator-manual"><OperatorManualCard instanceId={instanceId} /></Section>
+				<Section id="connection-guide">
+					<div className="mb-3 sm:mb-4">
+						<ConnectionGuide instanceId={instanceId} active />
+					</div>
+				</Section>
+			</>
+		),
+		general: (
+			<>
+				<Section id="instance-info">
+					<InstanceInfo
+						instanceId={instanceId}
+						instName={instName}
+						instNameMsg={instNameMsg}
+						isRepo={isRepo}
+						onInstNameChange={setInstName}
+						onSaveInstName={saveInstName}
+					/>
+				</Section>
+				<MiscellaneousSection
+					instanceId={instanceId}
+					instanceName={instanceName}
+					isApply={isApply}
+					isCoding={isCoding}
+					isRepo={isRepo}
+					roster={roster}
+					maintMsg={maintMsg}
+					resyncMsg={resyncMsg}
+					instStatus={instStatus}
+					instDisabled={instDisabled}
+					onClearFinished={clearFinished}
+					onResyncIdentity={resyncIdentity}
+					onUnsubscribe={onUnsubscribe}
+				>
+					<Section id="voice-translation">
+						<VoiceTranslationSection
+							voiceSettings={voiceSettings}
+							voiceOverride={voiceOverride}
+							hasOpenAiKey={hasOpenAiKey}
+							trLoaded={trLoaded}
+							trOverride={trOverride}
+							trEnabled={trEnabled}
+							trTarget={trTarget}
+							trTranslit={trTranslit}
+							trWordTap={trWordTap}
+							trFontSize={trFontSize}
+							trLanguages={trLanguages}
+							onSaveVoice={saveVoice}
+							onClearVoiceOverride={clearVoiceOverride}
+							onSaveTranslationOverride={saveTranslationOverride}
+							onClearTrOverride={clearTrOverride}
+							onSetVoiceOverride={setVoiceOverride}
+							onSetTrOverride={setTrOverride}
+						/>
+					</Section>
+					<Section id="secure-input-history"><SecureInputHistory instanceId={instanceId} /></Section>
+				</MiscellaneousSection>
+			</>
+		),
+	};
+
 	return (
 		<div className="min-w-0 overflow-x-hidden">
 			{loadFailures.length > 0 && (
 				<div className="mb-3">
 					<LoadFailed
-						what={`${loadFailures.join(", ")} — the controls below may show defaults instead of your settings`}
+						what={`${loadFailures.join(", ")} — some settings may show defaults instead of yours`}
 						onRetry={loadAll}
 						testId="settings-load-failed"
 						compact
@@ -252,91 +389,34 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 				</div>
 			)}
 
-			<InstanceInfo
-				instanceId={instanceId}
-				instName={instName}
-				instNameMsg={instNameMsg}
-				isRepo={isRepo}
-				onInstNameChange={setInstName}
-				onSaveInstName={saveInstName}
-			/>
+			{/* Plain buttons in a scrolling row, as Knowledge's bar — not a <nav>: the shell allows no second primary navbar. */}
+			<div className="flex gap-0 border-b border-line mb-4 overflow-x-auto" data-testid="settings-subtabs">
+				{subtabs.map((id) => (
+					<button
+						key={id}
+						type="button"
+						onClick={() => selectSubtab(id)}
+						aria-current={active === id ? "true" : undefined}
+						data-testid={`settings-subtab-${id}`}
+						className={`min-h-6 min-w-6 px-3 py-2 text-sm font-bold border-b-2 whitespace-nowrap transition-all ${
+							active === id ? "text-accent border-accent" : "text-muted border-transparent hover:text-ink"
+						}`}
+					>
+						{SETTINGS_SUBTAB_LABELS[id]}
+					</button>
+				))}
+			</div>
 
-			<AgentSettingsSection
-				agentFields={agentFields}
-				agentSettings={agentSettings}
-				settingsMsg={settingsMsg}
-				onSettingChange={(id, value) => setAgentSettings((s) => ({ ...s, [id]: value }))}
-				onSaveSetting={saveSetting}
-			/>
-
-			{/* #1043: the Brain (advisory, may use an API key) and the Coding engine (the subscription CLI that
-			    writes code, #1042) are two different things, set in two separate sections. */}
-			<section aria-labelledby="settings-brain-heading" data-testid="settings-brain-section">
-				<h2 id="settings-brain-heading" className="text-lg font-semibold mb-2">Brain — advises and orchestrates</h2>
-				<BrainModelCard instanceId={instanceId} />
-				{isCoding && <CoderBrainSection instanceId={instanceId} />}
-				{isCoding && <AutoPickupSection instanceId={instanceId} />}
-			</section>
-			{isCoding && <PilotModelCard instanceId={instanceId} />}
-			{isCoding && (
-				<section aria-labelledby="settings-coding-heading" data-testid="settings-coding-section" className="border-t border-line pt-4 mt-2">
-					<h2 id="settings-coding-heading" className="text-lg font-semibold mb-2">Coding — edits, tests and deploys</h2>
-					<CodingEngineCard instanceId={instanceId} />
-				</section>
-			)}
-			{isLocalBrowser && <LocalBrowserSection instanceId={instanceId} />}
-			{isLocalBrowser && <BrowserVerificationSection instanceId={instanceId} />}
-			{takesScreenshots && <BrowserScreenshotsSection instanceId={instanceId} />}
-			{takesScreenshots && <BrowserModeSection instanceId={instanceId} />}
-			{isGmailScout && <GmailScoutSection instanceId={instanceId} />}
-
-			<RunnerPanel instanceId={instanceId} />
-			{isCoding && <ActionsRunnerCard instanceId={instanceId} />}
-			<SecureInputHistory instanceId={instanceId} />
-
-			<TeamworkSection instanceId={instanceId} />
-			<LoopPresetsSection instanceId={instanceId} />
-			<LoopRunsSection instanceId={instanceId} />
-			<TriggersSection instanceId={instanceId} driveGrants={driveGrants} workdriveGrants={workdriveGrants} />
-
-			{/* What this agent may tell the owner, and where (#992) — every agent has notifications,
-			    so this is ungated, like Behaviour. */}
-			<NotificationPolicySection instanceId={instanceId} />
-			<VoiceTranslationSection
-				voiceSettings={voiceSettings}
-				voiceOverride={voiceOverride}
-				hasOpenAiKey={hasOpenAiKey}
-				trLoaded={trLoaded}
-				trOverride={trOverride}
-				trEnabled={trEnabled}
-				trTarget={trTarget}
-				trTranslit={trTranslit}
-				trWordTap={trWordTap}
-				trFontSize={trFontSize}
-				trLanguages={trLanguages}
-				onSaveVoice={saveVoice}
-				onClearVoiceOverride={clearVoiceOverride}
-				onSaveTranslationOverride={saveTranslationOverride}
-				onClearTrOverride={clearTrOverride}
-				onSetVoiceOverride={setVoiceOverride}
-				onSetTrOverride={setTrOverride}
-			/>
-
-			<MiscellaneousSection
-				instanceId={instanceId}
-				instanceName={instanceName}
-				isApply={isApply}
-				isCoding={isCoding}
-				isRepo={isRepo}
-				roster={roster}
-				maintMsg={maintMsg}
-				resyncMsg={resyncMsg}
-				instStatus={instStatus}
-				instDisabled={instDisabled}
-				onClearFinished={clearFinished}
-				onResyncIdentity={resyncIdentity}
-				onUnsubscribe={onUnsubscribe}
-			/>
+			{subtabs.map((id) => (
+				<div key={id} hidden={active !== id} data-testid={`settings-panel-${id}`}>
+					{visited.has(id) && panels[id]}
+				</div>
+			))}
 		</div>
 	);
+}
+
+/** Marks one section so a test can say which sub-tab it lives in. */
+function Section({ id, children }: { id: string; children: ReactNode }) {
+	return <div data-testid={`settings-section-${id}`}>{children}</div>;
 }

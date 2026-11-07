@@ -477,7 +477,7 @@ async function deferLead(env: Env, row: LeadRow, f: InfrastructureFailure, engin
 export async function dispatchLeadVerification(env: Env, row: LeadRow, now = Date.now()): Promise<VerificationState> {
 	const { settings } = await readBrowserVerification(env, row.instance_id, row.user_id);
 	if (!settings.enabled) {
-		await setLead(env, row, { state: "awaiting", nextAttemptAt: now + WAIT_RETRY_MS, lastDetail: "Browser verification is off for this Scout. Turn it on in Settings → Browser verification (set_instance_browser_verification)." }, now);
+		await setLead(env, row, { state: "awaiting", nextAttemptAt: now + WAIT_RETRY_MS, lastDetail: "Browser verification is off for this Scout. Turn it on in Settings → Browser (set_instance_browser_verification)." }, now);
 		return "awaiting";
 	}
 	// The agent must DECLARE a local browser (#1048). One that does not — a template changed after the owner

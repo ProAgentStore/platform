@@ -1,6 +1,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
+import SettingsTab from "../tabs/SettingsTab";
 import { isGmailScout, SURFACES, showsKnowledgeSubTab, surfaceOwnsHeader, visibleSurfaces } from "./surfaces";
 
 describe("surfaceOwnsHeader — the header takeover is DECLARED, not hardcoded to one tab", () => {
@@ -266,8 +270,17 @@ describe("isGmailScout — the server's source_mode verdict, never the Gmail rea
 	it("an instance the server lists with source mode gmail is a Scout", () => {
 		expect(isGmailScout({ sourceMode: "gmail" })).toBe(true);
 	});
-	it("SettingsTab renders GmailScoutSection — the only caller of /gmail-scout/status — only behind this rule", () => {
-		expect(codeOf("../tabs/SettingsTab.tsx")).toMatch(/\{isGmailScout && <GmailScoutSection/);
+	it("SettingsTab renders GmailScoutSection — the only caller of /gmail-scout/status — only for a Scout, on the Agent sub-tab", () => {
+		const html = (isGmail: boolean) =>
+			renderToStaticMarkup(
+				createElement(
+					MemoryRouter,
+					{ initialEntries: ["/?subtab=agent"] },
+					createElement(SettingsTab, { instanceId: "i", isApply: false, isGmailScout: isGmail, caps: {}, onUnsubscribe: () => undefined }),
+				),
+			);
+		expect(html(true)).toContain("settings-section-gmail-scout");
+		expect(html(false)).not.toContain("settings-section-gmail-scout");
 		expect(codeOf("./surfaces.tsx")).toContain("isGmailScout={isGmailScout(caps)}");
 	});
 });

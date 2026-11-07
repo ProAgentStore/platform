@@ -34,7 +34,7 @@ export interface BrowserArtifactListResponse {
 }
 
 /** The replay's empty state for a run started with the owner's screenshot switch OFF (#1064) — on purpose, not missing. */
-export const SCREENSHOTS_OFF_TEXT = "Screenshots were off for this run — the agent's Browser screenshots setting was off when it started, so no frames were taken or stored. Turn it on in Settings for future runs.";
+export const SCREENSHOTS_OFF_TEXT = "Screenshots were off for this run — the agent's Browser screenshots setting was off when it started, so no frames were taken or stored. Turn it on in Settings → Browser for future runs.";
 
 /** One frame the player shows. `src` is an API path, fetched with the owner's token. */
 export interface ReplayFrame {

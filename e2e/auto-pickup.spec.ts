@@ -46,7 +46,7 @@ async function mock(page: Page) {
 test.describe("auto-pickup in Settings (#1233)", () => {
 	test("off by default; turning it on sends enabled, and the card shows what it last started", async ({ page }) => {
 		const { puts } = await mock(page);
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=agent");
 		const card = page.getByTestId("auto-pickup");
 		await expect(card).toContainText("no AI, no tokens");
 		await expect(card).toContainText("needs-human");
@@ -60,7 +60,7 @@ test.describe("auto-pickup in Settings (#1233)", () => {
 
 	test("the label rules save as lists", async ({ page }) => {
 		const { puts } = await mock(page);
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/settings?subtab=agent");
 		const card = page.getByTestId("auto-pickup");
 		await card.getByRole("checkbox", { name: "Auto-pickup on" }).click();
 		await expect(card.getByRole("checkbox", { name: "Auto-pickup on" })).toBeChecked();

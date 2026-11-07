@@ -475,7 +475,7 @@ export function diagnoseForget(connected: boolean, blockers: readonly ForgetBloc
 	const pins = blockers.filter((b) => b.kind === "pin");
 	if (pins.length) {
 		const names = pins.map((p) => `${p.label} (pinned to ${p.node})`).join(", ");
-		return { ok: false, reason: "pinned", message: `${pins.length} agent${pins.length === 1 ? " is" : "s are"} pinned to run on this machine: ${names}. Repoint ${pins.length === 1 ? "it" : "them"} on the agent's Settings tab first — forgetting the machine now would leave ${pins.length === 1 ? "it" : "them"} pinned to a name nothing can resolve.` };
+		return { ok: false, reason: "pinned", message: `${pins.length} agent${pins.length === 1 ? " is" : "s are"} pinned to run on this machine: ${names}. Repoint ${pins.length === 1 ? "it" : "them"} in the agent's Settings → Automation first — forgetting the machine now would leave ${pins.length === 1 ? "it" : "them"} pinned to a name nothing can resolve.` };
 	}
 	const sessions = blockers.filter((b) => b.kind === "session");
 	if (sessions.length) {
@@ -501,7 +501,7 @@ export function diagnoseUnclaim(connected: boolean, blockers: readonly ForgetBlo
 	const pins = blockers.filter((b) => b.kind === "pin");
 	if (pins.length) {
 		const names = pins.map((p) => `${p.label} (pinned to ${p.node})`).join(", ");
-		return { ok: false, reason: "pinned", message: `${pins.length} agent${pins.length === 1 ? " is" : "s are"} reachable only through this name: ${names}. Repoint ${pins.length === 1 ? "it" : "them"} on the agent's Settings tab first — removing the claim would leave ${pins.length === 1 ? "it" : "them"} pinned to a name nothing can resolve.` };
+		return { ok: false, reason: "pinned", message: `${pins.length} agent${pins.length === 1 ? " is" : "s are"} reachable only through this name: ${names}. Repoint ${pins.length === 1 ? "it" : "them"} in the agent's Settings → Automation first — removing the claim would leave ${pins.length === 1 ? "it" : "them"} pinned to a name nothing can resolve.` };
 	}
 	const sessions = blockers.filter((b) => b.kind === "session");
 	if (sessions.length) {

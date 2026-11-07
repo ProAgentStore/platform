@@ -76,7 +76,7 @@ export default function Disabled() {
 			{loading && !data ? (
 				<p className="text-center py-8 text-muted text-sm">Loading…</p>
 			) : rows.length === 0 ? (
-				<Card className="text-sm text-muted">No agents are disabled. Disable one from its Settings tab, or with the disable_instance tool; it will be listed here.</Card>
+				<Card className="text-sm text-muted">No agents are disabled. Disable one from its Settings → General, or with the disable_instance tool; it will be listed here.</Card>
 			) : (
 				<ul className="space-y-3 list-none p-0 m-0">
 					{rows.map((i) => (

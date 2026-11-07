@@ -3,9 +3,6 @@
  * confirms provider, model, cost and billing before saving, and offers Cloudflare only with Cloudflare
  * credentials. Components rendered as real markup.
  */
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -71,16 +68,5 @@ describe("Brain and Coding engine are separate in wording and layout (#1043)", (
 		expect(BRAIN_CARD_SCOPE).toMatch(/Advisory and orchestration only\. It never edits, tests or deploys code/);
 		expect(ENGINE_CARD_SCOPE).toMatch(/subscription CLI.*only thing that edits, tests and deploys code.*Brain model above never changes it/);
 		expect(BRAIN_SURFACES).toMatch(/coding engine stays your subscription CLI/);
-	});
-
-	it("Settings puts them in two headed sections — the Brain's, then Coding's — never side by side in one", () => {
-		const tab = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../tabs/SettingsTab.tsx"), "utf8");
-		const brain = tab.indexOf('data-testid="settings-brain-section"');
-		const coding = tab.indexOf('data-testid="settings-coding-section"');
-		expect(brain).toBeGreaterThan(0);
-		expect(coding).toBeGreaterThan(brain);
-		expect(tab.slice(brain, coding)).toMatch(/Brain — advises and orchestrates[\s\S]*<BrainModelCard[\s\S]*<CoderBrainSection/);
-		expect(tab.slice(brain, coding)).not.toMatch(/<CodingEngineCard/);
-		expect(tab.slice(coding)).toMatch(/Coding — edits, tests and deploys[\s\S]*<CodingEngineCard/);
 	});
 });

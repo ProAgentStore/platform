@@ -250,6 +250,11 @@ export function instanceSettingsLink(instanceId: string): string {
 	return `${instanceLink(instanceId)}/settings`;
 }
 
+/** One Settings sub-tab (#1589), as query state: the splat is read as `<tab>/<sessionId>`, so `settings/browser` would be a session id. */
+export function instanceSettingsSubtabLink(instanceId: string, subtab: "agent" | "browser" | "automation" | "notifications" | "instructions" | "general"): string {
+	return `${instanceSettingsLink(instanceId)}?subtab=${subtab}`;
+}
+
 /**
  * The Permissions tab's Permissions & Connections control, with optional durable request focus (#1009).
  * Its own tab since #1060; the console redirects an older `/settings?focus=permissions` link here.
@@ -347,7 +352,7 @@ export function deepLinkFor(subject: NotificationSubject): DeepLink {
 			case "assistant":
 				return instanceLink(subject.instanceId);
 			case "triggers":
-				return instanceSettingsLink(subject.instanceId);
+				return instanceSettingsSubtabLink(subject.instanceId, "automation");
 			case "knowledge":
 				return instanceKnowledgeLink(subject.instanceId);
 			case "local-browser-run":

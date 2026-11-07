@@ -104,7 +104,7 @@ export function runnerUpgradeMessage(f: RunnerUpgradeFacts): string {
 	if (f.pinned) {
 		// Without this the owner has no way to DISCOVER the pin from the failure, and the pin is
 		// the only reason the machine he already upgraded is not being used.
-		parts.push(`This agent is pinned to that machine (Settings → Runs on), so it will not use another one.`);
+		parts.push(`This agent is pinned to that machine (Settings → Automation), so it will not use another one.`);
 	}
 	const alt = f.alternative;
 	if (alt && alt.node !== node) {
@@ -113,7 +113,7 @@ export function runnerUpgradeMessage(f: RunnerUpgradeFacts): string {
 			: `last reported ${alt.version ?? `CLI ${f.minCli} or newer`}`;
 		parts.push(
 			f.pinned
-				? `\`${alt.node}\` ${state} — repin this agent there (Settings → Runs on), or upgrade \`${node}\`.`
+				? `\`${alt.node}\` ${state} — repin this agent there (Settings → Automation), or upgrade \`${node}\`.`
 				: `\`${alt.node}\` ${state}, if you would rather use that machine.`,
 		);
 	}

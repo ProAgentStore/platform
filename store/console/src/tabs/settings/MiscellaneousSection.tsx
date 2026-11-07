@@ -1,8 +1,6 @@
-import { useCallback } from "react";
+import { useCallback, type ReactNode } from "react";
 import Button from "../../components/Button";
 import Card from "../../components/Card";
-import ConnectionGuide from "../../components/ConnectionGuide";
-import OperatorManualCard from "../../components/OperatorManualCard";
 import HomeScreenShortcut from "../../components/HomeScreenShortcut";
 import PauseCard from "../../components/PauseCard";
 import type { DisabledRecord } from "../../lib/instancePause";
@@ -22,6 +20,8 @@ interface Props {
 	onClearFinished: () => Promise<void>;
 	onResyncIdentity: () => Promise<void>;
 	onUnsubscribe: () => void;
+	/** Rendered between "Where things live" and the home-screen shortcut (General's voice and secure-input cards). */
+	children?: ReactNode;
 }
 
 export default function MiscellaneousSection({
@@ -38,6 +38,7 @@ export default function MiscellaneousSection({
 	onClearFinished,
 	onResyncIdentity,
 	onUnsubscribe,
+	children,
 }: Props) {
 	const scope = unsubscribeScope(roster, instanceId);
 
@@ -49,7 +50,7 @@ export default function MiscellaneousSection({
 	return (
 		<>
 			{/* Board maintenance */}
-			<Card className="mb-3 sm:mb-4">
+			<Card className="mb-3 sm:mb-4" data-testid="settings-board-maintenance">
 				<h3 className="text-base font-bold mb-1">Board maintenance</h3>
 				<p className="text-sm text-muted mb-3">Tidy up the board. These only clear your view of finished items.</p>
 				<div className="flex gap-2 flex-wrap">
@@ -59,7 +60,7 @@ export default function MiscellaneousSection({
 			</Card>
 
 			{/* Where things live */}
-			<Card className="mb-3 sm:mb-4">
+			<Card className="mb-3 sm:mb-4" data-testid="settings-where-things-live">
 				<h3 className="text-base font-bold mb-1">Where things live</h3>
 				<ul className="text-sm text-muted leading-relaxed pl-4 list-disc">
 					{isApply && (
@@ -91,21 +92,15 @@ export default function MiscellaneousSection({
 				</ul>
 			</Card>
 
-			{/* Operator manual — the template's, inherited, above this instance's own (#1237) */}
-			<OperatorManualCard instanceId={instanceId} />
-
-			{/* Connection guide */}
-			<div className="mb-3 sm:mb-4">
-				<ConnectionGuide instanceId={instanceId} active />
-			</div>
+			{children}
 
 			{/* Home screen shortcut */}
-			<div className="mb-3 sm:mb-4">
+			<div className="mb-3 sm:mb-4" data-testid="settings-home-screen-shortcut">
 				<HomeScreenShortcut instanceId={instanceId} instanceName={instanceName} />
 			</div>
 
 			{/* Personality resync (#496) */}
-			<Card className="mb-3 sm:mb-4">
+			<Card className="mb-3 sm:mb-4" data-testid="settings-maintenance">
 				<h3 className="text-base font-bold mb-1">Maintenance</h3>
 				<p className="text-sm text-muted mb-2">
 					Bring this instance's personality up to the agent's current template, without touching its guardrails, goal, or welcome message.
@@ -115,10 +110,12 @@ export default function MiscellaneousSection({
 			</Card>
 
 			{/* Disable / enable (#825, #1383) */}
-			<PauseCard instanceId={instanceId} initialStatus={instStatus} initialDisabled={instDisabled} />
+			<div data-testid="settings-pause">
+				<PauseCard instanceId={instanceId} initialStatus={instStatus} initialDisabled={instDisabled} />
+			</div>
 
 			{/* Danger zone */}
-			<Card>
+			<Card data-testid="settings-danger-zone">
 				<h3 className="text-base font-bold mb-1 text-danger">Danger zone</h3>
 				<p className="text-sm text-muted mb-3" id="inst-unsubscribe-scope">
 					{scope.statement}

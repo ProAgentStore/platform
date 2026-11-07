@@ -30,7 +30,7 @@ async function open(page: Page, size: { width: number; height: number }) {
 		if (path === "/v1/triggers/preview") return json({ schedule: null, timezone: null, jitterMinutes: null, runs: [], issues: [], error: null });
 		return json({});
 	});
-	await page.goto("/console/instances/inst-1/settings");
+	await page.goto("/console/instances/inst-1/settings?subtab=instructions");
 	await expect(page.getByTestId("operator-manual-inherited")).toBeVisible();
 	await expect(page.getByText("Guide line 100:")).toBeAttached();
 }

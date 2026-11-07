@@ -38,8 +38,14 @@ describe("two tabs, both on every agent (#1060)", () => {
 
 describe("each tab renders its own content", () => {
 	const permissions = () => renderToStaticMarkup(createElement(PermissionsTab, { instanceId: "i1", instanceName: "Scout" }));
-	const settings = () =>
-		renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SettingsTab, { instanceId: "i1", instanceName: "Scout", isApply: false, onUnsubscribe: () => undefined })));
+	const settings = (subtab = "agent") =>
+		renderToStaticMarkup(
+			createElement(
+				MemoryRouter,
+				{ initialEntries: [`/?subtab=${subtab}`] },
+				createElement(SettingsTab, { instanceId: "i1", instanceName: "Scout", isApply: false, caps: {}, onUnsubscribe: () => undefined }),
+			),
+		);
 
 	it("Permissions holds Permissions & Connections — and none of Settings", () => {
 		const html = permissions();
@@ -56,11 +62,11 @@ describe("each tab renders its own content", () => {
 		expect(html).toContain("Cloudflare Email Bridge");
 	});
 
-	it("Settings keeps the instance, brain and runner — and no longer holds Permissions & Connections", () => {
-		const html = settings();
-		expect(html).toContain('data-testid="instance-id-value"');
-		expect(html).toContain('data-testid="settings-brain-section"');
-		expect(html).not.toContain('data-testid="permissions-and-connections"');
+	it("Settings keeps the instance (General), brain (Agent) and runner (Automation) — and no longer holds Permissions & Connections", () => {
+		expect(settings("general")).toContain('data-testid="instance-id-value"');
+		expect(settings("agent")).toContain('data-testid="settings-brain-section"');
+		expect(settings("automation")).toContain('data-testid="settings-section-runner"');
+		for (const tab of ["agent", "automation", "general"]) expect(settings(tab)).not.toContain('data-testid="permissions-and-connections"');
 	});
 
 	it("a permission push focuses a control that is on the Permissions tab", () => {

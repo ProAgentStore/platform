@@ -49,7 +49,7 @@ async function mock(page: Page) {
 
 test("a scan receipt opens to each email it matched, with its decision, reason and link (#1247)", async ({ page }) => {
 	const { logReads } = await mock(page);
-	await page.goto("/console/instances/inst-1/settings");
+	await page.goto("/console/instances/inst-1/settings?subtab=agent");
 	const receipts = page.getByTestId("gmail-scout-receipts");
 	await receipts.getByRole("button", { name: "Show 2 email(s)" }).click();
 	const log = page.getByTestId("gmail-scout-scan-log");
