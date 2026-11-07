@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**426 tool registrations.** 397 are always registered; 29 are gated to the console
+**428 tool registrations.** 399 are always registered; 29 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -331,6 +331,8 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `list_instance_permission_requests` | An instance's permission recovery requests (#1009), newest first: status, control, connector, resource, requested/current scope, operation, the verified `link` to the exact Permissions & Connections control and, while open, the structured blocker. Grants and decides nothing | read | | |
 | `get_application_tailor_settings` | Read the Tailor document-generation engine, authentication mode, local source paths, workspace and limits; separate from browser Runner settings | read | | |
 | `set_application_tailor_settings` | Patch only supplied Tailor engine, auth mode, workspace or limits without starting work; local source-path writes are not exposed | write | yes | |
+| `repair_job_leads` | One-off repair of a Scout's stored leads to the current job identity (re-key, link duplicates/reposts, archive search pages, fill employers). Dry run by default returns the counts; a real run needs `dry_run: false` and the destructive scope | write | yes | |
+| `rekey_job_applications` | One-off re-key of a Tailor's applications to the current job identity so a re-alerted job cannot start a second application; collisions are reported, never merged. Dry run by default; a real run needs `dry_run: false` and the destructive scope | write | yes | |
 | `get_application_runner_settings` | An Application Runner's effective policy: engine, local browser model/effort, escalation level, browser tool access/disclosure/acceptance, files, sites and auto-submit rules | read | | |
 | `set_application_runner_settings` | Patch that policy, including model-assessed judgment delegation (`conservative`, `balanced`, `autonomous`); submission permission remains separate. Auto-submit refused until a profile, approved roles, an allowed site and a daily cap exist, and enabling it needs the acknowledgement that submissions are real and irreversible (#1039) | write | yes | `auto_submit_real_submissions` (only when enabling auto-submit) |
 | `list_applications` | The job-application queue across the owner's Scout → Tailor → Runner pipeline: every state, each item's compare-and-set version, artifact handles, submit-policy verdict, pause reason and allowed actions; counts, auto-submit allowance, connection health (#958) | read | | |

@@ -272,6 +272,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	set_application_runner_settings: "write",
 	get_application_tailor_settings: "read",
 	set_application_tailor_settings: "write",
+	repair_job_leads: "write",
+	rekey_job_applications: "write",
 	runner_node_forget_preflight: "read",
 	list_supervision: "read",
 	list_stats_sources: "read",

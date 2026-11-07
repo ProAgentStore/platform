@@ -20,10 +20,10 @@
  */
 
 /** Every tool the server can register, with all surfaces gated on. */
-export const MCP_TOOL_COUNT = 426;
+export const MCP_TOOL_COUNT = 428;
 
 /** Registered for every connection, whatever the user is subscribed to. */
-export const MCP_TOOL_ALWAYS_ON = 397;
+export const MCP_TOOL_ALWAYS_ON = 399;
 
 /** Registered only when the user has an agent with the matching console surface
  *  (`apply`, `repo`, `coding`) — so a Repo Chat user never sees `apply_to_job`. */
@@ -66,4 +66,5 @@ export const TOOL_COUNT_CEILINGS: ReadonlyArray<{ count: number; issue: string; 
 	{ count: 423, issue: "#1504", date: "2026-11-04", reason: "read_instance_file reads bounded original UTF-8 bytes with hash-bound paging and provenance. Existing list_instance_files returns metadata only; read_agent_file reads a template GitHub repo, and search cannot retrieve unindexed generated application files." },
 	{ count: 425, issue: "#1566", date: "2026-11-06", reason: "get/set_application_tailor_settings expose the existing owner-scoped document-generation settings route. Runner settings choose the browser engine; uploaded-source controls select files. Neither reads or patches the Tailor engine, workspace and limits, leaving a failed document-generation engine impossible to change through MCP." },
 	{ count: 426, issue: "#1569", date: "2026-11-06", reason: "resume_application_handoff returns exact owner browser control through the existing handoff resume route. resume_application cannot close an active owner handoff and generic browser takeover targets a different runtime task; neither can continue this exact paused application run." },
+	{ count: 428, issue: "#1610", date: "2026-11-07", reason: "repair_job_leads and rekey_job_applications run the one-off #1606/#1609 repairs, which exist only as REST routes and so cannot be run by an MCP-driven owner. Dry run by default; a real run needs confirm. No existing tool re-keys leads or applications." },
 ];

@@ -234,7 +234,7 @@ async function scopeOf(name: string): Promise<string> {
 
 /** The exact string the tool demands in `confirm`, or null if it demands none. */
 async function confirmOf(name: string): Promise<string | null> {
-	return (await say(name)).match(/requires confirm="([^"]+)"/)?.[1] ?? null;
+	return (await say(name, name in ROUTE_DRY_RUN ? { dry_run: false } : {})).match(/requires confirm="([^"]+)"/)?.[1] ?? null;
 }
 
 /** No mutation may happen in a preview. Only resume's exact authoritative item read is allowed;
@@ -243,6 +243,12 @@ function permittedDryRunReads(name: string, requests: string[]): boolean {
 	return name === "resume_application" && requests.length === 1 && requests[0] === RESUME_PREVIEW_READ;
 }
 
+/** #1610: these two answer `dry_run: true` by asking their route for a dry run, which writes nothing and returns the counts. */
+const ROUTE_DRY_RUN: Record<string, string> = {
+	repair_job_leads: "POST https://api.test/v1/instances/x/gmail-scout/repair-leads",
+	rekey_job_applications: "POST https://api.test/v1/instances/x/job-applications/rekey",
+};
+
 /** How the tool answers `dry_run: true`, including whether its declared read occurred. */
 async function dryRunOf(name: string): Promise<string | null> {
 	const t = tools.get(name);
@@ -250,6 +256,7 @@ async function dryRunOf(name: string): Promise<string | null> {
 	const before = calls.length;
 	const txt = await say(name, { dry_run: true, ...(name === "resume_application" ? { expected_status: "blocked" } : {}) });
 	const requests = calls.slice(before);
+	if (ROUTE_DRY_RUN[name] && requests.length === 1 && requests[0] === ROUTE_DRY_RUN[name]) return "route-dry-run";
 	let envelope = false;
 	try {
 		envelope = (JSON.parse(txt) as { dryRun?: boolean }).dryRun === true;
@@ -273,6 +280,7 @@ async function dryRunOf(name: string): Promise<string | null> {
 //                        `set_instance_tool`, which does not call the `dryRun()` helper.
 //                        Recorded because it is what the tool does, not because it is
 //                        what it should do.
+//            "route-dry-run" the tool asks its route for a dry run (no write) and returns its counts (#1610)
 //            null        the tool declares no `dry_run` at all
 //
 // One row is knowingly incomplete: `remove_repo` picks its scope from its arguments
@@ -484,6 +492,8 @@ const TABLE: Record<string, Row> = {
 	get_application_runner_settings: ["applications", "read", null, null, "instance_id,token"],
 	get_application_tailor_settings: ["applications", "read", null, null, "instance_id,token"],
 	set_application_tailor_settings: ["applications", "write", null, "envelope", "dry_run,instance_id,settings,token"],
+	repair_job_leads: ["applications", "write", "repair_job_leads", "route-dry-run", "confirm,dry_run,instance_id,token"],
+	rekey_job_applications: ["applications", "write", "rekey_job_applications", "route-dry-run", "confirm,dry_run,instance_id,token"],
 	set_application_runner_settings: ["applications", "write", null, "envelope", "confirm,confirm_full_browser_tools,dry_run,instance_id,settings,token"],
 	list_applications: ["applications", "read", null, null, "company,instance_id,role,since,sort,source,status,token,until,url"],
 	get_application: ["applications", "read", null, null, "application_id,instance_id,record_id,scout_instance_id,token"],
@@ -844,7 +854,8 @@ describe("conventions the table has to keep", () => {
 	});
 
 	it("only a destructive tool asks for confirmation", () => {
-		expect(rows.filter(([, r]) => r[2] !== null && r[1] !== "destructive").map(([n]) => n)).toEqual([]);
+		// The #1610 repairs are `write` as a dry run and `destructive` as a real run, so their row records the dry run.
+		expect(rows.filter(([n, r]) => r[2] !== null && r[1] !== "destructive" && !(n in ROUTE_DRY_RUN)).map(([n]) => n)).toEqual([]);
 	});
 
 	it("every destructive tool is confirmed unless its destructive scope is the delegation gate", () => {

@@ -54,6 +54,8 @@ describe("the Applications tools (#958, #953)", () => {
 			"get_application_tailor_uploaded_source_readiness",
 			"get_application_tailor_uploaded_sources",
 			"list_applications",
+			"rekey_job_applications",
+			"repair_job_leads",
 			"request_application_reconciliation",
 			"request_application_review",
 			"resume_application",

@@ -7,6 +7,7 @@ import type { InstanceToolsCtx } from "./shared.js";
 import { fitFetchedPage } from "../wire-budget.js";
 import { registerApplicationHandoffResume } from "./application-handoff-resume.js";
 import { registerApplicationTailorSettings } from "./application-tailor-settings.js";
+import { registerJobRepairs } from "./job-repairs.js";
 
 /** The exact sentence an owner assertion is confirmed with (#1073) — a copy of `NOT_SUBMITTED_CONFIRM` in workers/api/src/lib/local-apply/owner-assertion.ts, which this worker cannot import; the API checks it too. */
 const NOT_SUBMITTED_CONFIRM = "I checked the employer site and nothing was submitted";
@@ -63,12 +64,15 @@ export const APPLICATION_TOOL_SCOPES = {
 	set_application_runner_settings: "write",
 	get_application_tailor_settings: "read",
 	set_application_tailor_settings: "write",
+	repair_job_leads: "write",
+	rekey_job_applications: "write",
 } as const satisfies Record<string, McpScope>;
 
 export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceToolsCtx, "env" | "tokenFor" | "safetyFor">, opts: { pinnedInstanceId?: string } = {}): void {
 	const { env, tokenFor, safetyFor } = ctx;
 	const pinned = opts.pinnedInstanceId;
 	registerApplicationTailorSettings(server, ctx, pinned);
+	registerJobRepairs(server, ctx, pinned);
 	registerApplicationHandoffResume(server, ctx, pinned);
 	// Every path is written out in full: the MCP-parity check reads these literals to prove each
 	// console capability has an MCP path (scripts/lib/api-calls.mjs).
