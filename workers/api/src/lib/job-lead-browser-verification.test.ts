@@ -280,7 +280,15 @@ describe("the verdict is pushed once it is final — and as what it is (#1031)",
 		await runLeadBrowserVerification(env, 2_000);
 		finish("run-1", "active");
 		await runLeadBrowserVerification(env, 3_000);
-		expect(pushes).toEqual([expect.objectContaining({ event: "browser_verification_completed", kind: "update", body: "“Platform Engineer” at Acme is open — ready to triage." })]);
+		// An open lead asks for the owner's decision instead (#1585); a closed one is still a completion.
+		expect(pushes.map((p) => p.event)).toEqual(["decision_required"]);
+	});
+
+	it("a closed posting is a completion push", async () => {
+		await runLeadBrowserVerification(env, 2_000);
+		finish("run-1", "expired");
+		await runLeadBrowserVerification(env, 3_000);
+		expect(pushes).toEqual([expect.objectContaining({ event: "browser_verification_completed", kind: "update", body: "“Platform Engineer” at Acme has closed." })]);
 	});
 
 	it("never carries the posting URL", async () => {
@@ -758,5 +766,55 @@ describe("naming a lead from the browser's reading (#1257)", () => {
 		const before = workKeyForLead(lead());
 		await settleActive([finding({ ...ACTIVE, job_title: "Platform Engineer", job_company: "Acme" }, "")]);
 		expect(workKeyForLead(lead())).toBe(before);
+	});
+});
+
+describe("a lead that became live asks the owner to Apply or Skip (#1585)", () => {
+	const decisions = () => pushes.filter((p) => p.event === "decision_required");
+
+	it("a lead verified active raises exactly one decision push, titled and linked to the lead's Data tab", async () => {
+		leads.set("lead-1", { ...leads.get("lead-1")!, data: { ...lead(), location: "Melbourne VIC" } } as CollectionRecord);
+		await runLeadBrowserVerification(env, 2_000);
+		finish("run-1", "active");
+		await runLeadBrowserVerification(env, 3_000);
+		expect(lead().status).toBe("new");
+		expect(pushes).toEqual([expect.objectContaining({ title: "Apply? Platform Engineer at Acme", body: expect.stringContaining("Melbourne VIC"), url: "/console/instances/s1/data", event: "decision_required", kind: "alert" })]);
+	});
+
+	it("Apply from it runs the existing triage and emits job.lead.apply_requested, version-checked", async () => {
+		await runLeadBrowserVerification(env, 2_000);
+		finish("run-1", "active");
+		await runLeadBrowserVerification(env, 3_000);
+		const { triageJobLead } = await import("../agent-do-storage-routes.js");
+		const engine = { recordGet: async (_c: string, id: string) => leads.get(id) ?? null, recordUpdate: async (_c: string, id: string, patch: Record<string, unknown>) => { const n = { ...leads.get(id)!, data: { ...leads.get(id)!.data, ...patch } } as CollectionRecord; leads.set(id, n); return n; }, recordQuery: async () => ({ records: [...leads.values()], total: leads.size }) };
+		const apply = (version: number) => triageJobLead(engine as never, "lead-1", new Request("https://agent/x", { method: "POST", body: JSON.stringify({ action: "apply", expected_version: version, source_instance_id: "s1" }) }));
+		expect((await apply(0)).status).toBe(409); // stale: the lead is at version 1
+		const res = await apply(lead().lifecycle_version as number);
+		expect(res.status).toBe(200);
+		expect(await res.json()).toMatchObject({ event: { eventType: "job.lead.apply_requested" } });
+		expect(lead().status).toBe("apply_requested");
+	});
+
+	it("a replayed verification does not notify twice", async () => {
+		await runLeadBrowserVerification(env, 2_000);
+		finish("run-1", "active");
+		await runLeadBrowserVerification(env, 3_000);
+		d1.exec(`UPDATE job_lead_browser_verifications SET state = 'awaiting', next_attempt_at = 0`);
+		await runLeadBrowserVerification(env, 4_000);
+		finish("run-2", "active");
+		await runLeadBrowserVerification(env, 5_000);
+		expect(decisions()).toHaveLength(1);
+	});
+
+	it("a lead that is not live never notifies", async () => {
+		for (const outcome of ["expired", "mismatch", "temporarily_unverifiable"]) {
+			pushes.length = 0;
+			leads.set("lead-1", { ...leads.get("lead-1")!, data: { ...lead(), status: "awaiting_browser_verification", lifecycle_version: 0 } } as CollectionRecord);
+			d1.exec(`UPDATE job_lead_browser_verifications SET state = 'awaiting', next_attempt_at = 0, attempts = 0`);
+			await runLeadBrowserVerification(env, 2_000);
+			finish(`run-${started.length}`, outcome);
+			await runLeadBrowserVerification(env, 3_000);
+			expect(decisions(), outcome).toEqual([]);
+		}
 	});
 });

@@ -27,6 +27,9 @@ import { localBrowserCapability, startLocalBrowserRun } from "./local-browser/st
 import { domainWithin, effectiveLocalBrowserPolicy, type LocalBrowserCapability } from "./local-browser/policy.js";
 import { agentName } from "./local-browser/sync.js";
 import { notifyUser } from "../routes/push.js";
+import { attentionDeps } from "./applications/attention-deps.js";
+import { clipMarked } from "./clip-marked.js";
+import { requestOwnerAttention } from "./owner-attention.js";
 import type { LeadVerification, LeadVerificationListResponse, VerificationAttempt, VerificationState } from "./job-lead-browser-verification-types.js";
 import type { Env } from "../types.js";
 import { clip } from "./job-lead-queue.js";
@@ -189,13 +192,13 @@ async function recordAttempt(env: DB, row: LeadRow, a: { attempt: number; state:
 }
 
 /** Apply an outcome to the lead in the Scout's DO. `status` is where the lead is now, applied or not. */
-async function applyToLead(env: Env, row: LeadRow, body: { outcome: BrowserVerificationOutcome; attempt: number; receipt_id: string; exhausted: boolean; detail: string; verified_title?: string; verified_company?: string }): Promise<{ transitioned: boolean; status: string } | null> {
+async function applyToLead(env: Env, row: LeadRow, body: { outcome: BrowserVerificationOutcome; attempt: number; receipt_id: string; exhausted: boolean; detail: string; verified_title?: string; verified_company?: string }): Promise<{ transitioned: boolean; status: string; record?: { id: string; data: Record<string, unknown> } } | null> {
 	const stub = env.AGENT.get(env.AGENT.idFromName(row.instance_id));
 	const res = await stub.fetch(
 		new Request(`https://agent/job-leads/${encodeURIComponent(row.lead_id)}/browser-verification`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
 	);
 	if (!res.ok) return null;
-	return (await res.json()) as { transitioned: boolean; status: string };
+	return (await res.json()) as { transitioned: boolean; status: string; record?: { id: string; data: Record<string, unknown> } };
 }
 
 const VERDICT_WORDS: Partial<Record<VerificationState, string>> = {
@@ -228,6 +231,28 @@ async function notifyVerdict(env: Env, row: LeadRow, state: VerificationState, w
 	);
 }
 
+/**
+ * A lead just became `new` — verified live — so ask the owner to decide (#1585). One `decision_required` per
+ * lead and lifecycle version; the push cannot carry buttons, so it opens the Data tab, whose Apply/Skip run
+ * the same triage (compare-and-set on `lifecycle_version`).
+ */
+async function notifyLeadDecision(env: Env, row: LeadRow, data: Record<string, unknown>): Promise<void> {
+	const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+	const title = str(data.title) ?? row.expected_title ?? "a job";
+	const company = str(data.company) ?? row.expected_company;
+	const location = str(data.location);
+	await requestOwnerAttention(env, {
+		event: "decision_required",
+		userId: row.user_id,
+		instanceId: row.instance_id,
+		subject: { kind: "job-lead", instanceId: row.instance_id },
+		about: { kind: "job-lead", id: row.lead_id, state: typeof data.lifecycle_version === "number" ? data.lifecycle_version : 0 },
+		notificationType: "apply",
+		title: clipMarked(`Apply? ${title}${company ? ` at ${company}` : ""}`, 120),
+		body: clipMarked(`${location ? `${location}. ` : ""}Verified open. Open the lead to apply or skip.`, 300),
+	}, attentionDeps);
+}
+
 /** Close a lead's verification with a final outcome, applied to the lead. */
 async function settle(env: Env, row: LeadRow, outcome: BrowserVerificationOutcome, opts: { attempt: number; receiptId: string; exhausted: boolean; detail: string; why?: string; names?: { title?: string; company?: string } }, now: number): Promise<VerificationState> {
 	const applied = await applyToLead(env, row, {
@@ -251,6 +276,11 @@ async function settle(env: Env, row: LeadRow, outcome: BrowserVerificationOutcom
 	const state: VerificationState = outcome === "temporarily_unverifiable" ? "unverifiable" : outcome;
 	await setLead(env, row, { state, attempts: opts.attempt, lastOutcome: outcome, lastDetail: opts.detail }, now);
 	// Best-effort: a failed push never undoes the verdict it reports.
+	// A lead that just became `new` asks for a decision instead of announcing a verdict (#1585).
+	if (state === "active" && applied?.transitioned && applied.record) {
+		await notifyLeadDecision(env, row, applied.record.data).catch(() => undefined);
+		return state;
+	}
 	await notifyVerdict(env, row, state, opts.why ?? (state === "unverifiable" ? `${opts.attempt} attempt(s) could not read the posting` : null)).catch(() => undefined);
 	return state;
 }
