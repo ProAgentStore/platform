@@ -4,6 +4,7 @@ import { getGmailScoutConfig, gmailScoutSourceMode, putGmailScoutConfig } from "
 import { gmailScoutStatus, parseReprocessInput, reprocessGmailScout, scanGmailScout } from "../lib/gmail-scout/scan.js";
 import { listGmailScoutReceipts } from "../lib/gmail-scout/receipts.js";
 import { repairJobLeads } from "../lib/gmail-scout/repair.js";
+import { reopenInfrastructureFailedLeads } from "../lib/job-lead-browser-verification.js";
 import { readScanLog } from "../lib/gmail-scout/scan-log.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
@@ -92,10 +93,14 @@ export function registerGmailScoutRoutes(router: Hono<{ Bindings: Env }>): void 
 	/**
 	 * One-off repair of this Scout's stored leads to the current identity rules (#1606). A dry run unless the
 	 * body says `{ "dry_run": false }`; both return the counts. Idempotent: a second real run changes nothing.
+	 * `{ "scope": "infrastructure_failures" }` (#1611) instead reopens leads closed `unverifiable` only because the engine hit its
+	 * usage limit or the runner was overloaded; the default scope is the identity repair.
 	 */
 	router.post("/:instanceId/gmail-scout/repair-leads", async (c) => {
 		const { instanceId } = await owned(c);
-		const body = (await c.req.json().catch(() => ({}))) as { dry_run?: unknown };
+		const body = (await c.req.json().catch(() => ({}))) as { dry_run?: unknown; scope?: unknown };
+		if (body.scope === "infrastructure_failures") return c.json({ repair: await reopenInfrastructureFailedLeads(c.env, instanceId, { dryRun: body.dry_run !== false }) });
+		if (body.scope !== undefined && body.scope !== "identity") return c.json({ error: "scope must be identity or infrastructure_failures" }, 400);
 		return c.json({ repair: await repairJobLeads(c.env, instanceId, { dryRun: body.dry_run !== false }) });
 	});
 	router.get("/:instanceId/gmail-scout/status", async (c) => c.json(await gmailScoutStatus(c.env, (await owned(c)).instanceId, new URL(c.req.url).searchParams)));

@@ -36,6 +36,7 @@ import { requestOwnerAttention } from "./owner-attention.js";
 import type { LeadVerification, LeadVerificationListResponse, VerificationAttempt, VerificationState } from "./job-lead-browser-verification-types.js";
 import type { Env } from "../types.js";
 import { clip } from "./job-lead-queue.js";
+import { deferUntil, type InfrastructureFailure, infrastructureFailure, infrastructureFailureOfDetail } from "./verification-infrastructure.js";
 import { readGmailScoutLeadRecords } from "./gmail-scout/scan.js";
 import { pushScoutLeadsToJobs } from "./gmail-scout/jobs-push.js";
 
@@ -406,6 +407,39 @@ async function sourceGate(env: Env, row: LeadRow, cap: LocalBrowserCapability, v
 	return { kind: "needs_consent", state: "awaiting" };
 }
 
+/**
+ * The engine or the runner refused the run (#1611): the posting was never looked at, so the lead keeps its attempts and waits
+ * until the engine's stated reset (else a bounded backoff). The owner hears once per episode, not once per lead.
+ */
+async function deferLead(env: Env, row: LeadRow, f: InfrastructureFailure, engine: string, keepAttempts: number, now: number): Promise<void> {
+	const until = deferUntil(f, now);
+	const when = new Date(until).toISOString();
+	const quota = f.kind === "engine_quota";
+	const open = quota
+		? await env.DB.prepare("SELECT 1 AS x FROM job_lead_browser_verifications WHERE instance_id = ?1 AND state = 'awaiting' AND last_outcome = 'engine_quota' AND next_attempt_at > ?2 LIMIT 1").bind(row.instance_id, now).first()
+		: null;
+	await setLead(env, row, {
+		state: "awaiting",
+		attempts: keepAttempts,
+		nextAttemptAt: until,
+		lastOutcome: f.kind,
+		lastDetail: quota
+			? `The ${engine} engine is out of quota; verification resumes ${when}. No attempt was used. Switch the engine in Settings → Local browser research to continue sooner.`
+			: `The runner machine is overloaded and refused the run; trying again around ${when}. No attempt was used.`,
+	}, now);
+	if (!quota || open) return;
+	const agent = await agentName(env, row.user_id, row.instance_id);
+	await notifyUser(
+		env,
+		row.user_id,
+		"local-browser",
+		`${agent} is out of ${engine} quota`,
+		`The ${engine} engine hit its usage limit${f.resetAt ? ` (it resets ${new Date(f.resetAt).toISOString()})` : ""}. Job verification is paused until ${when} and no attempts were used. You can switch the engine in Local browser research settings to continue now.`,
+		deepLinkFor({ kind: "browser-verification", instanceId: row.instance_id }),
+		{ kind: "alert", instanceId: row.instance_id, key: `engine-quota:${row.instance_id}:${engine}` },
+	).catch(() => undefined);
+}
+
 /** Hand one due lead to the Scout's browser. */
 export async function dispatchLeadVerification(env: Env, row: LeadRow, now = Date.now()): Promise<VerificationState> {
 	const { settings } = await readBrowserVerification(env, row.instance_id, row.user_id);
@@ -436,9 +470,11 @@ export async function dispatchLeadVerification(env: Env, row: LeadRow, now = Dat
 	}
 	if (gate.kind === "needs_consent") return gate.state;
 	const attempt = row.attempts + 1;
+	// A deferred lead is dispatched again under the SAME attempt number, and the same request id would return its old failed run.
+	const deferred = row.last_outcome === "engine_quota" || row.last_outcome === "runner_overloaded";
 	const started = await startLocalBrowserRun(env, row.instance_id, row.user_id, {
 		objective: verificationObjective({ canonicalUrl: row.canonical_url, expectedTitle: row.expected_title, expectedCompany: row.expected_company }),
-		requestId: `bv-${row.lead_id}-${attempt}`,
+		requestId: deferred ? `bv-${row.lead_id}-${attempt}-${row.updated_at}` : `bv-${row.lead_id}-${attempt}`,
 		source: "trigger",
 	});
 	if (started.kind === "at_capacity") {
@@ -449,6 +485,12 @@ export async function dispatchLeadVerification(env: Env, row: LeadRow, now = Dat
 	const run = started.run;
 	if (run.status === "failed" && (run.errorCode === "runner_offline" || run.errorCode === "runner_unsupported")) {
 		return noRuntime(env, row, settings.fallback, settings.waitLimitMinutes, run.error ?? "No eligible browser is connected.", now);
+	}
+	const refused = run.status === "failed" ? infrastructureFailure(run.errorCode, run.error, now) : null;
+	if (refused) {
+		await recordAttempt(env, row, { attempt: row.attempts, state: "completed", runId: run.id, outcome: "temporarily_unverifiable", detail: outcomeFromRun(run).detail }, now);
+		await deferLead(env, row, refused, run.policy.engine, row.attempts, now);
+		return "awaiting";
 	}
 	await recordAttempt(env, row, { attempt, state: "dispatched", runId: run.id, detail: `Dispatched ${row.canonical_url} to run ${run.id}.` }, now);
 	await setLead(env, row, { state: "dispatched", attempts: attempt, lastDetail: `Attempt ${attempt} of ${MAX_ATTEMPTS} is checking the posting.` }, now);
@@ -470,6 +512,13 @@ export async function reconcileVerificationAttempts(env: Env, now = Date.now(), 
 			.run();
 		// Single writer: another tick that already claimed this attempt applies it, not this one.
 		if ((claimed.meta?.changes ?? 0) === 0) continue;
+		// #1611: the engine or the runner refused - no attempt was spent and the lead is not unverifiable.
+		const refused = run?.status === "failed" ? infrastructureFailure(run.errorCode, run.error, now) : null;
+		if (run && refused) {
+			await deferLead(env, row, refused, run.policy.engine, Math.max(0, a.attempt - 1), now);
+			settled++;
+			continue;
+		}
 		await settle(env, row, outcome, { attempt: a.attempt, receiptId: a.id, exhausted: outcome === "temporarily_unverifiable" && a.attempt >= MAX_ATTEMPTS, detail, ...(run?.errorCode === "runner_result_invalid" ? { why: "the browser runner's results were refused as malformed (see the attempt detail) - not a posting that could not be read" } : {}), ...(outcome === "active" ? { names: namesFromRun(run), run } : {}) }, now);
 		settled++;
 	}
@@ -538,4 +587,59 @@ export async function verifyLeadNow(env: Env, instanceId: string, userId: string
 	const state = await dispatchLeadVerification(env, row, now);
 	const after = await getLeadRow(env, instanceId, leadId);
 	return { state, lead: presentLead(after ?? row) };
+}
+
+export interface InfrastructureReopenCounts {
+	dryRun: boolean;
+	/** Leads closed `unverifiable`, as read. */
+	scanned: number;
+	/** Every attempt failed on the engine's usage limit or the runner's overload: reopened (or, on a dry run, would be). */
+	reopened: number;
+	engineQuota: number;
+	runnerOverloaded: number;
+	/** Closed unverifiable for another reason (a page was read, consent, no browser): left alone. */
+	notInfrastructure: number;
+	/** Eligible, but the Scout's lead moved on or is gone, so it was left alone. */
+	leadMovedOn: number;
+	truncated: boolean;
+}
+
+const REOPEN_LIMIT = 500;
+
+/**
+ * Reopen leads closed `unverifiable` where EVERY attempt failed only because the engine hit its usage limit or the
+ * runner was overloaded (#1611) - so no browser run ever produced a verdict on the page. They go back to awaiting with no
+ * attempts spent. A dry run writes nothing. Idempotent: a reopened lead is no longer `unverifiable`.
+ */
+export async function reopenInfrastructureFailedLeads(env: Env, instanceId: string, opts: { dryRun: boolean }, now = Date.now()): Promise<InfrastructureReopenCounts> {
+	const { results } = await env.DB.prepare("SELECT * FROM job_lead_browser_verifications WHERE instance_id = ?1 AND state = 'unverifiable' ORDER BY updated_at LIMIT ?2").bind(instanceId, REOPEN_LIMIT).all<LeadRow>();
+	const rows = results ?? [];
+	const counts: InfrastructureReopenCounts = { dryRun: opts.dryRun, scanned: rows.length, reopened: 0, engineQuota: 0, runnerOverloaded: 0, notInfrastructure: 0, leadMovedOn: 0, truncated: rows.length >= REOPEN_LIMIT };
+	for (const row of rows) {
+		const { results: attempts } = await env.DB.prepare("SELECT id, state, outcome, detail FROM job_lead_browser_verification_attempts WHERE instance_id = ?1 AND lead_id = ?2 ORDER BY attempt, created_at").bind(instanceId, row.lead_id).all<{ id: string; state: string; outcome: string | null; detail: string | null }>();
+		const found = (attempts ?? []).map((a) => (a.state === "completed" && a.outcome === "temporarily_unverifiable" ? infrastructureFailureOfDetail(a.detail) : null));
+		if (!found.length || found.some((f) => !f)) {
+			counts.notInfrastructure++;
+			continue;
+		}
+		if (!opts.dryRun) {
+			const res = await env.AGENT.get(env.AGENT.idFromName(instanceId)).fetch(
+				new Request(`https://agent/job-leads/${encodeURIComponent(row.lead_id)}/browser-verification`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reopen: true, infrastructure: true, receipt_id: (attempts ?? [])[found.length - 1].id }) }),
+			);
+			if (!res.ok) {
+				counts.leadMovedOn++;
+				continue;
+			}
+			await env.DB.prepare(
+				`UPDATE job_lead_browser_verifications SET state = 'awaiting', attempts = 0, closed_reason = NULL, awaiting_since = ?1, next_attempt_at = ?1, last_outcome = NULL, last_detail = ?2, updated_at = ?1
+				  WHERE instance_id = ?3 AND lead_id = ?4 AND state = 'unverifiable'`,
+			)
+				.bind(now, "Reopened: every earlier attempt failed on the engine's usage limit or the runner's load, never on the posting. No attempts are counted.", instanceId, row.lead_id)
+				.run();
+		}
+		counts.reopened++;
+		if (found.some((f) => f?.kind === "engine_quota")) counts.engineQuota++;
+		else counts.runnerOverloaded++;
+	}
+	return counts;
 }

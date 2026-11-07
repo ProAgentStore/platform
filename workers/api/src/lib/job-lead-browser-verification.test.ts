@@ -8,11 +8,11 @@ import type { CollectionRecord } from "../agent-storage-types.js";
 import { realSchemaD1, type RealSchemaD1 } from "./d1-sqlite.js";
 import type { Env } from "../types.js";
 
-type Run = { id: string; status: string; errorCode?: string | null; error?: string | null; result?: unknown };
+type Run = { id: string; status: string; errorCode?: string | null; error?: string | null; result?: unknown; policy?: { engine: string } };
 const runs = new Map<string, Run>();
 const started: Array<{ objective: string; requestId: string }> = [];
 /** How the next start goes. */
-let startAs: "running" | "offline" | "busy" = "running";
+let startAs: "running" | "offline" | "busy" | "overloaded" = "running";
 
 vi.mock("./local-browser/start.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("./local-browser/start.js")>()),
@@ -21,7 +21,9 @@ vi.mock("./local-browser/start.js", async (importOriginal) => ({
 		if (startAs === "busy") return { kind: "at_capacity", error: "busy" };
 		const run: Run = startAs === "offline"
 			? { id: `run-${started.length}`, status: "failed", errorCode: "runner_offline", error: "No runner is connected." }
-			: { id: `run-${started.length}`, status: "running" };
+			: startAs === "overloaded"
+				? { id: `run-${started.length}`, status: "failed", errorCode: "runner_overloaded", error: "cpu 24.21 load/core", policy: { engine: "codex" } }
+				: { id: `run-${started.length}`, status: "running" };
 		runs.set(run.id, run);
 		return { kind: "started", run };
 	},
@@ -42,6 +44,7 @@ vi.mock("./local-browser/store.js", async (importOriginal) => ({
 const { applyJobLeadBrowserVerification, triageJobLead } = await import("../agent-do-storage-routes.js");
 const { leadActionRoutes } = await import("../routes/lead-action.js");
 const { MAX_ATTEMPTS, RETRY_BACKOFF_MS, listLeadVerifications, namesFromRun, outcomeFromRun, runLeadBrowserVerification, verificationObjective, verifyLeadNow } = await import("./job-lead-browser-verification.js");
+const { reopenInfrastructureFailedLeads } = await import("./job-lead-browser-verification.js");
 const { enqueueBrowserVerification } = await import("./job-lead-queue.js");
 const { planJobLeadTriage, planBrowserVerificationOutcome, cleanVerifiedName, nameGroundedIn } = await import("./job-lead-triage.js");
 const { ingestGmailCandidates } = await import("./gmail-scout/scan.js");
@@ -900,5 +903,99 @@ describe("Apply / Skip from the push (#1602)", () => {
 		d1.exec(`INSERT INTO users (id, github_login) VALUES ('u2', 'u2')`);
 		expect((await press(await signLeadActionToken({ ...claims, uid: "u2" }, "test-signing-key"))).status).toBe(404);
 		expect(lead().status).toBe("new");
+	});
+});
+
+const CODEX_LIMIT = "You've hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Nov 11th, 2026 5:38 PM.";
+
+describe("an engine usage limit or an overloaded runner is not a verification attempt (#1611)", () => {
+	const RESET = Date.UTC(2026, 10, 11, 17, 38);
+	const T0 = RESET - 2 * 86_400_000;
+	const raw = async () => (await d1.DB.prepare("SELECT * FROM job_lead_browser_verifications WHERE lead_id = 'lead-1'").first()) as { state: string; attempts: number; last_outcome: string | null; next_attempt_at: number };
+	const addLead2 = async () => {
+		leads.set("lead-2", { id: "lead-2", data: { ...lead() } } as unknown as CollectionRecord);
+		await enqueueBrowserVerification(env, { instanceId: "s1", userId: "u1", leadId: "lead-2", workKey: "wk-2", canonicalUrl: `${CANONICAL}2`, expectedTitle: "Other", expectedCompany: "Acme", reason: "server_fetch_refused" }, 1_000);
+	};
+
+	it("defers to the engine's stated reset, keeps the attempts, tells the owner once for the whole episode, and retries with a fresh request id", async () => {
+		await addLead2();
+		await runLeadBrowserVerification(env, T0);
+		for (const id of ["run-1", "run-2"]) runs.set(id, { id, status: "failed", errorCode: "engine_failed", error: CODEX_LIMIT, policy: { engine: "codex" } });
+		expect((await runLeadBrowserVerification(env, T0 + 1_000)).settled).toBe(2);
+		expect(await raw()).toMatchObject({ state: "awaiting", attempts: 0, last_outcome: "engine_quota", next_attempt_at: RESET });
+		expect(lead().status).toBe("awaiting_browser_verification");
+		expect(pushes).toHaveLength(1);
+		expect(pushes[0].body).toMatch(/codex engine hit its usage limit.*2026-11-11T17:38:00.000Z.*switch the engine in Local browser research settings/i);
+		// Nothing is due before the reset; at the reset the same lead is dispatched again, as a new run.
+		expect((await runLeadBrowserVerification(env, RESET - 1)).dispatched).toBe(0);
+		expect((await runLeadBrowserVerification(env, RESET)).dispatched).toBe(2);
+		expect(started.at(-2)?.requestId).toMatch(/^bv-lead-1-1-\d+$/);
+	});
+
+	it("a limit with no stated time waits a bounded backoff", async () => {
+		await runLeadBrowserVerification(env, T0);
+		runs.set("run-1", { id: "run-1", status: "failed", errorCode: "engine_failed", error: "You've hit your usage limit.", policy: { engine: "codex" } });
+		await runLeadBrowserVerification(env, T0 + 1_000);
+		expect(await raw()).toMatchObject({ state: "awaiting", attempts: 0, next_attempt_at: T0 + 1_000 + 30 * 60_000 });
+	});
+
+	it("a runner that refuses as overloaded at dispatch spends no attempt and never closes the lead, however often it happens", async () => {
+		startAs = "overloaded";
+		let now = 2_000;
+		for (let i = 0; i < MAX_ATTEMPTS + 2; i++) {
+			expect((await runLeadBrowserVerification(env, now)).dispatched).toBe(0);
+			expect(await raw()).toMatchObject({ state: "awaiting", attempts: 0, last_outcome: "runner_overloaded" });
+			now += 11 * 60_000;
+		}
+		expect(lead().status).toBe("awaiting_browser_verification");
+		expect(pushes).toHaveLength(0);
+	});
+
+	it("any other engine failure still counts as an attempt", async () => {
+		await runLeadBrowserVerification(env, 2_000);
+		runs.set("run-1", { id: "run-1", status: "failed", errorCode: "engine_failed", error: "codex crashed", policy: { engine: "codex" } });
+		await runLeadBrowserVerification(env, 3_000);
+		expect(await queue()).toMatchObject({ state: "awaiting", attempts: 1, lastOutcome: "temporarily_unverifiable" });
+	});
+
+	describe("repair of leads already closed by it", () => {
+		const closed = (id: string, details: Array<{ outcome?: string; detail: string }>) => {
+			d1.exec(`INSERT INTO job_lead_browser_verifications (instance_id, lead_id, user_id, canonical_url, state, attempts, next_attempt_at, awaiting_since, created_at, updated_at) VALUES ('s1', '${id}', 'u1', '${CANONICAL}', 'unverifiable', 3, 1, 1, 1, 1)`);
+			for (const [i, a] of details.entries()) d1.exec(`INSERT INTO job_lead_browser_verification_attempts (id, instance_id, user_id, lead_id, attempt, state, outcome, detail, created_at) VALUES ('${id}-r${i}', 's1', 'u1', '${id}', ${i + 1}, 'completed', '${a.outcome ?? "temporarily_unverifiable"}', '${a.detail.replace(/'/g, "''")}', ${i + 1})`);
+			leads.set(id, { id, data: { status: "unverifiable", lifecycle_version: 2, url: CANONICAL, verification: { state: "unverifiable", reason: "temporarily_unverifiable_exhausted", attempts: 3, receipt_id: `${id}-r${details.length - 1}` } } } as unknown as CollectionRecord);
+		};
+		const quota = { detail: `The verification run ended failed (engine_failed): ${CODEX_LIMIT}` };
+		const overload = { detail: "The verification run ended failed (runner_overloaded): cpu 24.21 load/core" };
+		const unreadable = { detail: "The run reported no typed outcome." };
+
+		it("reopens only leads where every attempt was an engine limit or overload; a dry run changes nothing", async () => {
+			d1.exec(`UPDATE job_lead_browser_verifications SET state = 'awaiting' WHERE lead_id = 'lead-1'`);
+			closed("q", [quota, quota, quota]);
+			closed("o", [overload, quota, overload]);
+			closed("mixed", [quota, unreadable, quota]);
+			closed("verdict", [overload, { outcome: "expired", detail: "closed" }]);
+			const dry = await reopenInfrastructureFailedLeads(env, "s1", { dryRun: true }, 9_000);
+			expect(dry).toMatchObject({ dryRun: true, scanned: 4, reopened: 2, engineQuota: 2, runnerOverloaded: 0, notInfrastructure: 2 });
+			expect((await listLeadVerifications(env, "s1", "u1")).leads.filter((l) => l.state === "unverifiable")).toHaveLength(4);
+
+			const real = await reopenInfrastructureFailedLeads(env, "s1", { dryRun: false }, 9_000);
+			expect(real).toMatchObject({ dryRun: false, reopened: 2, leadMovedOn: 0 });
+			const byId = Object.fromEntries((await listLeadVerifications(env, "s1", "u1")).leads.map((l) => [l.leadId, l]));
+			expect(byId.q).toMatchObject({ state: "awaiting", attempts: 0 });
+			expect(byId.o).toMatchObject({ state: "awaiting", attempts: 0 });
+			expect(byId.mixed.state).toBe("unverifiable");
+			expect(byId.verdict.state).toBe("unverifiable");
+			expect(leads.get("q")!.data).toMatchObject({ status: "awaiting_browser_verification", verification: { reason: "infrastructure_failure_cleared" } });
+			expect(leads.get("mixed")!.data.status).toBe("unverifiable");
+			// Idempotent: nothing left to reopen.
+			expect(await reopenInfrastructureFailedLeads(env, "s1", { dryRun: false }, 9_000)).toMatchObject({ scanned: 2, reopened: 0 });
+		});
+
+		it("leaves a lead the Scout has moved on from", async () => {
+			closed("q", [quota]);
+			leads.set("q", { id: "q", data: { ...leads.get("q")!.data, status: "archived" } } as unknown as CollectionRecord);
+			expect(await reopenInfrastructureFailedLeads(env, "s1", { dryRun: false }, 9_000)).toMatchObject({ reopened: 0, leadMovedOn: 1 });
+			expect((await listLeadVerifications(env, "s1", "u1")).leads.find((l) => l.leadId === "q")?.state).toBe("unverifiable");
+		});
 	});
 });

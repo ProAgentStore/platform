@@ -492,7 +492,7 @@ const TABLE: Record<string, Row> = {
 	get_application_runner_settings: ["applications", "read", null, null, "instance_id,token"],
 	get_application_tailor_settings: ["applications", "read", null, null, "instance_id,token"],
 	set_application_tailor_settings: ["applications", "write", null, "envelope", "dry_run,instance_id,settings,token"],
-	repair_job_leads: ["applications", "write", "repair_job_leads", "route-dry-run", "confirm,dry_run,instance_id,token"],
+	repair_job_leads: ["applications", "write", "repair_job_leads", "route-dry-run", "confirm,dry_run,instance_id,scope,token"],
 	rekey_job_applications: ["applications", "write", "rekey_job_applications", "route-dry-run", "confirm,dry_run,instance_id,token"],
 	set_application_runner_settings: ["applications", "write", null, "envelope", "confirm,confirm_full_browser_tools,dry_run,instance_id,settings,token"],
 	list_applications: ["applications", "read", null, null, "company,instance_id,role,since,sort,source,status,token,until,url"],

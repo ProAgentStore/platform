@@ -203,7 +203,7 @@ export async function applyJobLeadBrowserVerification(engine: Pick<AgentStorageE
 		if (typeof b.receipt_id !== "string") return json({ error: "receipt_id is required to reopen" }, 400);
 		const record = await engine.recordGet(JOB_LEAD_COLLECTION, decodeURIComponent(id));
 		if (!record) return json({ error: "Not found" }, 404);
-		const plan = planConsentReopen(record, { receiptId: b.receipt_id });
+		const plan = planConsentReopen(record, { receiptId: b.receipt_id, infrastructure: b.infrastructure === true });
 		if (!plan.ok) return json({ error: plan.error }, 409);
 		const updated = plan.patch ? await engine.recordUpdate(JOB_LEAD_COLLECTION, record.id, plan.patch) : record;
 		return json({ record: updated, transitioned: plan.transitioned, status: plan.to });

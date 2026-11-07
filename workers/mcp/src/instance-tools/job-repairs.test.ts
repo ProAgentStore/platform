@@ -61,3 +61,11 @@ describe.each([
 		expect(out[key].dryRun).toBe(false);
 	});
 });
+
+describe("repair_job_leads scope (#1611)", () => {
+	it("passes the scope through to the route, and sends none when it is not given", async () => {
+		const { calls, call } = await harness();
+		await call("repair_job_leads", { instance_id: "scout", scope: "infrastructure_failures" });
+		expect(calls).toEqual([{ url: "https://api.test/v1/instances/scout/gmail-scout/repair-leads", method: "POST", body: { dry_run: true, scope: "infrastructure_failures" } }]);
+	});
+});

@@ -87,3 +87,11 @@ describe("Jobs connection (#1605)", () => {
 		expect(pipelineHealthFrom({ ...base, jobsConnection: [] }).ok).toBe(true);
 	});
 });
+
+describe("Engine quota (#1611)", () => {
+	it("names a Scout whose browser verification waits for its engine's quota", () => {
+		const h = pipelineHealthFrom({ pipeline: PIPELINE, edges: [edge()], sources: [gmail()], now: NOW, engineQuota: [{ instanceId: "scout", waiting: 21, detail: "The codex engine is out of quota; verification resumes 2026-11-11T17:38:00.000Z." }] });
+		expect(h.problems).toEqual([{ code: "engine_quota_exhausted", instanceId: "scout", message: expect.stringMatching(/21 leads wait.*out of quota.*resumes 2026-11-11/) }]);
+		expect(pipelineHealthFrom({ pipeline: PIPELINE, edges: [edge()], sources: [gmail()], now: NOW, engineQuota: [] }).ok).toBe(true);
+	});
+});

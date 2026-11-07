@@ -37,6 +37,7 @@ export type PipelineProblemCode =
 	| "source_junk_leads"
 	| "jobs_sync_failing"
 	| "jobs_not_connected"
+	| "engine_quota_exhausted"
 	| "finder_edge_disabled"
 	| "finder_edge_dead_letters"
 	| "finder_failing"
@@ -102,6 +103,13 @@ export interface JobsConnectionFact {
 	reason: string;
 }
 
+/** A Scout whose browser verification is paused because its engine hit a usage limit (#1611): leads waiting, and the message the dispatcher stored. */
+export interface EngineQuotaFact {
+	instanceId: string;
+	waiting: number;
+	detail: string | null;
+}
+
 export interface SourceFact {
 	instanceId: string;
 	runtime: string | null;
@@ -119,7 +127,7 @@ const utc = (v: string | null): number => (v ? Date.parse(v.includes("T") ? v : 
 const iso = (v: string | null): string | null => (Number.isFinite(utc(v)) ? new Date(utc(v)).toISOString() : null);
 
 /** Pure: the facts in, every problem out. */
-export function pipelineHealthFrom(input: { pipeline: { scouts: string[]; tailors: string[]; runners: string[] }; edges: EdgeFact[]; sources: SourceFact[]; now: number; jobsSync?: JobsSyncFact[]; jobsConnection?: JobsConnectionFact[]; finders?: FinderFact[] }): PipelineHealth {
+export function pipelineHealthFrom(input: { pipeline: { scouts: string[]; tailors: string[]; runners: string[] }; edges: EdgeFact[]; sources: SourceFact[]; now: number; jobsSync?: JobsSyncFact[]; jobsConnection?: JobsConnectionFact[]; finders?: FinderFact[]; engineQuota?: EngineQuotaFact[] }): PipelineHealth {
 	const problems: PipelineProblem[] = finderProblems(input.finders ?? [], input.now);
 	for (const e of input.edges) {
 		if (!e.enabled) problems.push({ code: "edge_disabled", connectionId: e.id, message: `The ${e.eventType === "job.application.materials_ready" ? "Tailor → Runner" : "Scout → Tailor"} connection ${e.id} is disabled, so nothing moves along it until it is re-enabled.` });
@@ -132,6 +140,9 @@ export function pipelineHealthFrom(input: { pipeline: { scouts: string[]; tailor
 	}
 	for (const j of input.jobsConnection ?? []) {
 		problems.push({ code: "jobs_not_connected", instanceId: j.instanceId, message: `${j.role} ${j.instanceId} has a Jobs grant but cannot reach the Jobs app (${j.reason.replace(/_/g, " ")}), so nothing is sent to it. Connect jobs.proappstore.online in Permissions & Connections → MCP connections.` });
+	}
+	for (const q of input.engineQuota ?? []) {
+		problems.push({ code: "engine_quota_exhausted", instanceId: q.instanceId, message: `Scout ${q.instanceId}: ${q.waiting} lead${q.waiting === 1 ? " waits" : "s wait"} for browser verification because its engine is out of quota. ${q.detail ?? "Switch the engine in Settings → Local browser research, or wait for the reset."}` });
 	}
 	const sources: SourceHealth[] = input.sources.map((s) => {
 		const g = s.gmail;
@@ -192,7 +203,18 @@ export async function pipelineHealth(env: Env, uid: string, pipeline: { scouts: 
 			...pipeline.tailors.map(async (instanceId) => ({ instanceId, role: "Tailor" as const, problem: await jobsAccountProblem(env, { userId: uid, instanceId }, "save_tailored_application").catch(() => null) })),
 		])
 	).flatMap((f) => (f.problem ? [{ instanceId: f.instanceId, role: f.role, reason: f.problem.reason }] : []));
-	return pipelineHealthFrom({ pipeline, edges, sources, now, jobsSync, jobsConnection, finders: await finderFacts(env, uid, pipeline.scouts, now).catch(() => []) });
+	const engineQuota = (
+		await Promise.all(
+			pipeline.scouts.map(async (instanceId): Promise<EngineQuotaFact | null> => {
+				const row = await env.DB.prepare("SELECT COUNT(*) AS n, MAX(last_detail) AS d FROM job_lead_browser_verifications WHERE instance_id = ?1 AND user_id = ?2 AND state = 'awaiting' AND last_outcome = 'engine_quota' AND next_attempt_at > ?3")
+					.bind(instanceId, uid, now)
+					.first<{ n: number; d: string | null }>()
+					.catch(() => null);
+				return row?.n ? { instanceId, waiting: row.n, detail: row.d } : null;
+			}),
+		)
+	).filter((f): f is EngineQuotaFact => !!f);
+	return pipelineHealthFrom({ pipeline, edges, sources, now, jobsSync, jobsConnection, engineQuota, finders: await finderFacts(env, uid, pipeline.scouts, now).catch(() => []) });
 }
 
 /**

@@ -8105,6 +8105,10 @@ paths:
         ids), links duplicates and reposts to the first lead and archives them, archives search-result pages, and
         fills the employer of careers-site leads. A DRY RUN unless the body is `{ "dry_run": false }`; both
         return the counts. A second real run changes nothing.
+
+        `scope: "infrastructure_failures"` (#1611) instead reopens leads closed `unverifiable` where EVERY attempt failed
+        only on the engine's usage limit or the runner's overload (no browser run ever read the page), back to awaiting
+        with no attempts counted. Returns `{ repair: { dryRun, scanned, reopened, engineQuota, runnerOverloaded, notInfrastructure, leadMovedOn, truncated } }`.
       operationId: repairGmailScoutLeads
       tags: [Instances]
       parameters:
@@ -8117,6 +8121,7 @@ paths:
               type: object
               properties:
                 dry_run: { type: boolean, default: true }
+                scope: { type: string, enum: [identity, infrastructure_failures], default: identity }
       responses:
         "200": { description: "`{ repair: { dryRun, scanned, rekeyed, duplicatesLinked, repostsLinked, searchPagesArchived, companiesFilled, protectedKept, truncated } }`", content: { application/json: { schema: { type: object } } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
