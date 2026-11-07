@@ -20,7 +20,6 @@
  * has moved since is refused as stale rather than applied to a state nobody looked at.
  */
 import type { CollectionRecord } from "../agent-storage-types.js";
-import { providerPostingUrl } from "./gmail-scout/provider-redirect.js";
 
 export const JOB_LEAD_COLLECTION = "job_leads";
 export const JOB_LEAD_APPLY_EVENT = "job.lead.apply_requested";
@@ -300,16 +299,12 @@ export function jobPostingIdentity(rawUrl: string): { key: string; url: string }
 	const canonical = canonicalJobUrl(rawUrl);
 	if (!canonical) return null;
 	const url = new URL(canonical);
-	const posting = providerPostingUrl(canonical);
-	if (posting) {
-		const p = new URL(posting);
-		const jk = p.searchParams.get("jk");
-		if (jk) return { key: `indeed:${jk}`, url: posting };
-		const seek = p.pathname.match(/^\/job\/(\d+)$/)?.[1];
-		if (seek && /(^|\.)seek\./i.test(p.hostname)) return { key: `seek:${seek}`, url: posting };
-		return { key: `url:${posting}`, url: posting };
+	// Kept free of the Gmail provider module: the console's tests import this file and must not pull in the Worker's types.
+	if (/(^|\.)indeed\.[a-z.]+$/i.test(url.hostname) && /^\/(?:rc\/clk|pagead\/clk|viewjob|m\/viewjob|m\/basecamp\/viewjob)(?:\/|$)/i.test(url.pathname)) {
+		const jk = (url.searchParams.get("jk") ?? url.searchParams.get("vjk") ?? "").toLowerCase();
+		if (/^[0-9a-f]{16}$/.test(jk)) return { key: `indeed:${jk}`, url: `https://${url.hostname}/viewjob?jk=${jk}` };
 	}
-	if (/(^|\.)seek\.com\.au$/i.test(url.hostname)) {
+	if (/(^|\.)seek\.(?:com\.au|co\.nz|com)$/i.test(url.hostname)) {
 		const id = url.pathname.match(/\/(?:job|jobs)\/(\d+)(?:\/|$)/i)?.[1] ?? url.searchParams.get("jobId")?.match(/^\d+$/)?.[0];
 		if (id) return { key: `seek:${id}`, url: `https://${url.hostname}/job/${id}` };
 	}
