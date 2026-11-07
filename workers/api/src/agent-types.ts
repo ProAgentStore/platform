@@ -164,6 +164,8 @@ export interface GmailScoutScanReceiptView {
 	added: number | null;
 	deduped: number | null;
 	rejected: GmailScoutScanResult["rejected"];
+	/** #1605: what pushing this Scout's leads to the Jobs app did; null before one ran. */
+	jobsPush: { sent: number; failed: number; reason: string | null } | null;
 	errorMessage: string | null;
 	lastMessageId: string | null;
 	/** #1247: the exact Gmail search and the window it covered. */
