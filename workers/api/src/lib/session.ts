@@ -121,6 +121,37 @@ export async function verifyChatToken(token: string, signingKey: string): Promis
 	return p;
 }
 
+/**
+ * The credential a job-lead decision push carries for its Apply / Skip buttons (#1602). The service
+ * worker holds no session (the API takes a Bearer header only), so each button gets its own token:
+ * bound to (user, instance, lead, lifecycle version, action) and good for hours, not days. It is
+ * single-use because the decision it makes bumps the lead's `lifecycle_version`, and the triage it
+ * calls is compare-and-set on that version — a replay, or the other button after one was pressed, is
+ * refused as stale. It names ids only, never anything about the job.
+ */
+export interface LeadActionToken {
+	typ: "lead-action";
+	uid: string;
+	instanceId: string;
+	leadId: string;
+	version: number;
+	action: "apply" | "skip";
+	exp: number;
+}
+
+const LEAD_ACTION_TTL = 6 * 60 * 60;
+
+export async function signLeadActionToken(claims: Omit<LeadActionToken, "typ" | "exp">, signingKey: string): Promise<string> {
+	return signPayload<LeadActionToken>({ typ: "lead-action", ...claims, exp: Math.floor(Date.now() / 1000) + LEAD_ACTION_TTL }, signingKey);
+}
+
+export async function verifyLeadActionToken(token: string, signingKey: string): Promise<LeadActionToken | null> {
+	const p = await verifyPayload<LeadActionToken>(token, signingKey);
+	if (p?.typ !== "lead-action" || typeof p.exp !== "number" || p.exp < Math.floor(Date.now() / 1000)) return null;
+	if (!p.uid || !p.instanceId || !p.leadId || !Number.isInteger(p.version) || (p.action !== "apply" && p.action !== "skip")) return null;
+	return p;
+}
+
 /** Sign an arbitrary JSON payload (e.g. OAuth `state`) with the same HMAC. */
 export async function signPayload<T>(payload: T, signingKey: string): Promise<string> {
 	const data = b64url(

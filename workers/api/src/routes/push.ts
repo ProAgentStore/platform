@@ -136,12 +136,24 @@ function vapidConfig(env: Env): VapidConfig | null {
 	};
 }
 
+/** A button on the notification (#1602). Only platforms with notification actions show them; the rest keep the deep link. */
+export interface PushAction {
+	action: string;
+	title: string;
+}
+
 export interface PushMessage {
 	title: string;
 	body: string;
 	url?: string;
 	tag?: string;
+	/** Buttons, and what the service worker needs to act on them. Ids and tokens only, never personal data. */
+	actions?: PushAction[];
+	data?: Record<string, unknown>;
 }
+
+/** The part of a push that makes it actionable — handed through `NotifyOptions` and `requestOwnerAttention`. */
+export type PushExtras = Pick<PushMessage, "actions" | "data">;
 
 /** Send a Web Push to every device a user has registered. Prunes dead/duplicate subs. */
 export async function sendPushToUser(env: Env, userId: string, msg: PushMessage): Promise<number> {
@@ -248,6 +260,8 @@ export interface NotifyOptions {
 	 * both are type `apply`.
 	 */
 	event?: string;
+	/** Notification buttons + the data the service worker acts on them with (#1602). Push only; the bell row is unchanged. */
+	push?: PushExtras;
 }
 
 /** The observed push channel outcome; never infer a device delivery from a stored bell row. */
@@ -359,6 +373,6 @@ export async function notifyUser(
 		);
 	}
 	if (!interrupt) return outcome;
-	const sent = await sendPushToUser(env, userId, { title, body, url: target.url, tag: notificationTag(type, target.url) }).catch(() => 0);
+	const sent = await sendPushToUser(env, userId, { title, body, url: target.url, tag: notificationTag(type, target.url), ...opts.push }).catch(() => 0);
 	return sent > 0 ? "sent" : "unavailable";
 }

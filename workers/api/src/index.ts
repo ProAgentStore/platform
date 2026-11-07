@@ -43,6 +43,7 @@ import { feedbackRoutes } from "./routes/feedback.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { notificationRoutes } from "./routes/notifications.js";
 import { pushRoutes } from "./routes/push.js";
+import { leadActionRoutes } from "./routes/lead-action.js";
 import { exportRoutes } from "./routes/export.js";
 import { versionRoutes } from "./routes/versions.js";
 import { publicRoutes } from "./routes/public.js";
@@ -251,6 +252,7 @@ app.route("/v1/agents", analyticsRoutes); // /v1/agents/:id/analytics
 app.route("/v1/dashboard", dashboardRoutes);
 app.route("/v1/notifications", notificationRoutes);
 app.route("/v1/push", pushRoutes);
+app.route("/v1/push", leadActionRoutes); // Apply/Skip from a job-lead push, token-authenticated (#1602)
 app.route("/v1/agents", versionRoutes);     // /v1/agents/:id/versions, /:versionId/rollback
 app.route("/v1/agents", exportRoutes);
 app.route("/v1/agents", storageRoutes); // /v1/agents/:id/collections, /files, /search, /activity, /summaries

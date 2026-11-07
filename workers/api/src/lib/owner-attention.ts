@@ -170,6 +170,8 @@ export interface OwnerAttentionRequest {
 	 * attention it is; the type says which part of the product it came from.
 	 */
 	notificationType: string;
+	/** Push buttons + the data to act on them with (#1602) — opaque here, handed to delivery as-is. */
+	push?: { actions?: Array<{ action: string; title: string }>; data?: Record<string, unknown> };
 }
 
 export type PushOutcome = "sent" | "muted" | "deduped" | "unavailable";
@@ -253,7 +255,7 @@ export function attentionDetail(event: string, push: PushOutcome, recorded: bool
  */
 export interface AttentionDeps<E = unknown> {
 	/** Injected so the policy is testable without the delivery stack. */
-	notify: (env: E, userId: string, type: string, title: string, body: string, url: DeepLink, opts: { key: string; kind: "alert" | "update"; instanceId?: string; event?: string }) => Promise<void>;
+	notify: (env: E, userId: string, type: string, title: string, body: string, url: DeepLink, opts: { key: string; kind: "alert" | "update"; instanceId?: string; event?: string; push?: OwnerAttentionRequest["push"] }) => Promise<void>;
 	/**
 	 * Did a push actually go out? Reported, never assumed.
 	 *
@@ -291,7 +293,7 @@ export async function requestOwnerAttention<E>(env: E, req: OwnerAttentionReques
 	}
 
 	const recorded = await deps
-		.notify(env, req.userId, req.notificationType, req.title, req.body, url, { key, kind, instanceId: req.instanceId, event: req.event })
+		.notify(env, req.userId, req.notificationType, req.title, req.body, url, { key, kind, instanceId: req.instanceId, event: req.event, push: req.push })
 		.then(() => true)
 		.catch(() => false);
 	const push = recorded

@@ -46,9 +46,10 @@ function client(url: string, visibilityState: "visible" | "hidden" = "hidden"): 
 }
 
 /** Load sw.js into a fresh scope on `origin`, with these tabs open. */
-function worker(origin: string, tabs: FakeClient[] = []) {
+function worker(origin: string, tabs: FakeClient[] = [], fetchImpl: (url: string, init: { body: string }) => Promise<{ json(): Promise<unknown> }> = async () => { throw new Error("offline"); }) {
 	const listeners: Record<string, (e: unknown) => void> = {};
-	const shown: Array<{ title: string; options: { tag: string; data: { url: string } } }> = [];
+	const shown: Array<{ title: string; options: { tag: string; body?: string; actions?: unknown[]; data: { url: string; leadAction?: unknown } } }> = [];
+	const fetched: Array<{ url: string; body: string }> = [];
 	const opened: string[] = [];
 	const self = {
 		location: new URL(origin),
@@ -65,12 +66,15 @@ function worker(origin: string, tabs: FakeClient[] = []) {
 			},
 		},
 		registration: {
-			showNotification: async (title: string, options: { tag: string; data: { url: string } }) => {
+			showNotification: async (title: string, options: { tag: string; body?: string; actions?: unknown[]; data: { url: string; leadAction?: unknown } }) => {
 				shown.push({ title, options });
 			},
 		},
 	};
-	new Function("self", SOURCE)(self);
+	new Function("self", "fetch", SOURCE)(self, async (url: string, init: { body: string }) => {
+		fetched.push({ url, body: init.body });
+		return fetchImpl(url, init);
+	});
 
 	const run = async (type: string, event: Record<string, unknown>) => {
 		let pending: Promise<unknown> = Promise.resolve();
@@ -80,8 +84,11 @@ function worker(origin: string, tabs: FakeClient[] = []) {
 	return {
 		shown,
 		opened,
+		fetched,
 		push: (payload: Record<string, unknown>) => run("push", { data: { json: () => payload, text: () => JSON.stringify(payload) } }),
 		click: (url?: string) => run("notificationclick", { notification: { close: () => undefined, data: url === undefined ? {} : { url } } }),
+		/** A button pressed on a notification that carries `data`, as the push handler stored it. */
+		pressButton: (action: string, data: Record<string, unknown>) => run("notificationclick", { action, notification: { close: () => undefined, data } }),
 	};
 }
 
@@ -227,5 +234,57 @@ describe("a permission-request push opens the exact control (#1009, simulated de
 		const url = new URL(PERMISSION, APEX);
 		expect([...url.searchParams.keys()].sort()).toEqual(["focus", "permission_request"]);
 		expect(PERMISSION).not.toMatch(/token|session|secret|key|user|owner/i);
+	});
+});
+
+describe("Apply / Skip buttons on a job-lead decision push (#1602)", () => {
+	const LEAD = "/console/instances/i1/data?lead=l1";
+	const payload = { title: "Apply? Platform Engineer at Acme", body: "b", url: LEAD, tag: `apply:${LEAD}`, actions: [{ action: "apply", title: "Apply" }, { action: "skip", title: "Skip" }], data: { leadAction: { apply: "tok-apply", skip: "tok-skip" } } };
+	const stored = { url: LEAD, leadAction: { apply: "tok-apply", skip: "tok-skip" } };
+	const reply = (r: unknown) => async () => ({ json: async () => r });
+
+	it("shows the buttons and keeps the tokens for the click; a plain push is unchanged", async () => {
+		const sw = worker(APEX);
+		await sw.push(payload);
+		expect(sw.shown[0]?.options.actions).toEqual(payload.actions);
+		expect(sw.shown[0]?.options.data).toEqual(stored);
+		await sw.push({ title: "t", body: "b", url: LINK });
+		expect(sw.shown[1]?.options.actions).toBeUndefined();
+	});
+
+	it("Apply posts only that button's token and confirms what the server did", async () => {
+		const sw = worker(APEX, [], reply({ ok: true, message: "Applying: Platform Engineer at Acme — tailoring started" }));
+		await sw.pressButton("apply", stored);
+		expect(sw.fetched).toEqual([{ url: "https://api.proagentstore.online/v1/push/lead-action", body: JSON.stringify({ token: "tok-apply" }) }]);
+		expect(sw.shown).toHaveLength(1);
+		expect(sw.shown[0]?.options.body).toBe("Applying: Platform Engineer at Acme — tailoring started");
+		expect(sw.opened).toEqual([]);
+	});
+
+	it("Skip posts the skip token", async () => {
+		const sw = worker(APEX, [], reply({ ok: true, message: "Skipped: Platform Engineer at Acme" }));
+		await sw.pressButton("skip", stored);
+		expect(sw.fetched[0]?.body).toBe(JSON.stringify({ token: "tok-skip" }));
+		expect(sw.shown[0]?.options.body).toBe("Skipped: Platform Engineer at Acme");
+	});
+
+	it("a refusal is shown as not changed, never as done", async () => {
+		const sw = worker(APEX, [], reply({ ok: false, message: "Not changed: you already decided on this lead." }));
+		await sw.pressButton("apply", stored);
+		expect(sw.shown[0]?.title).toBe("Not changed");
+	});
+
+	it("if the call cannot be made, the tap opens the lead instead of vanishing", async () => {
+		const sw = worker(APEX);
+		await sw.pressButton("apply", stored);
+		expect(sw.opened).toEqual([LEAD]);
+		expect(sw.shown).toEqual([]);
+	});
+
+	it("tapping the body (and iOS, which has no buttons) opens the lead, with no decision made", async () => {
+		const sw = worker(APEX);
+		await sw.pressButton("", stored);
+		expect(sw.opened).toEqual([LEAD]);
+		expect(sw.fetched).toEqual([]);
 	});
 });

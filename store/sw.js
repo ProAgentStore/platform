@@ -1,4 +1,4 @@
-// ProAgentStore service worker — PWA + Web Push. (v2 — push + PWA, in-app handoff)
+// ProAgentStore service worker — PWA + Web Push. (v3 — push + PWA, in-app handoff, notification actions)
 // Shows a notification when an agent needs you (e.g. a CAPTCHA handoff) and
 // deep-links straight into the console / takeover on tap.
 
@@ -67,12 +67,55 @@ self.addEventListener("push", (event) => {
 				icon: "/icon-192.png",
 				badge: "/icon-192.png",
 				tag: data.tag || "pags",
-				data: { url: data.url },
+				// Apply/Skip buttons (#1602) where the platform shows them; elsewhere (iOS) the tap still opens the lead.
+				...(Array.isArray(data.actions) && data.actions.length ? { actions: data.actions } : {}),
+				data: { url: data.url, leadAction: data.data?.leadAction },
 				requireInteraction: true,
 				vibrate: [120, 60, 120],
 			});
 		}),
 	);
+});
+
+// Same origin the console's API client talks to (packages/sdk/src/client.ts).
+const API = "https://api.proagentstore.online";
+
+/**
+ * Apply / Skip pressed on a job-lead decision push (#1602). The worker holds no session, so the push
+ * carried one single-purpose token per button; the server makes the same compare-and-set triage the
+ * Data tab does and says what happened, which is shown back as a confirmation. If the call cannot
+ * be made at all, open the lead so the owner can decide there instead of losing the tap.
+ */
+async function decideLead(event, action) {
+	const { url, leadAction } = event.notification.data || {};
+	let result;
+	try {
+		const res = await fetch(`${API}/v1/push/lead-action`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ token: leadAction[action] }),
+		});
+		result = await res.json();
+	} catch (_e) {
+		return openTarget(clickTarget(url));
+	}
+	await self.registration.showNotification(result?.ok ? (action === "apply" ? "Applying" : "Skipped") : "Not changed", {
+		body: result?.message || "",
+		icon: "/icon-192.png",
+		badge: "/icon-192.png",
+		tag: `lead-action:${url}`,
+		data: { url },
+	});
+}
+
+self.addEventListener("notificationclick", (event) => {
+	event.notification.close();
+	const action = event.action;
+	if ((action === "apply" || action === "skip") && event.notification.data?.leadAction?.[action]) {
+		event.waitUntil(decideLead(event, action));
+		return;
+	}
+	event.waitUntil(openTarget(clickTarget(event.notification.data?.url)));
 });
 
 /**
@@ -89,10 +132,8 @@ self.addEventListener("push", (event) => {
  * `isConsoleTab` covers every route of the SPA — /usage and /preferences included, which is
  * intended: they are the app, and a deep link is meant to move whichever tab it is in.
  */
-self.addEventListener("notificationclick", (event) => {
-	event.notification.close();
-	const target = clickTarget(event.notification.data?.url);
-	event.waitUntil(
+function openTarget(target) {
+	return (
 		(async () => {
 			let sameOrigin = true;
 			try {
@@ -113,6 +154,6 @@ self.addEventListener("notificationclick", (event) => {
 				}
 			}
 			if (self.clients.openWindow) return self.clients.openWindow(target);
-		})(),
+		})()
 	);
-});
+}

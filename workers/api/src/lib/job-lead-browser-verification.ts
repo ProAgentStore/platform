@@ -29,6 +29,7 @@ import { agentName } from "./local-browser/sync.js";
 import { notifyUser } from "../routes/push.js";
 import { attentionDeps } from "./applications/attention-deps.js";
 import { clipMarked } from "./clip-marked.js";
+import { signLeadActionToken } from "./session.js";
 import { requestOwnerAttention } from "./owner-attention.js";
 import type { LeadVerification, LeadVerificationListResponse, VerificationAttempt, VerificationState } from "./job-lead-browser-verification-types.js";
 import type { Env } from "../types.js";
@@ -243,12 +244,19 @@ async function notifyLeadDecision(env: Env, row: LeadRow, data: Record<string, u
 	const title = str(data.title) ?? row.expected_title ?? "a job";
 	const company = str(data.company) ?? row.expected_company;
 	const location = str(data.location);
+	const version = typeof data.lifecycle_version === "number" ? data.lifecycle_version : 0;
+	// Apply / Skip buttons on the push (#1602): a token per button, bound to this exact lead version.
+	const token = (action: "apply" | "skip") => signLeadActionToken({ uid: row.user_id, instanceId: row.instance_id, leadId: row.lead_id, version, action }, env.SESSION_SIGNING_KEY);
 	await requestOwnerAttention(env, {
 		event: "decision_required",
 		userId: row.user_id,
 		instanceId: row.instance_id,
-		subject: { kind: "job-lead", instanceId: row.instance_id },
-		about: { kind: "job-lead", id: row.lead_id, state: typeof data.lifecycle_version === "number" ? data.lifecycle_version : 0 },
+		subject: { kind: "job-lead", instanceId: row.instance_id, leadId: row.lead_id },
+		about: { kind: "job-lead", id: row.lead_id, state: version },
+		push: {
+			actions: [{ action: "apply", title: "Apply" }, { action: "skip", title: "Skip" }],
+			data: { leadAction: { apply: await token("apply"), skip: await token("skip")} },
+		},
 		notificationType: "apply",
 		title: clipMarked(`Apply? ${title}${company ? ` at ${company}` : ""}`, 120),
 		body: clipMarked(`${location ? `${location}. ` : ""}Verified open. Open the lead to apply or skip.`, 300),

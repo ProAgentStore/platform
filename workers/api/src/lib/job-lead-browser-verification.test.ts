@@ -27,11 +27,11 @@ vi.mock("./local-browser/start.js", async (importOriginal) => ({
 	},
 }));
 /** Every push the dispatcher sends (#1031): what it says, where it links, which policy event decides it. */
-const pushes = vi.hoisted(() => [] as Array<{ title: string; body: string; url: string; event?: string; kind?: string }>);
+const pushes = vi.hoisted(() => [] as Array<{ title: string; body: string; url: string; event?: string; kind?: string; push?: { actions?: Array<{ action: string; title: string }>; data?: { leadAction?: { apply: string; skip: string } } } }>);
 vi.mock("../routes/push.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../routes/push.js")>()),
-	notifyUser: async (_env: unknown, _uid: string, _type: string, title: string, body: string, url: string, opts: { event?: string; kind?: string }) => {
-		pushes.push({ title, body, url, event: opts.event, kind: opts.kind });
+	notifyUser: async (_env: unknown, _uid: string, _type: string, title: string, body: string, url: string, opts: { event?: string; kind?: string; push?: never }) => {
+		pushes.push({ title, body, url, event: opts.event, kind: opts.kind, push: opts.push });
 	},
 }));
 vi.mock("./local-browser/store.js", async (importOriginal) => ({
@@ -39,7 +39,8 @@ vi.mock("./local-browser/store.js", async (importOriginal) => ({
 	getLocalBrowserRun: async (_env: unknown, _inst: string, _uid: string, id: string) => runs.get(id) ?? null,
 }));
 
-const { applyJobLeadBrowserVerification } = await import("../agent-do-storage-routes.js");
+const { applyJobLeadBrowserVerification, triageJobLead } = await import("../agent-do-storage-routes.js");
+const { leadActionRoutes } = await import("../routes/lead-action.js");
 const { MAX_ATTEMPTS, RETRY_BACKOFF_MS, listLeadVerifications, namesFromRun, outcomeFromRun, runLeadBrowserVerification, verificationObjective, verifyLeadNow } = await import("./job-lead-browser-verification.js");
 const { enqueueBrowserVerification } = await import("./job-lead-queue.js");
 const { planJobLeadTriage, planBrowserVerificationOutcome, cleanVerifiedName, nameGroundedIn } = await import("./job-lead-triage.js");
@@ -75,9 +76,15 @@ beforeEach(async () => {
 	};
 	env = {
 		DB: d1.DB,
+		SESSION_SIGNING_KEY: "test-signing-key",
 		AGENT: {
 			idFromName: (n: string) => n,
-			get: () => ({ fetch: async (req: Request) => applyJobLeadBrowserVerification(engine as never, new URL(req.url).pathname.split("/")[2], req) }),
+			get: () => ({
+				fetch: async (req: Request) => {
+					const [, , id, what] = new URL(req.url).pathname.split("/");
+					return what === "triage" ? triageJobLead({ ...engine, recordQuery: async () => ({ records: [...leads.values()], total: leads.size }) } as never, id!, req) : applyJobLeadBrowserVerification(engine as never, id!, req);
+				},
+			}),
 		},
 	} as unknown as Env;
 	await enqueueBrowserVerification(env, { instanceId: "s1", userId: "u1", leadId: "lead-1", workKey: "wk-1", canonicalUrl: CANONICAL, expectedTitle: "Platform Engineer", expectedCompany: "Acme", reason: "server_fetch_refused" }, 1_000);
@@ -772,13 +779,13 @@ describe("naming a lead from the browser's reading (#1257)", () => {
 describe("a lead that became live asks the owner to Apply or Skip (#1585)", () => {
 	const decisions = () => pushes.filter((p) => p.event === "decision_required");
 
-	it("a lead verified active raises exactly one decision push, titled and linked to the lead's Data tab", async () => {
+	it("a lead verified active raises exactly one decision push, titled and linked to that lead", async () => {
 		leads.set("lead-1", { ...leads.get("lead-1")!, data: { ...lead(), location: "Melbourne VIC" } } as CollectionRecord);
 		await runLeadBrowserVerification(env, 2_000);
 		finish("run-1", "active");
 		await runLeadBrowserVerification(env, 3_000);
 		expect(lead().status).toBe("new");
-		expect(pushes).toEqual([expect.objectContaining({ title: "Apply? Platform Engineer at Acme", body: expect.stringContaining("Melbourne VIC"), url: "/console/instances/s1/data", event: "decision_required", kind: "alert" })]);
+		expect(pushes).toEqual([expect.objectContaining({ title: "Apply? Platform Engineer at Acme", body: expect.stringContaining("Melbourne VIC"), url: "/console/instances/s1/data?lead=lead-1", event: "decision_required", kind: "alert" })]);
 	});
 
 	it("Apply from it runs the existing triage and emits job.lead.apply_requested, version-checked", async () => {
@@ -793,6 +800,19 @@ describe("a lead that became live asks the owner to Apply or Skip (#1585)", () =
 		expect(res.status).toBe(200);
 		expect(await res.json()).toMatchObject({ event: { eventType: "job.lead.apply_requested" } });
 		expect(lead().status).toBe("apply_requested");
+	});
+
+	it("the push carries Apply and Skip buttons and a token per button (#1602)", async () => {
+		await runLeadBrowserVerification(env, 2_000);
+		finish("run-1", "active");
+		await runLeadBrowserVerification(env, 3_000);
+		const [push] = decisions();
+		expect(push?.push?.actions).toEqual([{ action: "apply", title: "Apply" }, { action: "skip", title: "Skip" }]);
+		const tokens = push?.push?.data?.leadAction;
+		expect(tokens?.apply).toBeTruthy();
+		expect(tokens?.skip).not.toBe(tokens?.apply);
+		// Ids and a signature only: nothing about the job rides in the token.
+		for (const t of [tokens?.apply, tokens?.skip]) expect(atob(String(t).split(".")[0]!.replace(/-/g, "+").replace(/_/g, "/"))).not.toMatch(/Platform Engineer|Acme|indeed/);
 	});
 
 	it("a replayed verification does not notify twice", async () => {
@@ -816,5 +836,69 @@ describe("a lead that became live asks the owner to Apply or Skip (#1585)", () =
 			await runLeadBrowserVerification(env, 3_000);
 			expect(decisions(), outcome).toEqual([]);
 		}
+	});
+});
+
+describe("Apply / Skip from the push (#1602)", () => {
+	type Tokens = { apply: string; skip: string };
+	/** Verify the lead live, and return the buttons' tokens exactly as the push carried them. */
+	async function pushedTokens(): Promise<Tokens> {
+		await runLeadBrowserVerification(env, 2_000);
+		finish("run-1", "active");
+		await runLeadBrowserVerification(env, 3_000);
+		return pushes.find((p) => p.event === "decision_required")!.push!.data!.leadAction as Tokens;
+	}
+	const press = async (token: string) => {
+		const res = await leadActionRoutes.request("/lead-action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) }, env);
+		return { status: res.status, body: (await res.json()) as { ok: boolean; message: string } };
+	};
+
+	it("Apply runs the triage once and says tailoring started; pressing again is refused", async () => {
+		const t = await pushedTokens();
+		const first = await press(t.apply);
+		expect(first).toMatchObject({ status: 200, body: { ok: true, message: "Applying: Platform Engineer at Acme — tailoring started" } });
+		expect(lead().status).toBe("apply_requested");
+		const version = lead().lifecycle_version;
+		const replay = await press(t.apply);
+		expect(replay.status).toBe(409);
+		expect(replay.body.ok).toBe(false);
+		expect(lead().lifecycle_version).toBe(version);
+	});
+
+	it("Skip moves the lead to skipped, and the other button is then refused", async () => {
+		const t = await pushedTokens();
+		expect(await press(t.skip)).toMatchObject({ status: 200, body: { ok: true, message: "Skipped: Platform Engineer at Acme" } });
+		expect(lead().status).toBe("skipped");
+		expect((await press(t.apply)).status).toBe(409);
+		expect(lead().status).toBe("skipped");
+	});
+
+	it("a lead that moved since the push is refused, not overwritten", async () => {
+		const t = await pushedTokens();
+		leads.set("lead-1", { ...leads.get("lead-1")!, data: { ...lead(), status: "new", lifecycle_version: (lead().lifecycle_version as number) + 1 } } as CollectionRecord);
+		expect((await press(t.apply)).status).toBe(409);
+		expect(lead().status).toBe("new");
+	});
+
+	it("refuses a forged, foreign-typed, expired or other-owner token", async () => {
+		const t = await pushedTokens();
+		expect((await press(`${t.apply}x`)).status).toBe(401);
+		expect((await press("")).status).toBe(401);
+		const { signSession, signLeadActionToken } = await import("./session.js");
+		// A full account session is not a button token, and a button token is not a session.
+		expect((await press(await signSession("u1", "test-signing-key"))).status).toBe(401);
+		const claims = { uid: "u1", instanceId: "s1", leadId: "lead-1", version: 1, action: "apply" as const };
+		vi.useFakeTimers();
+		try {
+			vi.setSystemTime(Date.now() - 7 * 60 * 60 * 1000);
+			const old = await signLeadActionToken(claims, "test-signing-key");
+			vi.useRealTimers();
+			expect((await press(old)).status).toBe(401);
+		} finally {
+			vi.useRealTimers();
+		}
+		d1.exec(`INSERT INTO users (id, github_login) VALUES ('u2', 'u2')`);
+		expect((await press(await signLeadActionToken({ ...claims, uid: "u2" }, "test-signing-key"))).status).toBe(404);
+		expect(lead().status).toBe("new");
 	});
 });

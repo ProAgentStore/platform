@@ -60,7 +60,7 @@ describe("deepLinkFor — every notification subject opens a real page (#894)", 
 		application: { kind: "application", instanceId: id, applicationId: other },
 		"application-handoff": { kind: "application-handoff", instanceId: id, handoffId: other },
 		"browser-takeover": { kind: "browser-takeover", instanceId: id, takeover: { id: other, subjectKind: "runtime_task", subjectId: other } },
-		"job-lead": { kind: "job-lead", instanceId: id },
+		"job-lead": { kind: "job-lead", instanceId: id, leadId: other },
 		"browser-verification": { kind: "browser-verification", instanceId: id },
 		"secure-input": { kind: "secure-input", instanceId: id, requestId: other },
 		"permission-request": { kind: "permission-request", instanceId: id, requestId: other },
@@ -106,6 +106,8 @@ describe("deepLinkFor — every notification subject opens a real page (#894)", 
 		// #1136: an application opens ITSELF in the Applications tab, never the whole Board.
 		expect(links.deepLinkFor(s.application)).toBe("/console/instances/i1/applications?application=x2");
 		expect(links.deepLinkFor({ kind: "application", instanceId: "i1", applicationId: "a b/c" })).toBe("/console/instances/i1/applications?application=a%20b%2Fc");
+		// #1602: a job-lead decision opens THAT lead in the Data tab, not the tab's first page.
+		expect(links.deepLinkFor(s["job-lead"])).toBe("/console/instances/i1/data?lead=x2");
 		expect(links.applicationHandoffLink("i1", "handoff_2")).toBe("/console/instances/i1/applications?handoff=handoff_2");
 		expect(links.applicationReconciliationHandoffLink("i1", "handoff_2")).toBe("/console/instances/i1/applications?reconciliation_handoff=handoff_2");
 	});

@@ -305,8 +305,8 @@ export type NotificationSubject =
 	| { kind: "application-handoff"; instanceId: string; handoffId: string }
 	/** One durable browser takeover (#1031). */
 	| { kind: "browser-takeover"; instanceId: string; takeover: { id: string; subjectKind: string; subjectId: string } }
-	/** A verified job lead awaiting Apply/Skip (#1585): the instance's Data tab, where the lead's triage buttons are. */
-	| { kind: "job-lead"; instanceId: string }
+	/** A verified job lead awaiting Apply/Skip (#1585): that lead, opened in the Data tab with its triage buttons (#1602). */
+	| { kind: "job-lead"; instanceId: string; leadId: string }
 	/** A browser verification's verdict (#1031): Settings, where the instance's verification queue is listed. */
 	| { kind: "browser-verification"; instanceId: string }
 	/** A secure-input request waiting for the owner (#934). */
@@ -359,7 +359,7 @@ export function deepLinkFor(subject: NotificationSubject): DeepLink {
 			case "browser-takeover":
 				return browserTakeoverLink(subject.instanceId, subject.takeover);
 			case "job-lead":
-				return instanceDataLink(subject.instanceId);
+				return `${instanceDataLink(subject.instanceId)}?lead=${encodeURIComponent(subject.leadId)}`;
 			case "browser-verification":
 				return instanceSettingsLink(subject.instanceId);
 			case "secure-input":

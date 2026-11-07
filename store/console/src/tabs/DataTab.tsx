@@ -168,6 +168,16 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 	useEffect(() => {
 		loadCollections();
 	}, [loadCollections]);
+	// A job-lead decision push links to ONE lead (?lead=<id>, #1602): open it with its Apply / Skip showing,
+	// whichever page of the table it would be on.
+	useEffect(() => {
+		const leadId = new URLSearchParams(window.location.search).get("lead")?.trim();
+		if (!leadId) return;
+		setSelected(JOB_LEAD_COLLECTION);
+		api<Rec>(`/v1/instances/${instanceId}/collections/${JOB_LEAD_COLLECTION}/records/${encodeURIComponent(leadId)}`)
+			.then((rec) => setDetail(rec))
+			.catch(() => setError("That job lead could not be opened. It may have been removed."));
+	}, [instanceId]);
 	useEffect(() => {
 		if (selected) loadRecords(selected, page, pageSize, filters, sortBy, sortDir);
 	}, [selected, page, pageSize, filters, sortBy, sortDir, loadRecords]);
@@ -639,6 +649,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 								✕
 							</button>
 						</div>
+						{isJobLeads ? <div className="mb-3"><JobLeadActions rec={detail} /></div> : null}
 						<table className="text-xs mb-4">
 							<tbody>
 								{baseColumns.map((c) => (
