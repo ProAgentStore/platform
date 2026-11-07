@@ -33,6 +33,7 @@ import { requestOwnerAttention } from "./owner-attention.js";
 import type { LeadVerification, LeadVerificationListResponse, VerificationAttempt, VerificationState } from "./job-lead-browser-verification-types.js";
 import type { Env } from "../types.js";
 import { clip } from "./job-lead-queue.js";
+import { pushScoutLeadsToJobs } from "./gmail-scout/jobs-push.js";
 
 export const MAX_ATTEMPTS = 3;
 /** Wait after the Nth temporarily_unverifiable outcome before trying again. */
@@ -264,6 +265,8 @@ async function settle(env: Env, row: LeadRow, outcome: BrowserVerificationOutcom
 		...(opts.names?.title ? { verified_title: opts.names.title } : {}),
 		...(opts.names?.company ? { verified_company: opts.names.company } : {}),
 	});
+	// #1587: a lead that just became appliable goes to the Jobs app. Never throws.
+	if (applied?.transitioned && outcome === "active") await pushScoutLeadsToJobs(env, row.instance_id, row.user_id);
 	// The owner moved the lead on first: recorded on the attempt, never applied to the lead.
 	if (applied && !applied.transitioned && applied.status !== "awaiting_browser_verification") {
 		await setLead(env, row, { state: "superseded", attempts: opts.attempt, lastOutcome: outcome, lastDetail: `The lead is ${applied.status} now; this outcome was recorded but not applied.` }, now);

@@ -8,6 +8,7 @@ import { canonicalJobUrl, jobIdentity, workKeyForLead } from "../job-lead-triage
 import { clipMarked } from "../clip-marked.js";
 import { GMAIL_SCOUT_SCAN_INTERVAL_MS, getGmailScoutConfig, getGmailScoutScanState, resolveGmailScoutAccount } from "./config.js";
 import { appliedWorkKeys, enqueueBrowserVerification } from "../job-lead-queue.js";
+import { pushScoutLeadsToJobs } from "./jobs-push.js";
 import { seekDigestListings } from "./seek-digest.js";
 import { checkDigestPostings, DIGEST_POSTINGS_MAX, jobProviderOf, providerPostingUrl, resolveProviderJobAlert, type ServerCheckGap } from "./provider-redirect.js";
 
@@ -651,6 +652,7 @@ export async function scanGmailScout(env: Env, instanceId: string, userId: strin
 		});
 		await writeScanLog(env, receiptId, instanceId, log);
 		await queueAwaitingLeads(env, instanceId, userId, awaiting);
+		await pushScoutLeadsToJobs(env, instanceId, userId); // #1587: never throws
 		const cursor = JSON.stringify({ after: new Date().toISOString(), messageId: hits[0]?.id ?? null } satisfies ScanCursor);
 		await env.DB.prepare(`INSERT INTO gmail_scout_scan_state (instance_id,last_scan_at,last_message_id_cursor,candidate_count,dedupe_count,failure_count,last_failure_at,last_failure_message)
 			VALUES (?1,datetime('now'),?2,?3,?4,0,NULL,NULL)
@@ -743,6 +745,7 @@ export async function reprocessGmailScout(env: Env, instanceId: string, userId: 
 		});
 		await writeScanLog(env, receiptId, instanceId, log);
 		await queueAwaitingLeads(env, instanceId, userId, awaiting);
+		await pushScoutLeadsToJobs(env, instanceId, userId); // #1587: never throws
 		const lastMessageId = hits[0]?.id ?? null;
 		const receipt = await completeGmailScoutReceipt(env, receiptId, { hits: hits.length, candidates, added, deduped, rejected, lastMessageId, awaitingBrowserVerification: awaiting.length });
 		await pruneGmailScoutReceipts(env, instanceId);

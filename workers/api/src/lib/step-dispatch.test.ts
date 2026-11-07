@@ -29,6 +29,8 @@ const SRC = resolve(__dirname, "..");
  * surface, or it is a handler and it owes a declaration.
  */
 const DISPATCH_SURFACES = new Set([
+	// Platform-initiated calls to the Jobs app (#1586, #1587): one fixed tool, `mcp_call_tool`, under the instance's own grant.
+	"lib/jobs-app.ts",
 	// The dispatcher.
 	"lib/tool-registry.ts",
 	// The pipeline runner — runs the tool each step names.
