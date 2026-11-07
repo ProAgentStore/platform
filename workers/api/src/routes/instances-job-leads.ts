@@ -4,6 +4,8 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { deliverEvent } from "../lib/connections.js";
 import { listLeadVerifications, verifyLeadNow } from "../lib/job-lead-browser-verification.js";
+import { pushScoutLeadsToJobs } from "../lib/gmail-scout/jobs-push.js";
+import { readGmailScoutLeadRecords } from "../lib/gmail-scout/scan.js";
 import { intakeManualJobUrl } from "../lib/manual-job-url-intake.js";
 import { JOB_LEAD_APPLY_EVENT, type JobLeadApplyEvent } from "../lib/job-lead-triage.js";
 import type { Env } from "../types.js";
@@ -45,6 +47,8 @@ export async function runJobLeadTriage(env: Env, instanceId: string, uid: string
 			traceId: result.event.eventId,
 		});
 	}
+	// The owner's decision reaches the Jobs app's lead (#1607). Never throws, never changes the answer.
+	if (result.transitioned) await pushScoutLeadsToJobs(env, instanceId, uid, () => readGmailScoutLeadRecords(env, instanceId), recordId).catch(() => undefined);
 	return { status: 200, result: { ...result, delivery } };
 }
 

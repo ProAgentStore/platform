@@ -25,6 +25,7 @@ import {
 	planApplicationWriteback,
 	planJobLeadTriage,
 	planBrowserVerificationOutcome,
+	type OriginalCandidate,
 	planConsentReopen,
 	BROWSER_VERIFICATION_OUTCOMES,
 	type BrowserVerificationOutcome,
@@ -220,6 +221,8 @@ export async function applyJobLeadBrowserVerification(engine: Pick<AgentStorageE
 		...(typeof b.detail === "string" ? { detail: b.detail } : {}),
 		...(typeof b.verified_title === "string" ? { verifiedTitle: b.verified_title } : {}),
 		...(typeof b.verified_company === "string" ? { verifiedCompany: b.verified_company } : {}),
+		...(typeof b.page_title === "string" ? { pageTitle: b.page_title } : {}),
+		...(b.original && typeof b.original === "object" ? { original: b.original as OriginalCandidate } : {}),
 	});
 	if (!plan.ok) return json({ error: plan.error, stale: true }, 409);
 	const updated = plan.patch ? await engine.recordUpdate(JOB_LEAD_COLLECTION, record.id, plan.patch) : record;

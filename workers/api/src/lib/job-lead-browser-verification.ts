@@ -21,7 +21,8 @@
 import { type BrowserVerificationSettings, readBrowserVerification } from "./browser-verification.js";
 import { closeLiveTakeoverFor, requestTakeover } from "./browser-takeovers.js";
 import { deepLinkFor } from "./console-links.js";
-import { BROWSER_VERIFICATION_OUTCOMES, type BrowserVerificationOutcome, cleanVerifiedName, nameGroundedIn, squashName } from "./job-lead-triage.js";
+import { BROWSER_VERIFICATION_OUTCOMES, type BrowserVerificationOutcome, JOB_LEAD_ORIGINAL_MISSING_EVENT, type OriginalCandidate, cleanVerifiedName, nameGroundedIn, originalMissingEvent, squashName } from "./job-lead-triage.js";
+import { deliverEvent } from "./connections.js";
 import { getLocalBrowserRun, listDomainConsent, type LocalBrowserRun, readLocalBrowserSettings } from "./local-browser/store.js";
 import { localBrowserCapability, startLocalBrowserRun } from "./local-browser/start.js";
 import { domainWithin, effectiveLocalBrowserPolicy, type LocalBrowserCapability } from "./local-browser/policy.js";
@@ -118,6 +119,7 @@ export function verificationObjective(v: { canonicalUrl: string; expectedTitle: 
 		`Verify one job posting, read-only. Open ${v.canonicalUrl} and decide whether it is ${job}, and whether it is still open.`,
 		`Report exactly one finding with url ${v.canonicalUrl} and fields.${OUTCOME_FIELD} set to one of:`,
 		`active (the posting is this job and is open — then ALSO set fields.job_title and fields.job_company to the job's title and employer exactly as the page states them; leave out one you cannot read), expired (it is closed, removed or redirects away), mismatch (it is a different job), temporarily_unverifiable (the page could not be read now).`,
+		`When the posting is active and its page has an Apply link, also find the original posting (employer's own page) behind it, read-only: take a browser_snapshot, and if the link is named "Quick apply" or "Easy apply" do NOT click it - record a second finding with fields.original set to quick_apply. Otherwise click the link named "Apply" ONCE, which leaves the job board: the run stops on the page it lands on, and you must not click or open anything further. Record a second finding for that landing page with fields.original = external, fields.original_title = the job title exactly as the landing page states it, fields.original_live = true if it is an open posting for this job (false if closed or removed), and evidence = the posting's description text from that page. If there is no Apply link, or the landing could not be read, record the second finding with fields.original = none. Also set fields.page_title on the first finding to the job board page's own title.`,
 		`Do not apply, sign up, sign in or submit anything.`,
 	].join(" ");
 }
@@ -141,6 +143,35 @@ export function namesFromRun(run: LocalBrowserRun | null): { title?: string; com
 	const title = pick("job_title");
 	const company = pick("job_company");
 	return { ...(title ? { title } : {}), ...(company ? { company } : {}) };
+}
+
+/**
+ * What a finished ACTIVE run found behind the board ad's Apply link (#1607): the original posting it landed on, a Quick Apply, or nothing.
+ * Untrusted page text, so this only shapes it - `acceptOriginal` (in the lead's trusted writer) decides whether it is the employer's own live posting of this job.
+ * `original_url` is stamped by the runner from the page it actually reached, never the model's word; the description is that finding's evidence.
+ */
+export function originalFromRun(run: LocalBrowserRun | null): OriginalCandidate {
+	if (run?.status !== "completed") return { kind: "none" };
+	const findings = (run.result?.findings ?? []).filter((f) => typeof f.fields?.original === "string");
+	const external = findings.find((f) => f.fields.original === "external" && typeof f.fields.original_url === "string");
+	if (external) {
+		const title = cleanVerifiedName(external.fields.original_title);
+		return {
+			kind: "external",
+			url: String(external.fields.original_url),
+			...(title && nameGroundedIn(title, external.evidence) ? { title } : {}),
+			description: external.evidence,
+			live: external.fields.original_live === true,
+		};
+	}
+	return findings.some((f) => f.fields.original === "quick_apply") ? { kind: "quick_apply" } : { kind: "none" };
+}
+
+/** The job board page's own title as the run read it off an ACTIVE posting (#1607) - `gateLocation` reads a SEEK location from it. */
+export function pageTitleFromRun(run: LocalBrowserRun | null): string | undefined {
+	if (run?.status !== "completed") return undefined;
+	const titles = new Set((run.result?.findings ?? []).filter((f) => f.fields?.[OUTCOME_FIELD] === "active").map((f) => cleanVerifiedName(f.fields?.page_title)).filter((t): t is string => !!t));
+	return titles.size === 1 ? [...titles][0] : undefined;
 }
 
 /** The typed outcome a finished run reported — anything unreadable is temporarily_unverifiable, never a guess. */
@@ -195,7 +226,7 @@ async function recordAttempt(env: DB, row: LeadRow, a: { attempt: number; state:
 }
 
 /** Apply an outcome to the lead in the Scout's DO. `status` is where the lead is now, applied or not. */
-async function applyToLead(env: Env, row: LeadRow, body: { outcome: BrowserVerificationOutcome; attempt: number; receipt_id: string; exhausted: boolean; detail: string; verified_title?: string; verified_company?: string }): Promise<{ transitioned: boolean; status: string; record?: { id: string; data: Record<string, unknown> } } | null> {
+async function applyToLead(env: Env, row: LeadRow, body: { outcome: BrowserVerificationOutcome; attempt: number; receipt_id: string; exhausted: boolean; detail: string; verified_title?: string; verified_company?: string; page_title?: string; original?: OriginalCandidate }): Promise<{ transitioned: boolean; status: string; record?: { id: string; data: Record<string, unknown> } } | null> {
 	const stub = env.AGENT.get(env.AGENT.idFromName(row.instance_id));
 	const res = await stub.fetch(
 		new Request(`https://agent/job-leads/${encodeURIComponent(row.lead_id)}/browser-verification`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
@@ -264,7 +295,7 @@ async function notifyLeadDecision(env: Env, row: LeadRow, data: Record<string, u
 }
 
 /** Close a lead's verification with a final outcome, applied to the lead. */
-async function settle(env: Env, row: LeadRow, outcome: BrowserVerificationOutcome, opts: { attempt: number; receiptId: string; exhausted: boolean; detail: string; why?: string; names?: { title?: string; company?: string } }, now: number): Promise<VerificationState> {
+async function settle(env: Env, row: LeadRow, outcome: BrowserVerificationOutcome, opts: { attempt: number; receiptId: string; exhausted: boolean; detail: string; why?: string; names?: { title?: string; company?: string }; run?: LocalBrowserRun | null }, now: number): Promise<VerificationState> {
 	const applied = await applyToLead(env, row, {
 		outcome,
 		attempt: opts.attempt,
@@ -273,9 +304,15 @@ async function settle(env: Env, row: LeadRow, outcome: BrowserVerificationOutcom
 		detail: opts.detail,
 		...(opts.names?.title ? { verified_title: opts.names.title } : {}),
 		...(opts.names?.company ? { verified_company: opts.names.company } : {}),
+		...(outcome === "active" && opts.run !== undefined ? { page_title: pageTitleFromRun(opts.run ?? null), original: originalFromRun(opts.run ?? null) } : {}),
 	});
-	// #1587: a lead that just became appliable goes to the Jobs app. Never throws.
-	if (applied?.transitioned && outcome === "active") await pushScoutLeadsToJobs(env, row.instance_id, row.user_id, () => readGmailScoutLeadRecords(env, row.instance_id));
+	// #1587, #1607: a lead that just became appliable goes to the Jobs app (and its original, when found, is published there);
+	// one with no original asks the Original Finder to look. Neither can fail the verdict.
+	if (applied?.transitioned && outcome === "active") {
+		await pushScoutLeadsToJobs(env, row.instance_id, row.user_id, () => readGmailScoutLeadRecords(env, row.instance_id), row.lead_id);
+		const missing = applied.record ? originalMissingEvent(row.instance_id, row.lead_id, applied.record.data) : null;
+		if (missing) await deliverEvent(env, row.instance_id, row.user_id, JOB_LEAD_ORIGINAL_MISSING_EVENT, [missing], { traceId: missing.eventId }).catch(() => undefined);
+	}
 	// The owner moved the lead on first: recorded on the attempt, never applied to the lead.
 	if (applied && !applied.transitioned && applied.status !== "awaiting_browser_verification") {
 		await setLead(env, row, { state: "superseded", attempts: opts.attempt, lastOutcome: outcome, lastDetail: `The lead is ${applied.status} now; this outcome was recorded but not applied.` }, now);
@@ -454,7 +491,7 @@ export async function reconcileVerificationAttempts(env: Env, now = Date.now(), 
 			.run();
 		// Single writer: another tick that already claimed this attempt applies it, not this one.
 		if ((claimed.meta?.changes ?? 0) === 0) continue;
-		await settle(env, row, outcome, { attempt: a.attempt, receiptId: a.id, exhausted: outcome === "temporarily_unverifiable" && a.attempt >= MAX_ATTEMPTS, detail, ...(run?.errorCode === "runner_result_invalid" ? { why: "the browser runner's results were refused as malformed (see the attempt detail) - not a posting that could not be read" } : {}), ...(outcome === "active" ? { names: namesFromRun(run) } : {}) }, now);
+		await settle(env, row, outcome, { attempt: a.attempt, receiptId: a.id, exhausted: outcome === "temporarily_unverifiable" && a.attempt >= MAX_ATTEMPTS, detail, ...(run?.errorCode === "runner_result_invalid" ? { why: "the browser runner's results were refused as malformed (see the attempt detail) - not a posting that could not be read" } : {}), ...(outcome === "active" ? { names: namesFromRun(run), run } : {}) }, now);
 		settled++;
 	}
 	return settled;

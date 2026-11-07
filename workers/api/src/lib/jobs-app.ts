@@ -13,10 +13,21 @@ import type { Env } from "../types.js";
 import { clipMarked } from "./clip-marked.js";
 import { hasMcpConsent, normalizeMcpEndpoint } from "./mcp-consent.js";
 import { runRegistryTool } from "./tool-registry.js";
+import { unfenceUntrusted } from "./untrusted-fence.js";
 
 export const JOBS_MCP_URL = "https://mcp.proappstore.online/mcp/apps/jobs";
 
-export type JobsCallResult = { ok: true } | { ok: false; reason: "no_grant" | "failed"; detail: string };
+/** `data` is the tool's payload when it returned JSON (a query tool's rows), else undefined. */
+export type JobsCallResult = { ok: true; data?: unknown } | { ok: false; reason: "no_grant" | "failed"; detail: string };
+
+/** The `data` of `mcp_call_tool`'s `{tool, ok, data}` envelope (fenced as untrusted by the registry), or undefined. */
+function payloadOf(content: string): unknown {
+	try {
+		return (JSON.parse(unfenceUntrusted(content)) as { data?: unknown }).data;
+	} catch {
+		return undefined;
+	}
+}
 
 /** Call one Jobs tool as `instanceId`'s owner. Needs a grant for `tool` on {@link JOBS_MCP_URL} on that instance. */
 export async function callJobsTool(env: Env, who: { userId: string; instanceId: string }, tool: string, args: Record<string, unknown>): Promise<JobsCallResult> {
@@ -26,7 +37,8 @@ export async function callJobsTool(env: Env, who: { userId: string; instanceId: 
 			return { ok: false, reason: "no_grant", detail: `This instance has no MCP grant for ${tool} on ${JOBS_MCP_URL}.` };
 		}
 		const r = await runRegistryTool("mcp_call_tool", { env, userId: who.userId, agentId: who.instanceId, instanceId: who.instanceId }, { url: JOBS_MCP_URL, tool, args });
-		return r.success ? { ok: true } : { ok: false, reason: "failed", detail: clipMarked(r.content, 300) };
+		if (r.success) return { ok: true, data: payloadOf(r.content) };
+		return { ok: false, reason: "failed", detail: clipMarked(r.content, 300) };
 	} catch (e) {
 		return { ok: false, reason: "failed", detail: clipMarked(e instanceof Error ? e.message : String(e), 300) };
 	}

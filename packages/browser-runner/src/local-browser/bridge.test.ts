@@ -17,7 +17,7 @@ interface PageFlags {
 }
 
 /** A browser whose pages are a map of URL → flags, with redirects and click targets. */
-function fakeBrowser(pages: Record<string, PageFlags> = {}, opts: { redirect?: Record<string, string>; clicks?: Record<string, string> } = {}) {
+function fakeBrowser(pages: Record<string, PageFlags> = {}, opts: { redirect?: Record<string, string>; clicks?: Record<string, string>; snapshot?: string } = {}) {
 	const calls: Array<{ name: string; args: Record<string, unknown>; internal?: boolean }> = [];
 	const refusals: Array<{ tool: string; args: Record<string, unknown>; reason: string }> = [];
 	const history: string[] = [];
@@ -34,7 +34,7 @@ function fakeBrowser(pages: Record<string, PageFlags> = {}, opts: { redirect?: R
 				const f = pages[url] ?? {};
 				return { content: [{ type: "text", text: `### Result\n${JSON.stringify({ url, title: f.title ?? "Page", captcha: !!f.captcha, login: !!f.login, paywall: !!f.paywall, accessBlocked: !!f.accessBlocked, writeForm: !!f.writeForm })}\n### Ran Playwright code` }] };
 			}
-			if (name === "browser_snapshot") return { content: [{ type: "text", text: '- link "Job 1" [ref=e1]\n- button "Next" [ref=e2]\n- button "Apply now" [ref=e3]\n- textbox "Search" [ref=e4]' }] };
+			if (name === "browser_snapshot") return { content: [{ type: "text", text: opts.snapshot ?? '- link "Job 1" [ref=e1]\n- button "Next" [ref=e2]\n- button "Apply now" [ref=e3]\n- textbox "Search" [ref=e4]' }] };
 			return { content: [{ type: "text", text: `${name} ok` }] };
 		},
 		refused: (tool, args, reason) => refusals.push({ tool, args, reason }),
@@ -219,7 +219,7 @@ describe("stopping for a person", () => {
 
 	it("with the owner's OK it may read that page — and still cannot fill or submit anything on it", async () => {
 		const f = fakeBrowser({ "https://seek.com.au/apply/1": { writeForm: true } });
-		const { host } = fakeHost({ allow: ["seek.com.au"], pause: () => "resumed" });
+		const { host } = fakeHost({ consented: ["seek.com.au"], pause: () => "resumed" });
 		const b = new BrowserBridge(f.tools, host);
 		const r = await b.callTool("browser_navigate", { url: "https://seek.com.au/apply/1" });
 		expect(textOf(r)).toMatch(/still research only/);
@@ -316,5 +316,83 @@ describe("parsers", () => {
 		expect(evaluateResult("no result")).toBeNull();
 		expect(refRole('- generic [ref=e0]\n  - link "Jobs" [ref=e5] [cursor=pointer]', "e5")).toEqual({ role: "link", name: "Jobs" });
 		expect(refRole("- link [ref=e1]", "e9")).toBeNull();
+	});
+});
+
+describe("following a job board's Apply link to the original posting (#1607)", () => {
+	const SEEK = "https://www.seek.com.au/job/12345678";
+	const ATS = "https://careers.smartrecruiters.com/endeavour/12345";
+	const seekPage = { [SEEK]: {}, [ATS]: { title: "Platform Engineer" } };
+	const snapshot = (name: string) => `- heading "Platform Engineer" [ref=e0]\n- link "${name}" [ref=e5]`;
+	const open = async (b: BrowserBridge) => {
+		await b.callTool("browser_navigate", { url: SEEK });
+		await b.callTool("browser_snapshot");
+	};
+
+	it("clicks an external Apply link, stops on the landing page, and refuses every further click or navigation", async () => {
+		const fb = fakeBrowser(seekPage, { snapshot: snapshot("Apply") + '\n- link "Other job" [ref=e6]', clicks: { e5: ATS } });
+		const { host } = fakeHost({ allow: ["seek.com.au", "smartrecruiters.com"] });
+		const b = new BrowserBridge(fb.tools, host);
+		await open(b);
+		const landed = await b.callTool("browser_click", { target: "e5" });
+		expect(landed.isError).toBeUndefined();
+		expect(textOf(landed)).toMatch(/run stops here/);
+		expect(textOf(await b.callTool("browser_click", { target: "e6" }))).toMatch(/stopped at the page the apply link led to/);
+		expect(textOf(await b.callTool("browser_navigate", { url: SEEK }))).toMatch(/stopped at the page/);
+		// Nothing but reads and the one click was dispatched to the page.
+		expect(fb.calls.filter((c) => c.name === "browser_click")).toHaveLength(1);
+	});
+
+	it("does not pause for a sign-in or application form on the landing page", async () => {
+		const fb = fakeBrowser({ [SEEK]: {}, [ATS]: { login: true, writeForm: true } }, { snapshot: snapshot("Apply now"), clicks: { e5: ATS } });
+		const { host, events } = fakeHost({ allow: ["seek.com.au", "smartrecruiters.com"] });
+		const b = new BrowserBridge(fb.tools, host);
+		await open(b);
+		await b.callTool("browser_click", { target: "e5" });
+		expect(events.some((e) => e.type === "run.paused")).toBe(false);
+	});
+
+	it("never follows a Quick Apply or Easy Apply link", async () => {
+		for (const name of ["Quick apply", "Easy Apply"]) {
+			const fb = fakeBrowser(seekPage, { snapshot: snapshot(name), clicks: { e5: `${SEEK}/apply` } });
+			const b = new BrowserBridge(fb.tools, fakeHost({ allow: ["seek.com.au"] }).host);
+			await open(b);
+			const r = await b.callTool("browser_click", { target: "e5" });
+			expect(r.isError).toBe(true);
+			expect(textOf(r)).toMatch(/Quick Apply/);
+			expect(fb.calls.some((c) => c.name === "browser_click")).toBe(false);
+		}
+	});
+
+	it("an apply link to a site not yet allowed is undone, naming the landing URL; navigating there asks the owner and then lands", async () => {
+		const fb = fakeBrowser(seekPage, { snapshot: snapshot("Apply"), clicks: { e5: ATS } });
+		const { host, events } = fakeHost({ consented: ["seek.com.au"], pause: () => "resumed", onPause: () => host.consented.add("smartrecruiters.com") });
+		const b = new BrowserBridge(fb.tools, host);
+		await open(b);
+		const refused = await b.callTool("browser_click", { target: "e5" });
+		expect(refused.isError).toBe(true);
+		expect(textOf(refused)).toContain(ATS);
+		const landed = await b.callTool("browser_navigate", { url: ATS });
+		expect(textOf(landed)).toMatch(/run stops here/);
+		expect(events.some((e) => e.type === "run.paused" && e.pauseReason === "login_required")).toBe(false);
+	});
+
+	it("records the observed landing URL as original_url, whatever the model claimed", async () => {
+		const fb = fakeBrowser(seekPage, { snapshot: snapshot("Apply"), clicks: { e5: ATS } });
+		const b = new BrowserBridge(fb.tools, fakeHost({ allow: ["seek.com.au", "smartrecruiters.com"] }).host);
+		await open(b);
+		await b.callTool("browser_click", { target: "e5" });
+		await b.callTool("record_finding", { title: "Platform Engineer", url: ATS, evidence: "Platform Engineer at Endeavour", fields: { original: "external", original_url: "https://evil.example/x", original_host: "evil.example" } });
+		expect(b.findings[0].fields).toMatchObject({ original: "external", original_url: ATS, original_host: "careers.smartrecruiters.com" });
+	});
+
+	it("refuses original=external when no apply link was followed, and strips an original_url on other findings", async () => {
+		const b = new BrowserBridge(fakeBrowser(seekPage, { snapshot: snapshot("Quick apply") }).tools, fakeHost({ allow: ["seek.com.au"] }).host);
+		await open(b);
+		const refused = await b.callTool("record_finding", { title: "Platform Engineer", url: SEEK, evidence: "x", fields: { original: "external", original_url: ATS } });
+		expect(refused.isError).toBe(true);
+		await b.callTool("record_finding", { title: "Platform Engineer", url: SEEK, evidence: "x", fields: { original: "quick_apply", original_url: ATS } });
+		expect(b.findings).toHaveLength(1);
+		expect(b.findings[0].fields).toEqual({ original: "quick_apply" });
 	});
 });

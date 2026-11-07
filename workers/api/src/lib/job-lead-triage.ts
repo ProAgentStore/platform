@@ -23,6 +23,8 @@ import type { CollectionRecord } from "../agent-storage-types.js";
 
 export const JOB_LEAD_COLLECTION = "job_leads";
 export const JOB_LEAD_APPLY_EVENT = "job.lead.apply_requested";
+/** Emitted (#1607) when a lead the browser verified live has no original posting to publish: a Quick Apply, or no outbound apply link. */
+export const JOB_LEAD_ORIGINAL_MISSING_EVENT = "job.lead.original_missing";
 
 /** Query keys mailers add for attribution rather than job identity. */
 const JOB_URL_TRACKING_KEY = /^(utm_|mc_|ref$|source$|trk$|campaign$|token$)/i;
@@ -101,6 +103,49 @@ export type JobLeadApplyEvent = {
 	requestedAt: string;
 	lead: Partial<Record<(typeof ENVELOPE_FIELDS)[number], string>>;
 };
+
+/**
+ * The `job.lead.original_missing` event (#1607), for the Original Finder (#1608) to subscribe to. One per lead and
+ * lifecycle version; `eventId` is the idempotency identity. `lead` is the same whitelisted snapshot the apply event
+ * carries, so no contact details, notes or session data leave the Scout.
+ */
+export type JobLeadOriginalMissingEvent = {
+	eventType: typeof JOB_LEAD_ORIGINAL_MISSING_EVENT;
+	/** `<instance>:<lead>:<lifecycleVersion>:original_missing` */
+	eventId: string;
+	sourceInstanceId: string;
+	leadId: string;
+	/** The board posting the lead was found at (the canonical lead URL). */
+	leadUrl: string;
+	workKey?: string;
+	lifecycleVersion: number;
+	/** `quick_apply`: the board's own application flow. `no_outbound_apply`: no apply link that leaves the board, or none was accepted. */
+	reason: "quick_apply" | "no_outbound_apply";
+	/** Why an apply landing was refused, when one was followed (`job_board`, `title_mismatch`, `not_live`, `not_https`); absent otherwise. */
+	rejected?: string;
+	/** When the lead was verified live. */
+	verifiedAt: string;
+	lead: Partial<Record<(typeof ENVELOPE_FIELDS)[number], string>>;
+};
+
+export function originalMissingEvent(sourceInstanceId: string, leadId: string, data: Record<string, unknown>): JobLeadOriginalMissingEvent | null {
+	const v = data.verification && typeof data.verification === "object" && !Array.isArray(data.verification) ? (data.verification as Record<string, unknown>) : {};
+	if (v.state !== "live" || (v.original !== "quick_apply" && v.original !== "none")) return null;
+	const version = jobLeadVersion(data);
+	return {
+		eventType: JOB_LEAD_ORIGINAL_MISSING_EVENT,
+		eventId: `${sourceInstanceId}:${leadId}:${version}:original_missing`,
+		sourceInstanceId,
+		leadId,
+		leadUrl: typeof data.url === "string" ? data.url : "",
+		...(typeof data.work_key === "string" && data.work_key ? { workKey: data.work_key } : {}),
+		lifecycleVersion: version,
+		reason: v.original === "quick_apply" ? "quick_apply" : "no_outbound_apply",
+		...(typeof v.original_rejected === "string" ? { rejected: v.original_rejected } : {}),
+		verifiedAt: typeof v.checked_at === "string" ? v.checked_at : "",
+		lead: envelopeLead(data),
+	};
+}
 
 export type JobLeadTriageInput = {
 	action: JobLeadTriageAction;
@@ -350,6 +395,52 @@ export function nameGroundedIn(name: string, evidence: unknown): boolean {
 	return ` ${text} `.includes(` ${squashName(name)} `);
 }
 
+// ── The original posting behind a board ad (#1607) ───────────────────────────────────────────
+
+/** Hosts that are job boards or aggregators, never an original. Mirrors the Jobs app's `publish_lead` refusals (jobs mcp.json). */
+const JOB_BOARD_LABELS = ["seek", "linkedin", "indeed", "glassdoor", "jora", "careerone", "adzuna", "ziprecruiter", "simplyhired", "careerjet", "jooble", "gotjob", "monster"];
+export function isJobBoardHost(host: string): boolean {
+	const dotted = `.${host.toLowerCase()}.`;
+	return JOB_BOARD_LABELS.some((l) => dotted.includes(`.${l}.`)) || dotted.includes(".lnkd.in.") || dotted.includes(".talent.com.") || dotted.includes(".proappstore.online.");
+}
+
+/** What publish_lead takes of a description: 1-20000 characters. */
+export const ORIGINAL_DESCRIPTION_MAX = 20_000;
+
+/** What a verification run reports of the page a board's Apply link led to. Untrusted: validated by {@link acceptOriginal}. */
+export type OriginalCandidate = { kind: "external"; url: string; title?: string; description?: string; live?: boolean } | { kind: "quick_apply" } | { kind: "none" };
+
+export type AcceptedOriginal =
+	| { original: "external"; url: string; host: string; description: string }
+	| { original: "quick_apply" | "none"; rejected?: "job_board" | "title_mismatch" | "not_live" | "not_https" | "no_description" };
+
+/**
+ * Accept a candidate original only when it is the employer's own, live posting of THIS job: https; a host that is neither a
+ * job board nor an aggregator; the page reported live; its title the lead's (either name contains the other once flattened);
+ * and some description text to publish. Anything else is "none" with the reason, so a lead is never published from a guess.
+ */
+export function acceptOriginal(candidate: OriginalCandidate | null | undefined, leadTitle: string | null | undefined): AcceptedOriginal | null {
+	if (!candidate) return null;
+	if (candidate.kind !== "external") return { original: candidate.kind };
+	let url: URL;
+	try {
+		url = new URL(candidate.url);
+	} catch {
+		return { original: "none", rejected: "not_https" };
+	}
+	const host = url.hostname.toLowerCase().replace(/\.$/, "");
+	if (url.protocol !== "https:" || url.username || url.password || !host.includes(".")) return { original: "none", rejected: "not_https" };
+	if (isJobBoardHost(host)) return { original: "none", rejected: "job_board" };
+	if (candidate.live !== true) return { original: "none", rejected: "not_live" };
+	const page = squashName(cleanVerifiedName(candidate.title) ?? "");
+	const lead = squashName(leadTitle ?? "");
+	if (!page || !lead || !(page.includes(lead) || lead.includes(page))) return { original: "none", rejected: "title_mismatch" };
+	const description = (candidate.description ?? "").replace(/\p{Cc}+/gu, " ").replace(/\s+/g, " ").trim();
+	// A description publish_lead would refuse is not published cut short: the runner's evidence is 4000 characters at most, so this is a guard.
+	if (!description || description.length > ORIGINAL_DESCRIPTION_MAX) return { original: "none", rejected: "no_description" };
+	return { original: "external", url: `${url.origin}${url.pathname}${url.search}`, host, description };
+}
+
 export type BrowserVerificationPlan =
 	| { ok: true; transitioned: boolean; to: JobLeadStatus; patch: Record<string, unknown> | null }
 	| { ok: false; stale: true; error: string };
@@ -369,7 +460,7 @@ export type BrowserVerificationPlan =
  */
 export function planBrowserVerificationOutcome(
 	record: CollectionRecord,
-	input: { outcome: BrowserVerificationOutcome; attempt: number; receiptId: string; exhausted: boolean; expectedVersion?: number; detail?: string; verifiedTitle?: string; verifiedCompany?: string },
+	input: { outcome: BrowserVerificationOutcome; attempt: number; receiptId: string; exhausted: boolean; expectedVersion?: number; detail?: string; verifiedTitle?: string; verifiedCompany?: string; pageTitle?: string; original?: OriginalCandidate | null },
 	deps: { now?: string } = {},
 ): BrowserVerificationPlan {
 	const current = jobLeadStatus(record.data);
@@ -407,7 +498,24 @@ export function planBrowserVerificationOutcome(
 		if (company && empty(record.data.company)) named.company = company;
 	}
 	const namedFields = Object.keys(named);
-	const verifiedWithNames = namedFields.length ? { ...verification, named_by_browser: namedFields } : verification;
+	// The board page's own title (#1607): `gateLocation` reads a SEEK location from it. And the original posting behind the ad, validated again here
+	// against the lead's title whatever the dispatcher sent; only an `active` verdict records either.
+	const pageTitle = input.outcome === "active" ? cleanVerifiedName(input.pageTitle) : null;
+	const boardLead = (() => {
+		try {
+			return !!canonical && isJobBoardHost(new URL(canonical).hostname);
+		} catch {
+			return false;
+		}
+	})();
+	const original = input.outcome === "active" && boardLead ? acceptOriginal(input.original, (typeof record.data.title === "string" && record.data.title.trim()) || named.title || null) : null;
+	const verifiedWithNames = {
+		...verification,
+		...(namedFields.length ? { named_by_browser: namedFields } : {}),
+		...(pageTitle ? { title: pageTitle } : {}),
+		...(original?.original === "external" ? { original: "external", original_url: original.url, original_host: original.host, original_description: original.description } : {}),
+		...(original && original.original !== "external" ? { original: original.original, ...(original.rejected ? { original_rejected: original.rejected } : {}) } : {}),
+	};
 	const nextVersion = version + 1;
 	const history = Array.isArray(record.data.lifecycle) ? record.data.lifecycle : [];
 	const entry: JobLeadLifecycleEntry = { from: current, to: target, action: "browser_verification", version: nextVersion, at: now, note: input.detail?.slice(0, 200) || `browser verification: ${input.outcome}` };

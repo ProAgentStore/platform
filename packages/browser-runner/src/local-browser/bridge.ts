@@ -83,6 +83,7 @@ export interface ToolResult {
 
 /** The browser tools a research run may use. Everything else from the browser is not even listed. */
 const READ_TOOLS = new Set(["browser_navigate", "browser_navigate_back", "browser_snapshot", "browser_wait_for", "browser_click"]);
+const APPLY_STOPPED = "The run stopped at the page the apply link led to; nothing further can be clicked or opened. Record your finding and call finish_research.";
 /** The research tools the bridge adds; the CLI records its results through these. */
 const RESEARCH_TOOL_NAMES = ["record_finding", "report_source_failure", "finish_research"] as const;
 /** Refused BY NAME with the reason, so a CLI that guesses one is told why rather than "unknown tool". */
@@ -229,6 +230,10 @@ export function refRole(snapshot: string, ref: string): { role: string; name: st
 	return null;
 }
 
+/** The SEEK-style apply control (#1607): a link named "Apply"/"Apply now"/"Apply on company site" — not Quick/Easy Apply, which stays on the board. */
+const QUICK_APPLY_NAME = /^(quick|easy)\s+apply\b/i;
+const APPLY_NAME = /^apply\b/i;
+
 export class BrowserBridge {
 	private actions = 0;
 	private pages = 0;
@@ -239,6 +244,14 @@ export class BrowserBridge {
 	readonly findings: LocalBrowserFinding[] = [];
 	readonly sourceFailures: LocalBrowserSourceFailure[] = [];
 	summary: string | null = null;
+	/**
+	 * Following a job board's Apply link to the employer's own posting (#1607). `pending` is set when the
+	 * model clicks an apply control; the next page it reaches is then THE landing page: read, never acted on.
+	 * Once there the run is locked — no further click or navigation — and no sign-in, form or captcha pause
+	 * is raised for it (a person cannot help a read-only look). `host` is set when the click was undone for
+	 * consent, so only a navigation to that same site can become the landing.
+	 */
+	private apply: { pending: boolean; host?: string; landing?: { url: string; host: string } } = { pending: false };
 	/** Tool calls that reached the bridge. Zero at exit means the CLI never used the browser (#944). */
 	calls = 0;
 
@@ -353,6 +366,7 @@ export class BrowserBridge {
 	private async navigate(url: string): Promise<ToolResult> {
 		const host = hostOf(url);
 		if (!host) return this.refuse("browser_navigate", "Only http(s) URLs can be opened.", undefined, { url });
+		if (this.apply.landing) return this.refuse("browser_navigate", APPLY_STOPPED, undefined, { url });
 		if (this.pages >= this.host.limits.maxPages) return this.refuse("browser_navigate", `The run's limit of ${this.host.limits.maxPages} pages is reached. Call finish_research now.`, undefined, { url });
 		const refusal = await this.admit(host, url);
 		if (refusal) return this.refuse("browser_navigate", refusal, host, { url });
@@ -375,6 +389,10 @@ export class BrowserBridge {
 		const target = ref ? refRole(this.lastSnapshot, ref) : null;
 		const allowed = target && (CLICKABLE_ROLES.has(target.role) || (target.role === "button" && PAGINATION_NAME.test(target.name.trim())));
 		if (!allowed) return this.refuse("browser_click", "In research mode only links, tabs and pagination buttons (Next, More, a page number) from the latest browser_snapshot can be clicked.", undefined, args);
+		if (this.apply.landing) return this.refuse("browser_click", APPLY_STOPPED, undefined, args);
+		// Quick/Easy Apply opens the board's own application flow (sign-in, a form): never followed. The lead has no original.
+		if (QUICK_APPLY_NAME.test(target.name.trim())) return this.refuse("browser_click", "That is a Quick Apply on the job board: it opens an application form, which this run never opens. Record original=quick_apply and finish.", undefined, args);
+		const followsApply = target.role === "link" && APPLY_NAME.test(target.name.trim());
 		if (this.pages >= this.host.limits.maxPages) return this.refuse("browser_click", `The run's limit of ${this.host.limits.maxPages} pages is reached. Call finish_research now.`, undefined, args);
 		const res = await this.browser.callTool("browser_click", { element: typeof args.element === "string" ? args.element : target.name, target: ref });
 		if (res.isError) return { content: [{ type: "text", text: textOf(res) }], isError: true };
@@ -384,8 +402,13 @@ export class BrowserBridge {
 		// navigate there instead — which is the path that asks the owner.
 		if (host && !this.visited.has(host) && (this.host.isDenied(host) || !this.host.isPermitted(host))) {
 			await this.browser.callTool("browser_navigate_back", {}, { internal: true }).catch(() => undefined);
+			if (followsApply && state && !this.host.isDenied(host)) {
+				this.apply = { pending: true, host };
+				return this.refuse("browser_click", `That link leads to ${host}, a site this run has not been allowed on. Open ${state.url} with browser_navigate to ask the owner; that page is where the apply link stops.`, undefined, args);
+			}
 			return this.refuse("browser_click", `That link leads to ${host}, a site this run has not been allowed on. Open it with browser_navigate to ask the owner.`, undefined, args);
 		}
+		if (followsApply) this.apply = { pending: true };
 		return this.landed(textOf(res), state, "clicked");
 	}
 
@@ -396,6 +419,13 @@ export class BrowserBridge {
 		this.pages++;
 		this.noteNavigation(state);
 		const host = hostOf(state.url) ?? "";
+		// The apply link's landing page (#1607): stop here, read-only. A page that signs in or asks for an application is
+		// still just reported — nothing is pausing for a person, filled, or opened further.
+		if (this.apply.pending && (!this.apply.host || this.apply.host === host)) {
+			this.apply = { pending: false, landing: { url: state.url, host } };
+			await this.shot("navigated", state.url);
+			return text(`${toolText}\nThis is where the apply link leads (${host}). The run stops here: take a browser_snapshot to read it, record one finding, then finish_research. Nothing further can be opened.`);
+		}
 		// Pauses, never obstacles (#947): a captcha, a sign-in, a bot check, an access-control page or a paywall is
 		// for a PERSON in the browser on this machine — the run waits, and re-checks once resumed.
 		const blocker: PersonBlocker | null = state.captcha ? "captcha" : state.login ? "login_required" : state.accessBlocked ? "access_blocked" : state.paywall ? "paywall" : null;
@@ -454,6 +484,16 @@ export class BrowserBridge {
 		const raw = args.fields && typeof args.fields === "object" && !Array.isArray(args.fields) ? (args.fields as Record<string, unknown>) : {};
 		for (const [k, v] of Object.entries(redactDetail(raw) ?? {})) {
 			if (typeof v === "string" || typeof v === "number" || typeof v === "boolean" || v === null) fields[k] = v;
+		}
+		// The original posting (#1607) is whatever page the apply link led to - observed here, never the model's claim.
+		if (fields.original === "external") {
+			if (!this.apply.landing) return text("original=external needs the page an apply link led to; none was reached. Record original=none (or quick_apply) instead.", true);
+			if (this.apply.landing.url.length > 2000) return text("The page the apply link led to has a URL too long to record. Record original=none.", true);
+			fields.original_url = this.apply.landing.url;
+			fields.original_host = this.apply.landing.host;
+		} else {
+			delete fields.original_url;
+			delete fields.original_host;
 		}
 		const finding = { title: title.slice(0, 500), url: url.slice(0, 2000), evidence: evidence.slice(0, 4000), fields };
 		this.findings.push(finding);
