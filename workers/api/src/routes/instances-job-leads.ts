@@ -6,6 +6,7 @@ import { deliverEvent } from "../lib/connections.js";
 import { listLeadVerifications, verifyLeadNow } from "../lib/job-lead-browser-verification.js";
 import { pushScoutLeadsToJobs } from "../lib/gmail-scout/jobs-push.js";
 import { readGmailScoutLeadRecords } from "../lib/gmail-scout/scan.js";
+import { rekeyApplications } from "../lib/local-artifact/store.js";
 import { intakeManualJobUrl } from "../lib/manual-job-url-intake.js";
 import { JOB_LEAD_APPLY_EVENT, type JobLeadApplyEvent } from "../lib/job-lead-triage.js";
 import type { Env } from "../types.js";
@@ -88,6 +89,17 @@ export function registerJobLeadRoutes(router: Hono<{ Bindings: Env }>): void {
 	 * never a handoff, never a submit. 422 with a reason category (never the URL) when it is not one public
 	 * posting; `dry_run` writes nothing.
 	 */
+	/**
+	 * One-off, idempotent re-key of THIS Tailor's applications to the current job identity (#1609). A dry run
+	 * unless the body says `{ "dry_run": false }`. Two applications for one job are reported, never merged.
+	 */
+	router.post("/:instanceId/job-applications/rekey", async (c) => {
+		const session = await requireUser(c);
+		const instanceId = c.req.param("instanceId");
+		await requireOwnedInstance(c.env, instanceId, session.uid);
+		const body = (await c.req.json().catch(() => ({}))) as { dry_run?: unknown };
+		return c.json({ rekey: await rekeyApplications(c.env, instanceId, session.uid, { dryRun: body.dry_run !== false }) });
+	});
 	router.post("/:instanceId/job-leads/manual-url", async (c) => {
 		const session = await requireUser(c);
 		const instanceId = c.req.param("instanceId");

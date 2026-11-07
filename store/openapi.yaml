@@ -8114,6 +8114,30 @@ paths:
         "200": { description: "`{ repair: { dryRun, scanned, rekeyed, duplicatesLinked, repostsLinked, searchPagesArchived, companiesFilled, protectedKept, truncated } }`", content: { application/json: { schema: { type: object } } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/job-applications/rekey:
+    post:
+      summary: Re-key a Tailor's applications to the current job identity
+      description: |
+        One-off, idempotent (#1609). Sets each application's `work_key` to the identity of the posting its lead
+        stored (`seek:<id>`, `indeed:<jk>`, `pageup:<host>:<id>`, else the canonical URL). A DRY RUN unless the
+        body is `{ "dry_run": false }`. Two applications for one job are reported under `collisions` and left
+        as they are: nothing is merged or deleted.
+      operationId: rekeyJobApplications
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                dry_run: { type: boolean, default: true }
+      responses:
+        "200": { description: "`{ rekey: { dryRun, scanned, rekeyed, unidentifiable, collisions: [{ workKey, applicationIds }] } }`", content: { application/json: { schema: { type: object } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /v1/instances/{instanceId}/gmail-scout/status:
     get:
       summary: Gmail Job Search Scout scan status

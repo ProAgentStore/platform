@@ -3,6 +3,7 @@
  * `instance_id` AND `user_id`, so a missed ownership check cannot become a cross-tenant read.
  */
 import type { Env } from "../../types.js";
+import { workKeyForLead } from "../job-lead-triage.js";
 import { traceUrl } from "../local-apply/contract.js";
 import {
 	LOCAL_ARTIFACT_AUTH_MODES,
@@ -337,11 +338,61 @@ export async function getApplicationByKey(env: DB, instanceId: string, userId: s
 	return row ? presentApp(row) : null;
 }
 
+/** The identity (#1606) of the posting an application was made for, from the lead it stored. */
+function leadIdentityOf(leadJson: string | null): string | null {
+	const lead = json<{ leadUrl?: string; lead?: { url?: string; source?: string } }>(leadJson);
+	return workKeyForLead({ url: lead?.leadUrl || lead?.lead?.url, source: lead?.lead?.source });
+}
+
+/**
+ * An application keyed in the pre-#1606 form (`url:<url as mailed>`) for the same posting as `workKey`.
+ * Until every row is re-keyed (see {@link rekeyApplications}) this keeps a missed row blocking a second
+ * application: `url:https://au.seek.com/job/1` is the same job as `seek:1`. Remove once migrated (#1609).
+ */
+async function legacyApplicationForWorkKey(env: DB, instanceId: string, userId: string, workKey: string): Promise<AppRow | null> {
+	const { results } = await env.DB.prepare("SELECT * FROM job_applications WHERE instance_id = ?1 AND user_id = ?2 AND work_key LIKE 'url:%' AND work_key != ?3").bind(instanceId, userId, workKey).all<AppRow>();
+	return (results ?? []).find((r) => leadIdentityOf(r.lead) === workKey) ?? null;
+}
+
 /** The other replay boundary: one posting may have many source events, but only one
  * application in the Tailor instance that owns it. */
 export async function getApplicationByWorkKey(env: DB, instanceId: string, userId: string, workKey: string): Promise<JobApplication | null> {
-	const row = await env.DB.prepare("SELECT * FROM job_applications WHERE instance_id = ?1 AND user_id = ?2 AND work_key = ?3").bind(instanceId, userId, workKey).first<AppRow>();
+	const row = (await env.DB.prepare("SELECT * FROM job_applications WHERE instance_id = ?1 AND user_id = ?2 AND work_key = ?3").bind(instanceId, userId, workKey).first<AppRow>()) ?? (await legacyApplicationForWorkKey(env, instanceId, userId, workKey));
 	return row ? presentApp(row) : null;
+}
+
+export interface ApplicationRekeyReport {
+	dryRun: boolean;
+	scanned: number;
+	rekeyed: number;
+	/** Applications whose lead gives no identity: left alone. */
+	unidentifiable: number;
+	/** Two applications for one job: both left as they are. Never merged or deleted. */
+	collisions: Array<{ workKey: string; applicationIds: string[] }>;
+}
+
+/**
+ * Re-key one Tailor's applications to the current job identity (#1609). Idempotent. Two applications
+ * that resolve to one key are reported and left untouched.
+ */
+export async function rekeyApplications(env: DB, instanceId: string, userId: string, opts: { dryRun: boolean }): Promise<ApplicationRekeyReport> {
+	const { results } = await env.DB.prepare("SELECT id, work_key, lead FROM job_applications WHERE instance_id = ?1 AND user_id = ?2").bind(instanceId, userId).all<{ id: string; work_key: string | null; lead: string | null }>();
+	const rows = results ?? [];
+	const report: ApplicationRekeyReport = { dryRun: opts.dryRun, scanned: rows.length, rekeyed: 0, unidentifiable: 0, collisions: [] };
+	const target = rows.map((r) => ({ ...r, next: leadIdentityOf(r.lead) }));
+	const byKey = new Map<string, string[]>();
+	for (const r of target) if (r.next) byKey.set(r.next, [...(byKey.get(r.next) ?? []), r.id]);
+	for (const [workKey, applicationIds] of byKey) if (applicationIds.length > 1) report.collisions.push({ workKey, applicationIds });
+	for (const r of target) {
+		if (!r.next) {
+			report.unidentifiable++;
+			continue;
+		}
+		if (r.work_key === r.next || (byKey.get(r.next)?.length ?? 0) > 1) continue;
+		report.rekeyed++;
+		if (!opts.dryRun) await env.DB.prepare("UPDATE job_applications SET work_key = ?1 WHERE id = ?2 AND instance_id = ?3 AND user_id = ?4").bind(r.next, r.id, instanceId, userId).run();
+	}
+	return report;
 }
 
 export async function listApplications(env: DB, instanceId: string, userId: string, opts: { status?: ApplicationStatus; limit: number }): Promise<JobApplication[]> {
@@ -376,6 +427,9 @@ export async function claimApplication(
 		now: number;
 	},
 ): Promise<{ created: boolean; app: JobApplication }> {
+	// A pre-#1609 row for this same posting still counts: a second application must not start beside it.
+	const legacy = a.workKey ? await legacyApplicationForWorkKey(env, a.instanceId, a.userId, a.workKey) : null;
+	if (legacy) return { created: false, app: presentApp(legacy) };
 	const res = await env.DB.prepare(
 		`INSERT INTO job_applications (id, instance_id, user_id, source_instance_id, lead_id, lifecycle_version, idempotency_key, work_key, status, lead, block_reason, block_questions, created_at, updated_at)
 		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)
