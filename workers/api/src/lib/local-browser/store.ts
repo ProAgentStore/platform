@@ -6,6 +6,7 @@
 import type { Env } from "../../types.js";
 import { closeLiveTakeoverFor } from "../browser-takeovers.js";
 import { sqlLiteralList } from "../sql.js";
+import { recordTriggerRunOutcome } from "./trigger-outcome.js";
 import { type LocalBrowserEvent, type LocalBrowserPlatformEventType, type LocalBrowserResultEnvelope, traceUrl } from "./contract.js";
 import { ACTIVE_RUN_STATUSES, SLOT_HOLDING_STATUSES, type EffectiveLocalBrowserPolicy, type LocalBrowserRunStatus, type LocalBrowserSettings, canTransition } from "./policy.js";
 
@@ -238,7 +239,12 @@ export async function transitionLocalBrowserRun(env: DB, instanceId: string, use
 	// and any end closes it. Best-effort: a takeover row never blocks the run it describes.
 	if (run.status === "paused" && t.to === "running") await closeLiveTakeoverFor(env, userId, instanceId, "local_browser_run", runId, "resumed", now).catch(() => undefined);
 	else if (terminal) await closeLiveTakeoverFor(env, userId, instanceId, "local_browser_run", runId, "ended", now, "run_finished").catch(() => undefined);
-	return getLocalBrowserRun(env, instanceId, userId, runId);
+	const after = await getLocalBrowserRun(env, instanceId, userId, runId);
+	// A scheduled run's outcome lands on the trigger that started it (#1582). Best-effort, like the takeover.
+	if (after && (t.to === "completed" || t.to === "failed" || t.to === "cancelled")) {
+		await recordTriggerRunOutcome(env, { id: runId, instanceId, userId }, { status: t.to, errorCode: after.errorCode, error: after.error }).catch(() => undefined);
+	}
+	return after;
 }
 
 // ── Events ───────────────────────────────────────────────────────────────────────────────────
