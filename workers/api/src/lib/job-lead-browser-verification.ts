@@ -26,6 +26,7 @@ export { originalFromRun };
 import { deliverEvent } from "./connections.js";
 import { getLocalBrowserRun, listDomainConsent, type LocalBrowserRun, readLocalBrowserSettings } from "./local-browser/store.js";
 import { localBrowserCapability, startLocalBrowserRun } from "./local-browser/start.js";
+import { websiteAccessForInstance } from "./browser-settings-dispatch.js";
 import { domainWithin, effectiveLocalBrowserPolicy, type LocalBrowserCapability } from "./local-browser/policy.js";
 import { agentName } from "./local-browser/sync.js";
 import { notifyUser } from "../routes/push.js";
@@ -350,8 +351,24 @@ async function siteDecision(env: Env, row: LeadRow, cap: LocalBrowserCapability,
 	const host = hostOf(row.canonical_url);
 	if (!host) return { kind: "refused", detail: "The posting has no site the browser could open.", why: "the posting has no readable site" };
 	const { settings } = await readLocalBrowserSettings(env, row.instance_id, row.user_id);
-	const policy = effectiveLocalBrowserPolicy(cap, settings);
+	// Website access (Browser settings), when set, replaces the legacy site lists and consent for this gate, as it does for
+	// the run it gates (#1615). Read once, exactly as `startLocalBrowserRun` reads it, so gate and run cannot disagree.
+	let access: Awaited<ReturnType<typeof websiteAccessForInstance>>;
+	try {
+		access = await websiteAccessForInstance(env, row.user_id, row.instance_id);
+	} catch (e) {
+		return { kind: "invalid", error: e instanceof Error ? e.message : "Website access settings could not be read." };
+	}
+	const policy = effectiveLocalBrowserPolicy(cap, settings, access);
 	if ("error" in policy) return { kind: "invalid", error: policy.error };
+	if (access) {
+		// The runner's own rule, exact hosts: a listed host is open; allowlist refuses the rest; ask_once honours a
+		// remembered deny, and opens an undecided host so the run's own website question asks the owner.
+		if (access.mode === "allow_all" || access.domains.includes(host)) return { kind: "open", host };
+		if (access.mode === "allowlist") return { kind: "refused", detail: `${host} is not on this Scout's Website access list (Browser settings).`, why: `${host} is not on the Website access list` };
+		if (access.deniedDomains?.includes(host)) return { kind: "refused", detail: `You declined ${host} in this Scout's Website access (Browser settings).`, why: `you declined ${host} in Website access` };
+		return { kind: "open", host };
+	}
 	if (policy.denyDomains.some((d) => domainWithin(host, d))) {
 		return { kind: "refused", detail: `${host} is on this Scout's denied sites.`, why: `${host} is on this Scout's denied sites` };
 	}

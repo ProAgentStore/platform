@@ -443,6 +443,80 @@ describe("the Scout's browser source policy is the instance's own (#1049)", () =
 	});
 });
 
+describe("browser verification's site gate follows Browser settings → Website access when it is set (#1615)", () => {
+	const SEEK = "https://www.seek.com.au/job/81234567";
+	const takeovers = () => d1.sqlite.prepare("SELECT subject_id FROM browser_takeovers WHERE instance_id = 's1'").all();
+	const setAccess = (access: Record<string, unknown>) => d1.exec(`UPDATE agent_instances SET config = json_set(config, '$.browserWebsiteAccess', json('${JSON.stringify(access)}')) WHERE id = 's1'`);
+	const grant = (host: string, decision: "allow" | "deny") => d1.exec(`INSERT INTO website_access_requests (id, user_id, instance_id, subject_kind, subject_id, hostname, pause_key, status, created_at) VALUES ('r-${host}', 'u1', 's1', 'local_browser_run', 'run-0', '${host}', 'pk', '${decision === "allow" ? "approved" : "denied"}', 1);
+		INSERT INTO website_access_grants (user_id, instance_id, hostname, decision, request_id, decided_at) VALUES ('u1', 's1', '${host}', '${decision}', 'r-${host}', 1)`);
+	const verifyAt = async (url: string, now = 2_000) => {
+		await d1.DB.prepare("UPDATE job_lead_browser_verifications SET state = 'awaiting', attempts = 0, next_attempt_at = 0, canonical_url = ?1").bind(url).run();
+		await runLeadBrowserVerification(env, now);
+	};
+	const refusal = async () => (await listLeadVerifications(env, "s1", "u1")).attempts[0];
+
+	it("allow_all opens a site that has no consent decision, with no takeover", async () => {
+		d1.exec("DELETE FROM local_browser_domain_consent");
+		setAccess({ mode: "allow_all", domains: [] });
+		await verifyAt(SEEK);
+		expect(started).toHaveLength(1);
+		expect(takeovers()).toEqual([]);
+	});
+
+	it("the hidden legacy lists no longer apply: a Never-visit host opens under allow_all", async () => {
+		d1.exec(`UPDATE agent_instances SET config = json_set(config, '$.localBrowser', json('{"access":{"denyDomains":["seek.com.au"]}}')) WHERE id = 's1'`);
+		setAccess({ mode: "allow_all", domains: [] });
+		await verifyAt(SEEK);
+		expect(started).toHaveLength(1);
+	});
+
+	it("allowlist: a listed host opens; any other is refused, naming Website access", async () => {
+		setAccess({ mode: "allowlist", domains: ["www.seek.com.au"] });
+		await verifyAt(SEEK);
+		expect(started).toHaveLength(1);
+		await verifyAt(CANONICAL, 3_000);
+		expect(started).toHaveLength(1);
+		const a = await refusal();
+		expect(a).toMatchObject({ state: "refused", detail: expect.stringMatching(/au\.indeed\.com is not on this Scout's Website access list \(Browser settings\)/) });
+		expect(a.detail).not.toMatch(/Local browser research/);
+		expect(takeovers()).toEqual([]);
+	});
+
+	it("ask_once: a remembered allow opens", async () => {
+		d1.exec("DELETE FROM local_browser_domain_consent");
+		setAccess({ mode: "ask_once", domains: [] });
+		grant("www.seek.com.au", "allow");
+		await verifyAt(SEEK);
+		expect(started).toHaveLength(1);
+		expect(takeovers()).toEqual([]);
+	});
+
+	it("ask_once: a remembered deny is refused, naming Website access, and nothing is opened", async () => {
+		setAccess({ mode: "ask_once", domains: [] });
+		grant("www.seek.com.au", "deny");
+		await verifyAt(SEEK);
+		expect(started).toEqual([]);
+		expect(await refusal()).toMatchObject({ state: "refused", detail: expect.stringMatching(/You declined www\.seek\.com\.au in this Scout's Website access \(Browser settings\)/) });
+		expect(takeovers()).toEqual([]);
+	});
+
+	it("ask_once: an undecided host is opened (the run itself asks the owner); no site-consent takeover is made", async () => {
+		d1.exec("DELETE FROM local_browser_domain_consent");
+		setAccess({ mode: "ask_once", domains: [] });
+		await verifyAt(SEEK);
+		expect(started).toHaveLength(1);
+		expect(takeovers()).toEqual([]);
+		expect(pushes).toEqual([]);
+	});
+
+	it("with Website access unset the legacy consent flow is unchanged", async () => {
+		d1.exec("DELETE FROM local_browser_domain_consent");
+		await verifyAt(SEEK);
+		expect(started).toEqual([]);
+		expect(takeovers()).toEqual([{ subject_id: "site-consent:www.seek.com.au" }]);
+	});
+});
+
 describe("#1050: a LinkedIn Gmail alert reaches the owner's per-site consent with its canonical posting only", () => {
 	const LI = "https://www.linkedin.com/jobs/view/4012345678";
 	const link = "https://www.linkedin.com/comm/jobs/view/4012345678/?trackingId=SECRETTRACK&amp;midToken=SECRETMID&amp;otpToken=SECRETOTP";
