@@ -41,6 +41,10 @@ describe("buildConsoleLink", () => {
 		}
 	});
 
+	it("links the Permissions tab for any instance", () => {
+		expect(ok({ kind: "section", section: "permissions" }, { surfaces: [] }).path).toBe("/console/instances/inst_1/permissions");
+	});
+
 	it("builds the canonical Files uploader link only when the instance can read uploaded files", () => {
 		const link = ok({ kind: "filesUpload" }, REPO_CHAT);
 		expect(link.path).toBe("/console/instances/inst_1/knowledge?subtab=files");

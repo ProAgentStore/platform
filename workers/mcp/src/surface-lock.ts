@@ -1283,4 +1283,5 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.214": "sha256:64f273031437613ef56a51d9469d003c0c0b3adde2d512e9ef59848e987897ce", // #1610: repair_job_leads and rekey_job_applications, the one-off job identity repairs, dry run by default and confirm-gated.
 	"0.1.215": "sha256:7d281b6d09380163faaab49b41034be42813ffee88a9299fd982cd378e0a7285", // #1608: create_instance_trigger accepts find_original_posting (the Original Finder connection action); no tool added.
 	"0.1.216": "sha256:2c4367f822b9856e3ac33397b3108c228f24686721f9cd76269a07b084daf1e1", // #1611: repair_job_leads takes scope=infrastructure_failures, which reopens leads closed only by an engine usage limit or an overloaded runner.
+	"0.1.217": "sha256:b9332a60139bc2f1bb038000aff061f8c4438089a13044ea8c67ff0fdb3ccf3e", // #1600: get_console_link section argument lists every console tab (adds research, applications, permissions); no tool added.
 };

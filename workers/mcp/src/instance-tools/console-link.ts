@@ -23,7 +23,7 @@ export function registerConsoleLinkTools(server: McpServer, ctx: InstanceToolsCt
 			section: z
 				.string()
 				.optional()
-				.describe("A console tab: chat, apply, board, repo, coding, tmux, activity, stats, knowledge, behaviour, feedback, indexing, data or settings."),
+				.describe("A console tab: chat, apply, board, repo, coding, tmux, research, applications, activity, stats, knowledge, behaviour, feedback, indexing, data, settings or permissions."),
 			target: z.literal("files-upload").optional().describe("The eligible Knowledge → Files uploader. Its link never contains an upload token or credential."),
 			run_id: z.string().optional().describe("A loop run id, as coding_loop_start or coding_loop_status returned it. A coding run opens its session; a chat run opens the Assistant."),
 			task_id: z.string().optional().describe("A runtime task id from instance_board or get_instance_task — opens the task's own page."),

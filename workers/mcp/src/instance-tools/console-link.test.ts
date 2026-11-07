@@ -3,6 +3,8 @@
  * The link itself is built and checked API-side (`lib/console-deep-link.ts`).
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
+// Test-only import: the MCP worker cannot import workers/api at runtime (workers/mcp/CLAUDE.md), a test can.
+import { CONSOLE_SECTIONS } from "../../../api/src/lib/console-deep-link.js";
 import type { McpEnv } from "../http.js";
 import type { SafetyContext } from "../safety.js";
 import { registerConsoleLinkTools } from "./console-link.js";
@@ -48,6 +50,13 @@ describe("get_console_link (#938)", () => {
 		expect(seen[0]).toBe("https://api.test/v1/instances/i1/console-link?permission_request_id=pr+1");
 	});
 
+	it("forwards section=permissions to the console-link route", async () => {
+		const link = { url: "https://proagentstore.online/console/instances/i1/permissions", path: "/console/instances/i1/permissions", lands: "the Permissions tab" };
+		const { seen, call } = getConsoleLink({ status: 200, body: link });
+		expect(JSON.parse(await call({ instance_id: "i1", section: "permissions" }))).toEqual(link);
+		expect(seen).toEqual(["https://api.test/v1/instances/i1/console-link?section=permissions"]);
+	});
+
 	it("returns the API-verified Files uploader link through the read-only console-link tool", async () => {
 		const link = {
 			url: "https://proagentstore.online/console/instances/i1/knowledge?subtab=files",
@@ -63,6 +72,25 @@ describe("get_console_link (#938)", () => {
 	it("reports the API's refusal as an error rather than a link", async () => {
 		const { call } = getConsoleLink({ status: 400, body: { error: "This instance does not show the Coding tab" } });
 		expect(await call({ instance_id: "i1", section: "coding" })).toMatch(/^Error: This instance does not show the Coding tab/);
+	});
+});
+
+describe("get_console_link section description", () => {
+	it("lists exactly the ids in CONSOLE_SECTIONS, read from the registered tool schema", () => {
+		let schema: Record<string, { description?: string }> | undefined;
+		const env: McpEnv = { API_BASE: "https://api.test" };
+		registerConsoleLinkTools(
+			{
+				tool: (name: string, _d: string, s: Record<string, { description?: string }>) => {
+					if (name === "get_console_link") schema = s;
+				},
+			} as never,
+			{ env, tokenFor: () => "t", safetyFor: (): SafetyContext => ({ env, subject: "user-1", scopes: ["read"] }), groups: new Set() },
+		);
+		const description = schema?.section?.description ?? "";
+		expect(description).not.toBe("");
+		const listed = description.replace(/^[^:]*:\s*/, "").replace(/\.$/, "").split(/,\s*|\s+or\s+/).filter(Boolean);
+		expect(listed.sort()).toEqual(CONSOLE_SECTIONS.map((s) => s.id).sort());
 	});
 });
 
