@@ -216,6 +216,11 @@ const EXCLUSIONS = [
 // nothing fails. Each group carries the issue tracking it where one exists.
 // ─────────────────────────────────────────────────────────────────────────────
 const KNOWN_GAPS = [
+	{
+		label: "Read one collection record by id (#1602)",
+		why: "The console's Data tab opens one job lead from a decision push's deep link (`?lead=<id>`) with a direct read. MCP reads records with `query_instance_records`, which filters on field values, not on the record id, so there is no read-one-by-id tool yet.",
+		match: /^GET \/v1\/instances\/\{\}\/collections\/\{\}\/records\/\{\}$/,
+	},
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
