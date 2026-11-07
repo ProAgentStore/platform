@@ -115,12 +115,13 @@ function trackedState(lead: JobsLead, data: Record<string, unknown>, submitted =
 	return { ...(lead.location ? { location: lead.location } : {}), ...(lead.verification_state ? { verification_state: lead.verification_state } : {}), ...(lead.verified_at ? { verified_at: lead.verified_at } : {}), decision: lead.decision, ...(reason ? { no_original_reason: reason } : {}) };
 }
 
-/** The first row of a Jobs query result, whatever envelope the MCP server wraps it in. */
+/**
+ * The first row of a Jobs query tool's result. The MCP server answers a query with the rows as a JSON array text
+ * (pas/platform packages/mcp tool-loader.ts: `JSON.stringify(rows)`), which `mcp_call_tool` parses to an array; no rows is the
+ * text "No results found." - a string here.
+ */
 function firstRow(data: unknown): Record<string, unknown> | null {
-	if (Array.isArray(data)) return record(data[0]).id ? record(data[0]) : null;
-	const o = record(data);
-	for (const key of ["rows", "results", "data", "result"]) if (o[key] !== undefined) return firstRow(o[key]);
-	return o.id ? o : null;
+	return Array.isArray(data) && record(data[0]).id ? record(data[0]) : null;
 }
 
 const failed = (env: Env, userId: string, instanceId: string, event: string, message: string) => logEvent(env, { source: "jobs-push", event, level: "warn", userId, instanceId, message }).catch(() => undefined);

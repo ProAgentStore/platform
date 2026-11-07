@@ -189,6 +189,16 @@ export function hostOf(raw: string): string | null {
 	}
 }
 
+/** An anchor's href as an absolute http(s) URL against the page it is on, or null. */
+function resolveHref(href: string, base: string): string | null {
+	try {
+		const u = new URL(href, base);
+		return u.protocol === "https:" || u.protocol === "http:" ? u.href : null;
+	} catch {
+		return null;
+	}
+}
+
 export function domainWithin(host: string, base: string): boolean {
 	return host === base || host.endsWith(`.${base}`);
 }
@@ -226,6 +236,20 @@ export function refRole(snapshot: string, ref: string): { role: string; name: st
 		if (!line.includes(`[ref=${ref}]`)) continue;
 		const m = line.match(/^\s*-\s*([a-z]+)(?:\s+"([^"]*)")?/i);
 		return m ? { role: m[1].toLowerCase(), name: m[2] ?? "" } : null;
+	}
+	return null;
+}
+
+/** The `/url:` the snapshot lists under a link line, e.g. `- link "Apply" [ref=e5]:` then `  - /url: https://...`. Null when it lists none. */
+export function refHref(snapshot: string, ref: string): string | null {
+	const lines = snapshot.split("\n");
+	const i = lines.findIndex((l) => l.includes(`[ref=${ref}]`));
+	if (i < 0) return null;
+	const indent = lines[i].length - lines[i].trimStart().length;
+	for (const line of lines.slice(i + 1)) {
+		if (line.length - line.trimStart().length <= indent) break;
+		const m = line.match(/^\s*-\s*\/url:\s*(\S+)/);
+		if (m) return m[1].replace(/^["']|["']$/g, "");
 	}
 	return null;
 }
@@ -379,6 +403,10 @@ export class BrowserBridge {
 		const related = (a: string, b: string) => domainWithin(a, b) || domainWithin(b, a);
 		if (landedOn && !related(landedOn, host) && (this.host.isDenied(landedOn) || !this.host.isPermitted(landedOn))) {
 			await this.browser.callTool("browser_navigate_back", {}, { internal: true }).catch(() => undefined);
+			if (this.apply.pending && state && !this.host.isDenied(landedOn)) {
+				this.apply = { pending: true, host: landedOn };
+				return this.refuse("browser_navigate", `The apply link leads to ${landedOn}, a site this run has not been allowed on. Open ${state.url} with browser_navigate to ask the owner; that page is where the apply link stops.`, undefined, { url });
+			}
 			return this.refuse("browser_navigate", `${host} redirected to ${landedOn}, a site this run has not been allowed on. Open ${landedOn} with browser_navigate to ask the owner, or skip it.`, undefined, { url });
 		}
 		return this.landed(textOf(res), state, "navigated");
@@ -394,6 +422,14 @@ export class BrowserBridge {
 		if (QUICK_APPLY_NAME.test(target.name.trim())) return this.refuse("browser_click", "That is a Quick Apply on the job board: it opens an application form, which this run never opens. Record original=quick_apply and finish.", undefined, args);
 		const followsApply = target.role === "link" && APPLY_NAME.test(target.name.trim());
 		if (this.pages >= this.host.limits.maxPages) return this.refuse("browser_click", `The run's limit of ${this.host.limits.maxPages} pages is reached. Call finish_research now.`, undefined, args);
+		// An external Apply is usually `target="_blank"`: clicking it opens a NEW tab this bridge would never look at. The anchor's href is
+		// in the snapshot, so the CURRENT tab is sent to it instead (read-only, redirects followed) - same consent, same stop.
+		if (followsApply) {
+			const href = refHref(this.lastSnapshot, ref);
+			const here = href ? await this.inspect() : null;
+			const to = href && here ? resolveHref(href, here.url) : null;
+			if (to) return this.followApply(to);
+		}
 		const res = await this.browser.callTool("browser_click", { element: typeof args.element === "string" ? args.element : target.name, target: ref });
 		if (res.isError) return { content: [{ type: "text", text: textOf(res) }], isError: true };
 		const state = await this.inspect();
@@ -410,6 +446,15 @@ export class BrowserBridge {
 		}
 		if (followsApply) this.apply = { pending: true };
 		return this.landed(textOf(res), state, "clicked");
+	}
+
+	/** Open an apply link's destination in the current tab; whatever it lands on (after redirects) is the landing page. */
+	private async followApply(url: string): Promise<ToolResult> {
+		this.apply = { pending: true };
+		const out = await this.navigate(url);
+		// Not reached (refused, errored): nothing is pending - except a site waiting for the owner's consent, which `navigate` names.
+		if (this.apply.pending && !this.apply.host) this.apply = { pending: false };
+		return out;
 	}
 
 	/** After a page change: count it, trace it, and stop for a person when the page needs one. */

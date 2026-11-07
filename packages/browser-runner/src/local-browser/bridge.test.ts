@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { LocalBrowserEvent, LocalBrowserLimits } from "./contract.js";
-import { type BridgeHost, BrowserBridge, type BrowserTools, evaluateResult, refRole } from "./bridge.js";
+import { type BridgeHost, BrowserBridge, type BrowserTools, evaluateResult, refHref, refRole } from "./bridge.js";
 
 interface PageFlags {
 	captcha?: boolean;
@@ -394,5 +394,66 @@ describe("following a job board's Apply link to the original posting (#1607)", (
 		await b.callTool("record_finding", { title: "Platform Engineer", url: SEEK, evidence: "x", fields: { original: "quick_apply", original_url: ATS } });
 		expect(b.findings).toHaveLength(1);
 		expect(b.findings[0].fields).toEqual({ original: "quick_apply" });
+	});
+
+	describe("an Apply anchor with target=_blank (opens a new tab the bridge would not inspect)", () => {
+		const withHref = (name: string, href: string) => `- heading "Platform Engineer" [ref=e0]\n- link "${name}" [ref=e5] [cursor=pointer]:\n  - /url: ${href}\n- link "Other" [ref=e6]:\n  - /url: /job/9`;
+
+		it("navigates the CURRENT tab to the anchor's href instead of clicking it, and stops on the landing page", async () => {
+			const fb = fakeBrowser(seekPage, { snapshot: withHref("Apply", ATS) });
+			const b = new BrowserBridge(fb.tools, fakeHost({ allow: ["seek.com.au", "smartrecruiters.com"] }).host);
+			await open(b);
+			const landed = await b.callTool("browser_click", { target: "e5" });
+			expect(textOf(landed)).toMatch(/run stops here/);
+			expect(fb.calls.some((c) => c.name === "browser_click")).toBe(false);
+			expect(fb.calls.find((c) => c.name === "browser_navigate" && c.args.url === ATS)).toBeDefined();
+			await b.callTool("record_finding", { title: "Platform Engineer", url: ATS, evidence: "x", fields: { original: "external" } });
+			expect(b.findings[0].fields.original_url).toBe(ATS);
+			expect(textOf(await b.callTool("browser_navigate", { url: SEEK }))).toMatch(/stopped at the page/);
+		});
+
+		it("resolves a relative href and follows its redirect off the board", async () => {
+			const fb = fakeBrowser(seekPage, { snapshot: withHref("Apply on company site", "/job/12345678/apply/redirect"), redirect: { "https://www.seek.com.au/job/12345678/apply/redirect": ATS } });
+			const b = new BrowserBridge(fb.tools, fakeHost({ allow: ["seek.com.au", "smartrecruiters.com"] }).host);
+			await open(b);
+			expect(textOf(await b.callTool("browser_click", { target: "e5" }))).toMatch(/run stops here/);
+			expect(fb.calls.some((c) => c.name === "browser_click")).toBe(false);
+			await b.callTool("record_finding", { title: "Platform Engineer", url: ATS, evidence: "x", fields: { original: "external" } });
+			expect(b.findings[0].fields.original_host).toBe("careers.smartrecruiters.com");
+		});
+
+		it("an href to a site not yet allowed asks the owner, and the landing is still the stop", async () => {
+			const fb = fakeBrowser(seekPage, { snapshot: withHref("Apply", ATS) });
+			const { host, events } = fakeHost({ consented: ["seek.com.au"], pause: () => "resumed", onPause: () => host.consented.add("smartrecruiters.com") });
+			const b = new BrowserBridge(fb.tools, host);
+			await open(b);
+			expect(textOf(await b.callTool("browser_click", { target: "e5" }))).toMatch(/run stops here/);
+			expect(events.some((e) => e.type === "run.paused" && e.pauseReason === "consent_required")).toBe(true);
+			expect(events.some((e) => e.type === "run.paused" && e.pauseReason === "login_required")).toBe(false);
+		});
+
+		it("an owner who declines the site leaves nothing pending: a later navigation is not mistaken for the landing", async () => {
+			const fb = fakeBrowser(seekPage, { snapshot: withHref("Apply", ATS) });
+			const b = new BrowserBridge(fb.tools, fakeHost({ consented: ["seek.com.au"], pause: () => "stopped" }).host);
+			await open(b);
+			expect((await b.callTool("browser_click", { target: "e5" })).isError).toBe(true);
+			const next = await b.callTool("browser_navigate", { url: SEEK });
+			expect(textOf(next)).not.toMatch(/run stops here/);
+		});
+
+		it("Quick apply with an href is still never followed", async () => {
+			const fb = fakeBrowser(seekPage, { snapshot: withHref("Quick apply", "/job/12345678/apply") });
+			const b = new BrowserBridge(fb.tools, fakeHost({ allow: ["seek.com.au"] }).host);
+			await open(b);
+			expect((await b.callTool("browser_click", { target: "e5" })).isError).toBe(true);
+			expect(fb.calls.filter((c) => c.name === "browser_navigate")).toHaveLength(1);
+		});
+
+		it("refHref reads the url under the link, not a later link's", () => {
+			const snap = withHref("Apply", ATS);
+			expect(refHref(snap, "e5")).toBe(ATS);
+			expect(refHref(snap, "e6")).toBe("/job/9");
+			expect(refHref(snap, "e0")).toBeNull();
+		});
 	});
 });

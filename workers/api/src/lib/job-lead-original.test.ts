@@ -30,7 +30,7 @@ vi.mock("./jobs-app.js", () => ({
 	callJobsTool: async (_e: unknown, _w: unknown, tool: string, args: Record<string, unknown>) => {
 		jobs.calls.push({ tool, args });
 		if (jobs.fail) return { ok: false, reason: "failed", detail: "Jobs is down" };
-		return tool === "get_my_lead_by_url" ? { ok: true, data: { rows: [{ id: "jl-1", status: jobs.leadStatus }] } } : { ok: true };
+		return tool === "get_my_lead_by_url" ? { ok: true, data: [{ id: "jl-1", status: jobs.leadStatus }] } : { ok: true };
 	},
 }));
 vi.mock("./connections.js", async (importOriginal) => ({
