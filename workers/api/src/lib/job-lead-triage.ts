@@ -20,14 +20,15 @@
  * has moved since is refused as stale rather than applied to a state nobody looked at.
  */
 import type { CollectionRecord } from "../agent-storage-types.js";
+import { providerPostingUrl } from "./gmail-scout/provider-redirect.js";
 
 export const JOB_LEAD_COLLECTION = "job_leads";
 export const JOB_LEAD_APPLY_EVENT = "job.lead.apply_requested";
 /** Emitted (#1607) when a lead the browser verified live has no original posting to publish: a Quick Apply, or no outbound apply link. */
 export const JOB_LEAD_ORIGINAL_MISSING_EVENT = "job.lead.original_missing";
 
-/** Query keys mailers add for attribution rather than job identity. */
-const JOB_URL_TRACKING_KEY = /^(utm_|mc_|ref$|source$|trk$|campaign$|token$)/i;
+/** Query keys mailers add for attribution rather than job identity (#1606: PageUp's `eid`, `refid`, `from`, `locale`). */
+const JOB_URL_TRACKING_KEY = /^(utm_|mc_|ref$|source$|trk$|campaign$|token$|eid$|refid$|from$|locale$)/i;
 
 /**
  * The URL form used for every job-lead identity, whether it arrived from a browser Scout or a
@@ -38,6 +39,8 @@ export function canonicalJobUrl(value: string): string | null {
 	try {
 		const url = new URL(value.trim());
 		if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+		// One job is one identity whichever scheme the mailer linked it with (#1606).
+		url.protocol = "https:";
 		url.hash = "";
 		for (const key of [...url.searchParams.keys()]) if (JOB_URL_TRACKING_KEY.test(key)) url.searchParams.delete(key);
 		url.searchParams.sort();
@@ -281,24 +284,47 @@ export function jobIdentity(data: Record<string, unknown>): string | null {
 		return `id:${source}:${String(jobId).trim()}`;
 	}
 	if (typeof data.url !== "string" || !data.url.trim()) return null;
-	return `url:${canonicalJobUrl(data.url) ?? data.url.trim()}`;
+	return jobPostingIdentity(data.url)?.key ?? `url:${data.url.trim()}`;
 }
 
 /**
- * The durable per-owner work key.  SEEK's numeric posting id is stable across its job and apply
- * URLs; other sources retain the canonical specific posting URL.  It intentionally returns null
+ * THE job identity (#1606), used for `work_key`, duplicate detection and the URL sent to the Jobs app.
+ * `key` says which job; `url` is the one form of its link every caller uses.
+ *   - SEEK: `seek:<id>` (the job id, whichever of its links the mail used)
+ *   - Indeed: `indeed:<jk>`
+ *   - PageUp-style `/job/<slug>/<numericId>`: `pageup:<host>:<id>` (the slug varies, the id does not)
+ *   - anything else: `url:<canonical url>` (https, no fragment, no tracking parameters, no trailing slash)
+ * Null when the value is not an http(s) URL.
+ */
+export function jobPostingIdentity(rawUrl: string): { key: string; url: string } | null {
+	const canonical = canonicalJobUrl(rawUrl);
+	if (!canonical) return null;
+	const url = new URL(canonical);
+	const posting = providerPostingUrl(canonical);
+	if (posting) {
+		const p = new URL(posting);
+		const jk = p.searchParams.get("jk");
+		if (jk) return { key: `indeed:${jk}`, url: posting };
+		const seek = p.pathname.match(/^\/job\/(\d+)$/)?.[1];
+		if (seek && /(^|\.)seek\./i.test(p.hostname)) return { key: `seek:${seek}`, url: posting };
+		return { key: `url:${posting}`, url: posting };
+	}
+	if (/(^|\.)seek\.com\.au$/i.test(url.hostname)) {
+		const id = url.pathname.match(/\/(?:job|jobs)\/(\d+)(?:\/|$)/i)?.[1] ?? url.searchParams.get("jobId")?.match(/^\d+$/)?.[0];
+		if (id) return { key: `seek:${id}`, url: `https://${url.hostname}/job/${id}` };
+	}
+	const pageUp = url.pathname.match(/^\/job\/[^/]+\/(\d{5,})$/)?.[1];
+	if (pageUp) return { key: `pageup:${url.hostname.toLowerCase()}:${pageUp}`, url: canonical };
+	return { key: `url:${canonical}`, url: canonical };
+}
+
+/**
+ * The durable per-owner work key: {@link jobPostingIdentity}'s key. It intentionally returns null
  * for malformed/non-specific records rather than inventing an identity from an email title/date.
  */
 export function workKeyForLead(data: Record<string, unknown>): string | null {
-	const rawUrl = typeof data.url === "string" ? canonicalJobUrl(data.url) : null;
-	if (rawUrl) {
-		const url = new URL(rawUrl);
-		if (/(^|\.)seek\.com\.au$/i.test(url.hostname)) {
-			const id = url.pathname.match(/\/(?:job|jobs)\/(\d+)(?:\/|$)/i)?.[1] ?? url.searchParams.get("jobId")?.match(/^\d+$/)?.[0];
-			if (id) return `seek:${id}`;
-		}
-		return `url:${rawUrl}`;
-	}
+	const identity = typeof data.url === "string" ? jobPostingIdentity(data.url) : null;
+	if (identity) return identity.key;
 	const jobId = data.job_id ?? data.jobId;
 	const source = typeof data.source === "string" ? data.source.trim().toLowerCase().replace(/\s+/g, "_") : "";
 	if (((typeof jobId === "string" && jobId.trim()) || typeof jobId === "number") && source) {

@@ -8090,6 +8090,30 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { description: "The Gmail source is disabled or not configured; `{ error, receipt }` with the failed receipt." }
         "502": { description: "The mailbox could not be read; `{ error, receipt }` with the failed receipt." }
+  /v1/instances/{instanceId}/gmail-scout/repair-leads:
+    post:
+      summary: Repair a Scout's stored job leads to the current identity rules
+      description: |
+        One-off, idempotent repair (#1606). Re-keys leads (https, tracking parameters stripped, SEEK/Indeed/PageUp
+        ids), links duplicates and reposts to the first lead and archives them, archives search-result pages, and
+        fills the employer of careers-site leads. A DRY RUN unless the body is `{ "dry_run": false }`; both
+        return the counts. A second real run changes nothing.
+      operationId: repairGmailScoutLeads
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                dry_run: { type: boolean, default: true }
+      responses:
+        "200": { description: "`{ repair: { dryRun, scanned, rekeyed, duplicatesLinked, repostsLinked, searchPagesArchived, companiesFilled, protectedKept, truncated } }`", content: { application/json: { schema: { type: object } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /v1/instances/{instanceId}/gmail-scout/status:
     get:
       summary: Gmail Job Search Scout scan status

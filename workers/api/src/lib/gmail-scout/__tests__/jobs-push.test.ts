@@ -8,7 +8,7 @@ import type { GmailMessage } from "../../gmail.js";
 import type { Env } from "../../../types.js";
 
 const calls: Array<{ tool: string; args: Record<string, unknown>; instanceId: string }> = [];
-let outcome: { ok: true } | { ok: false; reason: "failed" | "no_grant"; detail: string } = { ok: true };
+let outcome: { ok: true } | { ok: false; reason: "failed" | "no_grant" | "not_connected"; detail: string } = { ok: true };
 vi.mock("../../jobs-app.js", () => ({
 	callJobsTool: async (_env: unknown, who: { instanceId: string }, tool: string, args: Record<string, unknown>) => {
 		calls.push({ tool, args, instanceId: who.instanceId });
@@ -90,6 +90,15 @@ describe("Scout leads pushed to Jobs", () => {
 		await scan([]);
 		expect(calls).toHaveLength(2);
 		expect(leads[0].data.jobs_pushed_at).toBeTypeOf("number");
+	});
+
+	it("the receipt carries the push outcome, including an unconnected Jobs account (#1605)", async () => {
+		outcome = { ok: false, reason: "not_connected", detail: "No credential" };
+		const failed = await scan([JOB]);
+		expect(failed.receipt.jobsPush).toEqual({ sent: 0, failed: 1, reason: "not_connected" });
+		outcome = { ok: true };
+		const ok = await scan([]);
+		expect(ok.receipt.jobsPush).toEqual({ sent: 1, failed: 0, reason: null });
 	});
 
 	it("strips the city suffix from the title and keeps it as the location", () => {

@@ -13,6 +13,7 @@ import type { Env } from "../../types.js";
 import { capabilitiesForInstance } from "../agent-capabilities.js";
 import { GMAIL_SCOUT_SCAN_INTERVAL_MS, getGmailScoutConfig, getGmailScoutScanState } from "../gmail-scout/config.js";
 import { emailPermitted } from "../connectors/gmail.js";
+import { jobsAccountProblem } from "../jobs-app.js";
 import { listGmailScoutReceipts } from "../gmail-scout/receipts.js";
 import { gmailLeadIntakeRejection, readGmailScoutLeadRecords } from "../gmail-scout/scan.js";
 
@@ -33,7 +34,8 @@ export type PipelineProblemCode =
 	| "source_not_scheduled"
 	| "source_stale"
 	| "source_junk_leads"
-	| "jobs_sync_failing";
+	| "jobs_sync_failing"
+	| "jobs_not_connected";
 
 export interface PipelineProblem {
 	code: PipelineProblemCode;
@@ -88,6 +90,13 @@ export interface JobsSyncFact {
 	lastError: string | null;
 }
 
+/** A Scout or Tailor that has a Jobs grant but whose owner has no usable MCP account for the Jobs endpoint (#1605). */
+export interface JobsConnectionFact {
+	instanceId: string;
+	role: "Scout" | "Tailor";
+	reason: string;
+}
+
 export interface SourceFact {
 	instanceId: string;
 	runtime: string | null;
@@ -105,7 +114,7 @@ const utc = (v: string | null): number => (v ? Date.parse(v.includes("T") ? v : 
 const iso = (v: string | null): string | null => (Number.isFinite(utc(v)) ? new Date(utc(v)).toISOString() : null);
 
 /** Pure: the facts in, every problem out. */
-export function pipelineHealthFrom(input: { pipeline: { scouts: string[]; tailors: string[]; runners: string[] }; edges: EdgeFact[]; sources: SourceFact[]; now: number; jobsSync?: JobsSyncFact[] }): PipelineHealth {
+export function pipelineHealthFrom(input: { pipeline: { scouts: string[]; tailors: string[]; runners: string[] }; edges: EdgeFact[]; sources: SourceFact[]; now: number; jobsSync?: JobsSyncFact[]; jobsConnection?: JobsConnectionFact[] }): PipelineHealth {
 	const problems: PipelineProblem[] = [];
 	for (const e of input.edges) {
 		if (!e.enabled) problems.push({ code: "edge_disabled", connectionId: e.id, message: `The ${e.eventType === "job.application.materials_ready" ? "Tailor → Runner" : "Scout → Tailor"} connection ${e.id} is disabled, so nothing moves along it until it is re-enabled.` });
@@ -115,6 +124,9 @@ export function pipelineHealthFrom(input: { pipeline: { scouts: string[]; tailor
 	if (input.pipeline.tailors.length && !input.pipeline.runners.length) problems.push({ code: "no_runner", message: "No Application Runner is connected, so ready materials cannot be filled." });
 	for (const j of input.jobsSync ?? []) {
 		if (j.failing > 0) problems.push({ code: "jobs_sync_failing", instanceId: j.instanceId, message: `Tailor ${j.instanceId} could not send ${j.failing} application${j.failing === 1 ? "" : "s"} to the Jobs app (last error: ${j.lastError ?? "none recorded"}). It retries every 15 minutes; check the Tailor's MCP grant and account for the Jobs endpoint.` });
+	}
+	for (const j of input.jobsConnection ?? []) {
+		problems.push({ code: "jobs_not_connected", instanceId: j.instanceId, message: `${j.role} ${j.instanceId} has a Jobs grant but cannot reach the Jobs app (${j.reason.replace(/_/g, " ")}), so nothing is sent to it. Connect jobs.proappstore.online in Permissions & Connections → MCP connections.` });
 	}
 	const sources: SourceHealth[] = input.sources.map((s) => {
 		const g = s.gmail;
@@ -162,14 +174,20 @@ export async function pipelineHealth(env: Env, uid: string, pipeline: { scouts: 
 	);
 	const jobsSync = await Promise.all(
 		pipeline.tailors.map(async (instanceId): Promise<JobsSyncFact> => {
-			const row = await env.DB.prepare("SELECT COUNT(*) AS n, MAX(jobs_sync_error) AS e FROM job_applications WHERE instance_id = ?1 AND user_id = ?2 AND jobs_sync_error IS NOT NULL AND jobs_sync_error NOT LIKE 'no_grant:%' AND jobs_sync_at >= ?3")
+			const row = await env.DB.prepare("SELECT COUNT(*) AS n, MAX(jobs_sync_error) AS e FROM job_applications WHERE instance_id = ?1 AND user_id = ?2 AND jobs_sync_error IS NOT NULL AND jobs_sync_error NOT LIKE 'no_grant:%' AND jobs_sync_error NOT LIKE 'not_connected:%' AND jobs_sync_error NOT LIKE 'ambiguous:%' AND jobs_sync_error NOT LIKE 'pinned_account_gone:%' AND jobs_sync_at >= ?3")
 				.bind(instanceId, uid, now - 14 * 24 * 60 * 60_000)
 				.first<{ n: number; e: string | null }>()
 				.catch(() => null);
 			return { instanceId, failing: row?.n ?? 0, lastError: row?.e ?? null };
 		}),
 	);
-	return pipelineHealthFrom({ pipeline, edges, sources, now, jobsSync });
+	const jobsConnection = (
+		await Promise.all([
+			...pipeline.scouts.map(async (instanceId) => ({ instanceId, role: "Scout" as const, problem: await jobsAccountProblem(env, { userId: uid, instanceId }, "submit_leads").catch(() => null) })),
+			...pipeline.tailors.map(async (instanceId) => ({ instanceId, role: "Tailor" as const, problem: await jobsAccountProblem(env, { userId: uid, instanceId }, "save_tailored_application").catch(() => null) })),
+		])
+	).flatMap((f) => (f.problem ? [{ instanceId: f.instanceId, role: f.role, reason: f.problem.reason }] : []));
+	return pipelineHealthFrom({ pipeline, edges, sources, now, jobsSync, jobsConnection });
 }
 
 /**

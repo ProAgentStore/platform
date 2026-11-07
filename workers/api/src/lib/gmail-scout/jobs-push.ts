@@ -16,8 +16,9 @@
  */
 import type { Env } from "../../types.js";
 import { callJobsTool } from "../jobs-app.js";
-import { canonicalJobUrl } from "../job-lead-triage.js";
+import { jobPostingIdentity } from "../job-lead-triage.js";
 import { gateLocation } from "../local-apply/submission-gate.js";
+import type { JobsPushOutcome } from "./receipts.js";
 import { logEvent } from "../events.js";
 
 export const JOBS_PUSH_BATCH = 50;
@@ -72,7 +73,7 @@ function noOriginalReason(data: Record<string, unknown>): string | undefined {
 
 /** A stored Scout lead as `submit_leads` takes it, or null when it lacks what Jobs requires. */
 export function toJobsLead(data: Record<string, unknown>, now = Date.now(), externalId?: string): JobsLead | null {
-	const sourceUrl = canonicalJobUrl(text(data.url));
+	const sourceUrl = jobPostingIdentity(text(data.url))?.url;
 	// "Senior Engineer - Melbourne, VIC, AU" -> "Senior Engineer"; the place goes to `location` when the lead has none.
 	const rawTitle = text(data.title);
 	const suffix = rawTitle.match(/\s+-\s+([^-,]+,\s*[A-Z]{2,3},\s*AU)$/);
@@ -160,7 +161,7 @@ async function publishOriginal(env: Env, who: { userId: string; instanceId: stri
  * `read` is the Scout's lead reader, passed in because scan.ts imports this module. `onlyLeadId` limits the pass to one lead
  * (a triage or a verification touched just that one).
  */
-export async function pushScoutLeadsToJobs(env: Env, instanceId: string, userId: string, read: () => Promise<LeadRecord[]>, onlyLeadId?: string): Promise<{ sent: number }> {
+export async function pushScoutLeadsToJobs(env: Env, instanceId: string, userId: string, read: () => Promise<LeadRecord[]>, onlyLeadId?: string): Promise<JobsPushOutcome> {
 	try {
 		const who = { userId, instanceId };
 		const records = (await read()).flatMap((r) => (r.id && r.data && (!onlyLeadId || r.id === onlyLeadId) ? [{ id: r.id, data: r.data }] : []));
@@ -171,11 +172,13 @@ export async function pushScoutLeadsToJobs(env: Env, instanceId: string, userId:
 		});
 		let sent = 0;
 		let granted = true;
+		let reason: string | null = null;
 		for (let i = 0; i < pending.length && granted; i += JOBS_PUSH_BATCH) {
 			const batch = pending.slice(i, i + JOBS_PUSH_BATCH);
 			const out = await callJobsTool(env, who, "submit_leads", { leads: JSON.stringify(batch.map((b) => b.lead)) });
 			if (!out.ok) {
-				// A missing grant is a state, not an incident: stay quiet, the leads wait.
+				// A missing grant is a state, not an incident: stay quiet, the leads wait. The receipt still says why (#1605).
+				reason = out.reason;
 				if (out.reason === "failed") await failed(env, userId, instanceId, "submit_leads_failed", out.detail);
 				granted = false;
 				break;
@@ -208,9 +211,9 @@ export async function pushScoutLeadsToJobs(env: Env, instanceId: string, userId:
 				if (await publishOriginal(env, who, lead, r.data)) await stamp(env, instanceId, r.id, { jobs_published_at: Date.now() });
 			}
 		}
-		return { sent };
+		return { sent, failed: reason ? pending.length - sent : 0, reason };
 	} catch (e) {
 		await failed(env, userId, instanceId, "submit_leads_failed", e instanceof Error ? e.message : String(e));
-		return { sent: 0 };
+		return { sent: 0, failed: 0, reason: "failed" };
 	}
 }

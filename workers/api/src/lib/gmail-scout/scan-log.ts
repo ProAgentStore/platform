@@ -71,6 +71,7 @@ const REJECTION: Record<GmailScoutRejection, { classification: ScanLogClassifica
 	posting_not_live: { classification: "single_posting", reason: "The posting the email points at is no longer live (removed, expired, or redirected away)." },
 	posting_unverifiable: { classification: "single_posting", reason: "The posting page could not be checked." },
 	posting_mismatch: { classification: "single_posting", reason: "The live posting's title or company does not match what the email says, so it may be a different job." },
+	search_results_page: { classification: "non_job", reason: "The link is a page of job search results, not one posting." },
 	prior_application: { classification: "single_posting", reason: "You already have an application for this job, so it is not added again." },
 };
 

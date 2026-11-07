@@ -12,13 +12,24 @@
 import type { Env } from "../types.js";
 import { clipMarked } from "./clip-marked.js";
 import { hasMcpConsent, normalizeMcpEndpoint } from "./mcp-consent.js";
+import { resolveMcpAccount } from "./mcp-credentials.js";
 import { runRegistryTool } from "./tool-registry.js";
 import { unfenceUntrusted } from "./untrusted-fence.js";
 
 export const JOBS_MCP_URL = "https://mcp.proappstore.online/mcp/apps/jobs";
 
 /** `data` is the tool's payload when it returned JSON (a query tool's rows), else undefined. */
-export type JobsCallResult = { ok: true; data?: unknown } | { ok: false; reason: "no_grant" | "failed"; detail: string };
+export type JobsCallResult = { ok: true; data?: unknown } | { ok: false; reason: "no_grant" | "not_connected" | "ambiguous" | "pinned_account_gone" | "failed"; detail: string };
+
+const CONNECT_JOBS = "Connect jobs.proappstore.online in Permissions & Connections → MCP connections.";
+
+/** With a grant for `tool`, does the owner's MCP account for the Jobs endpoint resolve? Null when it does, or there is no grant (#1605). */
+export async function jobsAccountProblem(env: Env, who: { userId: string; instanceId: string }, tool: string): Promise<Extract<JobsCallResult, { ok: false }> | null> {
+	const endpoint = normalizeMcpEndpoint(JOBS_MCP_URL);
+	if (!endpoint || !(await hasMcpConsent(env, who.instanceId, endpoint, tool))) return null;
+	const account = await resolveMcpAccount(env, who.userId, endpoint, who.instanceId);
+	return account.ok ? null : { ok: false, reason: account.reason, detail: `${account.message} ${CONNECT_JOBS}` };
+}
 
 /** The `data` of `mcp_call_tool`'s `{tool, ok, data}` envelope (fenced as untrusted by the registry), or undefined. */
 function payloadOf(content: string): unknown {
@@ -36,6 +47,8 @@ export async function callJobsTool(env: Env, who: { userId: string; instanceId: 
 		if (!(await hasMcpConsent(env, who.instanceId, normalizeMcpEndpoint(JOBS_MCP_URL), tool))) {
 			return { ok: false, reason: "no_grant", detail: `This instance has no MCP grant for ${tool} on ${JOBS_MCP_URL}.` };
 		}
+		const unresolved = await jobsAccountProblem(env, who, tool);
+		if (unresolved) return unresolved;
 		const r = await runRegistryTool("mcp_call_tool", { env, userId: who.userId, agentId: who.instanceId, instanceId: who.instanceId }, { url: JOBS_MCP_URL, tool, args });
 		if (r.success) return { ok: true, data: payloadOf(r.content) };
 		return { ok: false, reason: "failed", detail: clipMarked(r.content, 300) };

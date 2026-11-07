@@ -255,9 +255,16 @@ export function withCollections<TBase extends AgentStorageBaseCtor & GConstructo
 			if (collection === "job_leads") {
 				const heldKey = typeof existing.data.work_key === "string" ? existing.data.work_key : workKeyForLead(existing.data);
 				const nextKey = workKeyForLead(merged);
-				if (heldKey && nextKey && heldKey !== nextKey) throw new Error("A job lead's work_key is immutable; create a distinct lead instead.");
-				if (heldKey && data.work_key !== undefined && data.work_key !== heldKey) throw new Error("A job lead's work_key is immutable.");
-				if (heldKey) merged.work_key = heldKey;
+				// #1606 repair: a key the CURRENT identity rules no longer derive from the stored lead may be
+				// re-derived (explicitly, to exactly the current value). Any other change stays refused.
+				const rekey = !!heldKey && !!nextKey && heldKey !== nextKey && data.work_key === nextKey && workKeyForLead(existing.data) !== heldKey;
+				if (!rekey && heldKey && nextKey && heldKey !== nextKey) throw new Error("A job lead's work_key is immutable; create a distinct lead instead.");
+				if (!rekey && heldKey && data.work_key !== undefined && data.work_key !== heldKey) throw new Error("A job lead's work_key is immutable.");
+				if (heldKey && !rekey) merged.work_key = heldKey;
+				if (rekey && nextKey) {
+					await this.doStorage.put(`joblead-work-key:${nextKey}`, id);
+					if ((await this.doStorage.get<string>(`joblead-work-key:${heldKey}`)) === id) await this.doStorage.delete(`joblead-work-key:${heldKey}`);
+				}
 			}
 			const validated = validateRecord(schema, merged);
 

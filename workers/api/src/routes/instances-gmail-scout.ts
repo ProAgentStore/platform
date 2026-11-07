@@ -3,6 +3,7 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { getGmailScoutConfig, gmailScoutSourceMode, putGmailScoutConfig } from "../lib/gmail-scout/config.js";
 import { gmailScoutStatus, parseReprocessInput, reprocessGmailScout, scanGmailScout } from "../lib/gmail-scout/scan.js";
 import { listGmailScoutReceipts } from "../lib/gmail-scout/receipts.js";
+import { repairJobLeads } from "../lib/gmail-scout/repair.js";
 import { readScanLog } from "../lib/gmail-scout/scan-log.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
@@ -87,6 +88,15 @@ export function registerGmailScoutRoutes(router: Hono<{ Bindings: Env }>): void 
 			const [receipt] = await listGmailScoutReceipts(c.env, instanceId, 1);
 			return c.json({ error: message, receipt: receipt ?? null }, /not configured or is disabled/.test(message) ? 409 : 502);
 		}
+	});
+	/**
+	 * One-off repair of this Scout's stored leads to the current identity rules (#1606). A dry run unless the
+	 * body says `{ "dry_run": false }`; both return the counts. Idempotent: a second real run changes nothing.
+	 */
+	router.post("/:instanceId/gmail-scout/repair-leads", async (c) => {
+		const { instanceId } = await owned(c);
+		const body = (await c.req.json().catch(() => ({}))) as { dry_run?: unknown };
+		return c.json({ repair: await repairJobLeads(c.env, instanceId, { dryRun: body.dry_run !== false }) });
 	});
 	router.get("/:instanceId/gmail-scout/status", async (c) => c.json(await gmailScoutStatus(c.env, (await owned(c)).instanceId, new URL(c.req.url).searchParams)));
 	/**

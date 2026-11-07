@@ -1,5 +1,5 @@
 /** Why a scanned message did not become a lead (#1023) — a category, never the message. */
-export type GmailScoutRejection = "missing_fields" | "stale" | "security_alert" | "digest" | "multiple_listings" | "no_specific_job_url" | "no_work_key" | "redirect_unresolved" | "posting_not_live" | "posting_unverifiable" | "posting_mismatch" | "prior_application";
+export type GmailScoutRejection = "missing_fields" | "stale" | "security_alert" | "digest" | "multiple_listings" | "no_specific_job_url" | "no_work_key" | "redirect_unresolved" | "posting_not_live" | "posting_unverifiable" | "posting_mismatch" | "prior_application" | "search_results_page";
 
 /** One Gmail Scout scan receipt (#1023), scheduled or on demand. */
 export interface GmailScoutScanReceipt {
@@ -111,6 +111,7 @@ const REASON: Record<GmailScoutRejection, string> = {
 	posting_unverifiable: "posting could not be checked",
 	posting_mismatch: "posting did not match the email",
 	prior_application: "already has an application",
+	search_results_page: "a search results page",
 };
 
 /** "3 digest naming no job, 1 too old" — what a scan skipped, in plain words; empty when nothing was skipped. */

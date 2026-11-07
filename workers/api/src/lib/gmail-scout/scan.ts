@@ -9,6 +9,7 @@ import { clipMarked } from "../clip-marked.js";
 import { GMAIL_SCOUT_SCAN_INTERVAL_MS, getGmailScoutConfig, getGmailScoutScanState, resolveGmailScoutAccount } from "./config.js";
 import { appliedWorkKeys, enqueueBrowserVerification } from "../job-lead-queue.js";
 import { pushScoutLeadsToJobs } from "./jobs-push.js";
+import { employerByHost, findRepostOf, inferCompany, isSearchResultsUrl } from "./lead-hygiene.js";
 import { seekDigestListings } from "./seek-digest.js";
 import { checkDigestPostings, DIGEST_POSTINGS_MAX, jobProviderOf, providerPostingUrl, resolveProviderJobAlert, type ServerCheckGap } from "./provider-redirect.js";
 
@@ -64,6 +65,7 @@ const GENERIC_ROUTE_SEGMENT_RE = /^(?:alerts?|browse|categories?|home|recommenda
 function isSpecificJobUrl(url: string): boolean {
 	const parsed = new URL(url);
 	const segments = parsed.pathname.split("/").filter(Boolean);
+	if (isSearchResultsUrl(url)) return false;
 	if (ASSET_RE.test(parsed.pathname) || segments.some((segment) => NAV_SEGMENT_RE.test(segment) || GENERIC_ROUTE_SEGMENT_RE.test(segment))) return false;
 	if (["q", "query", "search", "keywords"].some((key) => parsed.searchParams.has(key))) return false;
 	// Root pages and one-segment listing/search/home pages cannot identify a posting.
@@ -159,6 +161,7 @@ export function gmailLeadIntakeRejection(data: Record<string, unknown>): GmailSc
 	// A lead taken from inside a digest (#1248) carries the digest's subject by design; its posting was checked.
 	if (data.from_digest !== true && (DIGEST_SUBJECT_RE.test(subject) || DIGEST_SENDER_RE.test(from))) return "digest";
 	const url = typeof data.url === "string" ? canonicalJobUrl(data.url) : null;
+	if (url && isSearchResultsUrl(url)) return "search_results_page";
 	return url && isSpecificJobUrl(url) ? null : "no_specific_job_url";
 }
 
@@ -428,6 +431,8 @@ export async function ingestGmailCandidates(input: {
 	 */
 	async function store(candidate: ScoutCandidate, serverGap: ServerCheckGap | null, opts: { fromDigest?: boolean } = {}): Promise<StoreOutcome> {
 		candidates++;
+		// A search-results page lists many jobs; it is never one lead (#1606).
+		if (isSearchResultsUrl(candidate.url)) return { kind: "rejected", rejection: "search_results_page", evidence: candidate.url };
 		const dup = matchingGmailLead(candidate, input.existing, { byMessage: !opts.fromDigest });
 		if (dup) {
 			deduped++;
@@ -438,12 +443,18 @@ export async function ingestGmailCandidates(input: {
 		// An application already exists for this job — attempted, uncertain or otherwise. Its lead may be
 		// gone, but a fresh one must never let the same posting be applied for again (#1052, #1013).
 		if (input.appliedWorkKeys?.has(workKey)) return { kind: "rejected", rejection: "prior_application", evidence: `job ${workKey}` };
+		// A careers-site lead that names no employer gets it from its host or sender (#1606).
+		const inferred = inferCompany(candidate, employerByHost(input.existing));
+		const named = inferred ? { ...candidate, company: inferred.company, company_source: inferred.source } : candidate;
+		// The same company + title seen within 60 days is a repost: kept, linked to the first, never asked about again (#1606).
+		const repostOf = findRepostOf(named as unknown as Record<string, unknown>, input.existing);
 		const data = {
 			...input.leadExtras,
-			...candidate,
+			...named,
 			...(opts.fromDigest ? { from_digest: true } : {}),
 			work_key: workKey,
-			status: serverGap ? "awaiting_browser_verification" : "unverified",
+			...(repostOf?.id ? { duplicate_of: repostOf.id, archived_reason: "repost" } : {}),
+			status: repostOf?.id ? "archived" : serverGap ? "awaiting_browser_verification" : "unverified",
 			lifecycle_version: 0,
 			verification: serverGap
 				? { state: "awaiting_browser_verification", source: "gmail_alert", checked_at: null, canonical_job_url: candidate.url, active_apply_url: null, reason: serverGap, evidence: null, attempts: 0 }
@@ -457,6 +468,10 @@ export async function ingestGmailCandidates(input: {
 			return { kind: "concurrent", leadId };
 		}
 		input.existing.push({ ...(leadId ? { id: leadId } : {}), data });
+		if (repostOf?.id) {
+			deduped++;
+			return { kind: "deduped", leadId: repostOf.id, on: "repost" };
+		}
 		added++;
 		if (serverGap && leadId) awaiting.push({ leadId, workKey, canonicalUrl: candidate.url, title: data.title ?? null, company: data.company ?? null, reason: serverGap });
 		return { kind: "added", leadId };
@@ -555,12 +570,13 @@ export async function ingestGmailCandidates(input: {
 	}
 }
 
-type StoreOutcome = { kind: "added"; leadId: string | null } | { kind: "deduped"; leadId: string | null; on: "gmail_message" | "job" } | { kind: "concurrent"; leadId: string | null } | { kind: "rejected"; rejection: GmailScoutRejection; evidence: string };
+type StoreOutcome = { kind: "added"; leadId: string | null } | { kind: "deduped"; leadId: string | null; on: "gmail_message" | "job" | "repost" } | { kind: "concurrent"; leadId: string | null } | { kind: "rejected"; rejection: GmailScoutRejection; evidence: string };
 
 /** The log row for a stored candidate's outcome (everything but its job). */
 function outcomeEntry(out: Exclude<StoreOutcome, { kind: "rejected" }>, candidate: ScoutCandidate, serverGap: ServerCheckGap | null, via: string, fromDigest = false): Pick<ScanLogEntry, "classification" | "evidence" | "decision" | "rejection" | "reason" | "leadId"> {
 	if (out.kind === "deduped") {
 		const id = out.leadId;
+		if (out.on === "repost") return { classification: "duplicate", evidence: "the same company and title were seen in the last 60 days", decision: "deduped", rejection: null, reason: `A repost of an earlier lead${id ? ` (${id})` : ""}: kept and linked to it, and the owner is not asked twice.`, leadId: id };
 		return { classification: "duplicate", evidence: out.on === "gmail_message" ? "the same Gmail message is already a lead" : `the same job (${candidate.url}) is already a lead`, decision: "deduped", rejection: null, reason: `Already a lead${id ? ` (${id})` : ""} — ${out.on === "gmail_message" ? "this email was taken before" : "another email named the same job"}, so it was not added twice.`, leadId: id };
 	}
 	if (out.kind === "concurrent") {
@@ -652,12 +668,12 @@ export async function scanGmailScout(env: Env, instanceId: string, userId: strin
 		});
 		await writeScanLog(env, receiptId, instanceId, log);
 		await queueAwaitingLeads(env, instanceId, userId, awaiting);
-		await pushScoutLeadsToJobs(env, instanceId, userId, () => readGmailScoutLeadRecords(env, instanceId)); // #1587: never throws
+		const jobsPush = await pushScoutLeadsToJobs(env, instanceId, userId, () => readGmailScoutLeadRecords(env, instanceId)); // #1587: never throws
 		const cursor = JSON.stringify({ after: new Date().toISOString(), messageId: hits[0]?.id ?? null } satisfies ScanCursor);
 		await env.DB.prepare(`INSERT INTO gmail_scout_scan_state (instance_id,last_scan_at,last_message_id_cursor,candidate_count,dedupe_count,failure_count,last_failure_at,last_failure_message)
 			VALUES (?1,datetime('now'),?2,?3,?4,0,NULL,NULL)
 			ON CONFLICT(instance_id) DO UPDATE SET last_scan_at=excluded.last_scan_at,last_message_id_cursor=excluded.last_message_id_cursor,candidate_count=excluded.candidate_count,dedupe_count=excluded.dedupe_count,failure_count=0,last_failure_at=NULL,last_failure_message=NULL`).bind(instanceId, cursor, candidates, deduped).run();
-		const receipt = await completeGmailScoutReceipt(env, receiptId, { hits: hits.length, candidates, added, deduped, rejected, lastMessageId: hits[0]?.id ?? null, awaitingBrowserVerification: awaiting.length });
+		const receipt = await completeGmailScoutReceipt(env, receiptId, { hits: hits.length, candidates, added, deduped, rejected, lastMessageId: hits[0]?.id ?? null, awaitingBrowserVerification: awaiting.length, jobsPush });
 		await pruneGmailScoutReceipts(env, instanceId);
 		await pruneScanLog(env, instanceId);
 		return { mailbox: account.label ?? account.accountId, candidates, added, deduped, lastMessageId: hits[0]?.id ?? null, rejected, receipt, reused: false, handoff: "none" };
@@ -745,9 +761,9 @@ export async function reprocessGmailScout(env: Env, instanceId: string, userId: 
 		});
 		await writeScanLog(env, receiptId, instanceId, log);
 		await queueAwaitingLeads(env, instanceId, userId, awaiting);
-		await pushScoutLeadsToJobs(env, instanceId, userId, () => readGmailScoutLeadRecords(env, instanceId)); // #1587: never throws
+		const jobsPush = await pushScoutLeadsToJobs(env, instanceId, userId, () => readGmailScoutLeadRecords(env, instanceId)); // #1587: never throws
 		const lastMessageId = hits[0]?.id ?? null;
-		const receipt = await completeGmailScoutReceipt(env, receiptId, { hits: hits.length, candidates, added, deduped, rejected, lastMessageId, awaitingBrowserVerification: awaiting.length });
+		const receipt = await completeGmailScoutReceipt(env, receiptId, { hits: hits.length, candidates, added, deduped, rejected, lastMessageId, awaitingBrowserVerification: awaiting.length, jobsPush });
 		await pruneGmailScoutReceipts(env, instanceId);
 		await pruneScanLog(env, instanceId);
 		return { mailbox: account.label ?? account.accountId, candidates, added, deduped, lastMessageId, rejected, receipt, reused: false, handoff: "none" };

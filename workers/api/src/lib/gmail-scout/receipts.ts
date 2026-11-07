@@ -12,7 +12,10 @@ export type GmailScoutScanTrigger = "schedule" | "on_demand" | "reprocess";
 export type GmailScoutReceiptStatus = "running" | "completed" | "failed";
 
 /** Why a message examined by a scan did not become a lead. Categories only — never the message. */
-export type GmailScoutRejection = "missing_fields" | "stale" | "security_alert" | "digest" | "multiple_listings" | "no_specific_job_url" | "no_work_key" | "redirect_unresolved" | "posting_not_live" | "posting_unverifiable" | "posting_mismatch" | "prior_application";
+export type GmailScoutRejection = "missing_fields" | "stale" | "security_alert" | "digest" | "multiple_listings" | "no_specific_job_url" | "no_work_key" | "redirect_unresolved" | "posting_not_live" | "posting_unverifiable" | "posting_mismatch" | "prior_application" | "search_results_page";
+
+/** `reason` is why leads did not reach Jobs: no grant, no connected account, or a failed call. */
+export interface JobsPushOutcome { sent: number; failed: number; reason: string | null }
 
 export interface GmailScoutScanReceipt {
 	id: string;
@@ -29,6 +32,8 @@ export interface GmailScoutScanReceipt {
 	rejected: Partial<Record<GmailScoutRejection, number>>;
 	/** Leads added that the server could not check and that wait for browser verification (#1030). */
 	awaitingBrowserVerification: number | null;
+	/** What the push of this Scout's leads to the Jobs app did (#1605); null before one ran. */
+	jobsPush: JobsPushOutcome | null;
 	errorMessage: string | null;
 	lastMessageId: string | null;
 	/** The exact Gmail search this scan ran (#1247); null for a reprocess of named messages, or before it searched. */
@@ -70,6 +75,7 @@ function asReceipt(r: Record<string, unknown>): GmailScoutScanReceipt {
 		id: String(r.id), instanceId: String(r.instance_id), trigger: r.scan_trigger as GmailScoutScanTrigger, triggeredBy: r.triggered_by ? String(r.triggered_by) : null,
 		status: r.status as GmailScoutReceiptStatus, startedAt: utcIso(r.started_at) ?? "", completedAt: utcIso(r.completed_at),
 		hits: num(r.hits), candidates: num(r.candidates), added: num(r.added), deduped: num(r.deduped), rejected, awaitingBrowserVerification: num(r.awaiting_browser_verification),
+		jobsPush: parseWindow(r.jobs_push) as JobsPushOutcome | null,
 		errorMessage: r.error_message ? String(r.error_message) : null, lastMessageId: r.last_message_id ? String(r.last_message_id) : null,
 		query: r.search_query ? String(r.search_query) : null, window: parseWindow(r.search_window), handoff: "none",
 	};
@@ -108,12 +114,12 @@ export async function openGmailScoutReceipt(env: Pick<Env, "DB">, input: { insta
 	return { receipt: asReceipt(running as Record<string, unknown>), reused: true };
 }
 
-export async function completeGmailScoutReceipt(env: Pick<Env, "DB">, id: string, r: { hits: number; candidates: number; added: number; deduped: number; rejected: GmailScoutScanReceipt["rejected"]; lastMessageId: string | null; awaitingBrowserVerification?: number }): Promise<GmailScoutScanReceipt> {
+export async function completeGmailScoutReceipt(env: Pick<Env, "DB">, id: string, r: { hits: number; candidates: number; added: number; deduped: number; rejected: GmailScoutScanReceipt["rejected"]; lastMessageId: string | null; awaitingBrowserVerification?: number; jobsPush?: JobsPushOutcome }): Promise<GmailScoutScanReceipt> {
 	await env.DB.prepare(
-		`UPDATE gmail_scout_scan_receipts SET status = 'completed', completed_at = datetime('now'), hits = ?2, candidates = ?3, added = ?4, deduped = ?5, rejected = ?6, last_message_id = ?7, awaiting_browser_verification = ?8
+		`UPDATE gmail_scout_scan_receipts SET status = 'completed', completed_at = datetime('now'), hits = ?2, candidates = ?3, added = ?4, deduped = ?5, rejected = ?6, last_message_id = ?7, awaiting_browser_verification = ?8, jobs_push = ?9
 		  WHERE id = ?1 AND status = 'running'`,
 	)
-		.bind(id, r.hits, r.candidates, r.added, r.deduped, JSON.stringify(r.rejected), r.lastMessageId, r.awaitingBrowserVerification ?? 0)
+		.bind(id, r.hits, r.candidates, r.added, r.deduped, JSON.stringify(r.rejected), r.lastMessageId, r.awaitingBrowserVerification ?? 0, r.jobsPush ? JSON.stringify(r.jobsPush) : null)
 		.run();
 	return (await getGmailScoutReceipt(env, id)) as GmailScoutScanReceipt;
 }

@@ -71,7 +71,7 @@ describe("#1024: the live no_specific_job_url case", () => {
 		const { result, stored } = await ingest(alert(), p.fetchImpl);
 		expect(result).toMatchObject({ candidates: 1, added: 1, deduped: 0, rejected: {}, awaiting: [] });
 		expect(stored).toHaveLength(1);
-		expect(stored[0]).toMatchObject({ url: CANONICAL, work_key: `url:${CANONICAL}`, title: "Platform Engineer at Acme", source_domain: "au.indeed.com", status: "unverified", verification: { state: "unverified", canonical_job_url: CANONICAL } });
+		expect(stored[0]).toMatchObject({ url: CANONICAL, work_key: `indeed:${new URL(CANONICAL).searchParams.get("jk")}`, title: "Platform Engineer at Acme", source_domain: "au.indeed.com", status: "unverified", verification: { state: "unverified", canonical_job_url: CANONICAL } });
 		expect(stored[0]).not.toHaveProperty("apply_handoff");
 		// The posting id was visible in the link, so the personalized redirect was never requested at all.
 		expect(p.requested).toEqual([CANONICAL]);

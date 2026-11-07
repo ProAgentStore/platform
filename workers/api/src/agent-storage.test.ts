@@ -390,3 +390,18 @@ describe("AgentStorageEngine", () => {
 		});
 	});
 });
+
+describe("job lead work key re-derivation (#1606)", () => {
+	const fields = [{ name: "url", type: "string" as const }, { name: "work_key", type: "string" as const }];
+	it("moves a key the current rules no longer derive, to exactly the current value, and refuses any other change", async () => {
+		const engine = new AgentStorageEngine(mockDoStorage(), null, null, null, "agent-1", null);
+		await engine.collectionCreate("job_leads", fields);
+		const url = "http://careers.x.example/job/Dev/123456?eid=1";
+		const lead = await engine.recordInsert("job_leads", { url, work_key: `url:${url}` });
+		await expect(engine.recordUpdate("job_leads", lead.id, { url: "https://other.example/a/b" })).rejects.toThrow(/immutable/);
+		const fixed = await engine.recordUpdate("job_leads", lead.id, { url: "https://careers.x.example/job/Dev/123456", work_key: "pageup:careers.x.example:123456" });
+		expect(fixed?.data.work_key).toBe("pageup:careers.x.example:123456");
+		// Now current: it can no longer be moved.
+		await expect(engine.recordUpdate("job_leads", lead.id, { work_key: "url:https://elsewhere.example/a" })).rejects.toThrow(/immutable/);
+	});
+});

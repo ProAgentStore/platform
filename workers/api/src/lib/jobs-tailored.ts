@@ -82,7 +82,7 @@ export async function syncApplicationToJobs(env: Env, userId: string, applicatio
 		const prior = (await env.DB.prepare("SELECT jobs_synced_key AS k FROM job_applications WHERE id = ?1").bind(app.id).first<{ k: string | null }>())?.k ?? null;
 		if (prior === key) return;
 		const who = { userId, instanceId: app.instanceId };
-		const fail = (step: string, out: { reason: string; detail: string }) => record(env, app.id, { error: clipMarked(`${out.reason === "no_grant" ? "no_grant" : step}: ${out.detail}`, 400) }, now);
+		const fail = (step: string, out: { reason: string; detail: string }) => record(env, app.id, { error: clipMarked(`${out.reason === "failed" ? step : out.reason}: ${out.detail}`, 400) }, now);
 		const saved = await callJobsTool(env, who, "save_tailored_application", await saveArgs(env, userId, app));
 		if (!saved.ok) return void (await fail("save_tailored_application", saved));
 		// A re-save keeps Jobs' status, so only a move AWAY from a recorded end state (a retried fill) or into one needs a status call.

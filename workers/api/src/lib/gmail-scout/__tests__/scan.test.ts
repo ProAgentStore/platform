@@ -129,7 +129,7 @@ describe("stored leads judged by today's intake rules (#1022)", () => {
 			[{ title: "EthicalJobs.com.au weekly email update - top tips & advice + 516 new jobs on the site", url: "https://www.ethicaljobs.com.au/ethical-jobs-in-melbourne" }, "digest"],
 			[{ title: "Security alert", url: "https://accounts.google.com/AccountChooser?continue=x" }, "security_alert"],
 			[{ title: "New jobs posted from careers.racv.com.au", url: "http://careers.racv.com.au/?eid=1&from=email" }, "no_specific_job_url"],
-			[{ title: "Program/Project Manager at Versent. 1 scrum master job in Melbourne VIC", url: "https://au.indeed.com/jobs?q=scrum+master&l=Melbourne+VIC" }, "no_specific_job_url"],
+			[{ title: "Program/Project Manager at Versent. 1 scrum master job in Melbourne VIC", url: "https://au.indeed.com/jobs?q=scrum+master&l=Melbourne+VIC" }, "search_results_page"],
 			[{ title: "A role", url: undefined }, "no_specific_job_url"],
 		];
 		for (const [data, reason] of cases) expect(gmailLeadIntakeRejection(data)).toBe(reason);

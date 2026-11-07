@@ -18,6 +18,7 @@ vi.mock("../jobs-app.js", () => ({
 		calls.push({ tool, args, instanceId: who.instanceId });
 		return outcome;
 	},
+	jobsAccountProblem: async () => null,
 }));
 const { persistCloudDocuments } = await import("./cloud-documents.js");
 const { moveApplication } = await import("../local-apply/store.js");
