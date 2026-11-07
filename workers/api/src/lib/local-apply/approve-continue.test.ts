@@ -333,6 +333,21 @@ describe("bounded live Full review approval", () => {
 		return { app, run };
 	}
 
+	it("tells the owner once when a fill pauses live on the review page (#1578)", async () => {
+		const app = appFixture({ lead: { leadUrl: "https://jobs.example.com/role", lead: { title: "Engineer", company: "Acme" } }, blockReason: null });
+		await env.DB.prepare(`INSERT INTO job_applications(id,instance_id,user_id,source_instance_id,lead_id,lifecycle_version,idempotency_key,status,lead,resume_artifact,cover_letter_artifact,profile_version,created_at,updated_at,state_version,fill_run_id)
+		 VALUES(?1,'t1','u1','scout','lead-1',1,'app-key','filling',?2,?3,?4,?5,?6,?6,4,'run-1')`).bind(app.id, JSON.stringify(app.lead), JSON.stringify(app.resumeArtifact), JSON.stringify(app.coverLetterArtifact), app.profileVersion, NOW).run();
+		await seedRun({ status: "running" });
+		const expiresAt = Date.UTC(2026, 10, 7, 0, 7);
+		runnerStatus = { state: "paused", lastSeq: 1, events: [{ seq: 1, type: "run.paused", at: new Date(NOW).toISOString(), pauseReason: "supervisor_checkpoint" }], pause: { reason: "supervisor_checkpoint", checkpoint: { schemaVersion: 1, checkpointId: "review-1", facts: { phase: "before_submit", actions: 4, filled: 0, uploaded: 1, blockers: [], reviewWait: { expiresAt, budgetMs: 600_000 } } } } };
+		const notes = async () => (await d1.DB.prepare("SELECT type, kind, title, body, url, pushed_at FROM notifications WHERE user_id = 'u1'").all<Record<string, unknown>>()).results ?? [];
+		await syncApplyRun(env, "u1", (await getApplyRun(env, "ap", "u1", "run-1"))!, NOW + 1);
+		expect(await notes()).toEqual([expect.objectContaining({ type: "apply", kind: "alert", title: "Approve to send: Engineer at Acme", url: "/console/instances/ap/applications?application=app-1", body: expect.stringContaining("nothing has been sent. Approve before 00:07 UTC") })]);
+		expect((await notes())[0].pushed_at).toBeTruthy();
+		await syncApplyRun(env, "u1", (await getApplyRun(env, "ap", "u1", "run-1"))!, NOW + 2);
+		expect(await notes()).toHaveLength(1);
+	});
+
 	it("leaves a marked review undirected until owner approval, then consumes and delivers to the exact run", async () => {
 		const { app, run } = await liveReview();
 		const cp = (await listSupervisorCheckpoints(env, run))[0];

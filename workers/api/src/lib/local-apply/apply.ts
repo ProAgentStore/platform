@@ -568,7 +568,7 @@ async function askForApprovalIfWaiting(env: Env, uid: string, run: ApplyRun): Pr
 			title: `Approve to send: ${role}${company}`.slice(0, 120),
 			// The owner's own sentence from the run. Marked rather than head-cut (#898): a shortened
 			// question read as complete is how a person decides on half a condition.
-			body: clipMarked(run.policy.toolAccess === "full" ? "The full-access browser run ended. Submission status is unverified; check the employer site before authorizing another attempt." : app.blockQuestions?.[0] ?? "This application is filled and waiting for your decision; nothing has been sent.", 300, { within: true }),
+			body: clipMarked(run.status === "paused" ? `Filled and waiting on the employer's final page; nothing has been sent. Approve before ${new Date(run.pause?.checkpoint?.facts.reviewWait?.expiresAt ?? Date.now()).toISOString().slice(11, 16)} UTC to submit it once.` : run.policy.toolAccess === "full" ? "The full-access browser run ended. Submission status is unverified; check the employer site before authorizing another attempt." : app.blockQuestions?.[0] ?? "This application is filled and waiting for your decision; nothing has been sent.", 300, { within: true }),
 		},
 		attentionDeps,
 	);
@@ -738,6 +738,8 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 		for (const question of questions) await recordPauseDecision(env, { instanceId: run.instanceId, userId: uid, kind: "apply_run", subjectId: run.applicationId, taskId: run.id, scope: run.applicationId, question, now }).catch(() => undefined);
 		if (finalAnswerMirror) await mirrorFinalAnswerPause(env, uid, finalAnswerMirror.app, current, questions, now);
 		else await move(env, uid, run.applicationId, ["filling", "blocked", "awaiting_review"], { ...base, to: pause.checkpoint?.facts.reviewWait ? "awaiting_review" : "blocked", reason: pause.checkpoint?.facts.reviewWait ? null : pause.reason, questions }, now);
+		// #1578: a live review is the owner's decision too; without this only an ENDED run asked for it.
+		if (pause.checkpoint?.facts.reviewWait) await askForApprovalIfWaiting(env, uid, current).catch(() => undefined);
 		// The runner has already paused on the exact page.  Only then create the bounded mobile
 		// view and send the normal policy-controlled owner alert; never wake a browser or infer a
 		// successful login from a redirect.
