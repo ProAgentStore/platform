@@ -75,6 +75,11 @@ const EXCLUSIONS = [
 		reason:
 			"GitHub App webhook receiver (#1325). Called only by GitHub, authenticated by its X-Hub-Signature-256 HMAC rather than a session; the payload is GitHub's, not ours, and no API client sends it.",
 	},
+	{
+		match: /^POST \/v1\/push\/lead-action$/,
+		reason:
+			"Apply/Skip button on a job-lead push (#1602). Called only by the service worker (store/sw.js), authenticated by a single-purpose signed token carried in the push rather than a session; no API client sends it.",
+	},
 ];
 
 const isExcluded = (key) =>
