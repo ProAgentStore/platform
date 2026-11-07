@@ -8,7 +8,7 @@ import type { CollectionRecord } from "../agent-storage-types.js";
 import { realSchemaD1, type RealSchemaD1 } from "./d1-sqlite.js";
 import type { Env } from "../types.js";
 
-type Run = { id: string; status: string; errorCode?: string | null; error?: string | null; result?: unknown; policy?: { engine: string } };
+type Run = { id: string; status: string; errorCode?: string | null; error?: string | null; result?: unknown; policy?: { engine: string }; endedAt?: number | null; updatedAt?: number };
 const runs = new Map<string, Run>();
 const started: Array<{ objective: string; requestId: string }> = [];
 /** How the next start goes. */
@@ -977,6 +977,68 @@ describe("Apply / Skip from the push (#1602)", () => {
 		d1.exec(`INSERT INTO users (id, github_login) VALUES ('u2', 'u2')`);
 		expect((await press(await signLeadActionToken({ ...claims, uid: "u2" }, "test-signing-key"))).status).toBe(404);
 		expect(lead().status).toBe("new");
+	});
+});
+
+describe("an engine failure reads as a sentence, never as the CLI's JSON (#1598)", () => {
+	const ENDED = Date.UTC(2026, 10, 8, 0, 0); // 11:00 on 8 Nov in Melbourne
+	const EVENTS = ['{"type":"thread.started","thread_id":"019a"}', '{"type":"turn.started"}'];
+	const LIMIT_LINE = "ERROR: You've hit your usage limit. Visit https://chatgpt.com/settings/usage or try again at 2:05 PM.";
+	const RAW_LIMIT = `The codex CLI exited with code 1: ${[...EVENTS, LIMIT_LINE].join("\n")}`;
+	const RAW_OTHER = `The codex CLI exited with code 1: ${[...EVENTS, '{"type":"error","message":"boom"}'].join("\n")}`;
+	const RESET = "Resets at 2026-11-08 14:05 +11:00 (Australia/Melbourne).";
+	const sql = (s: string) => s.replace(/'/g, "''");
+	const attemptDetails = async () => (await listLeadVerifications(env, "s1", "u1")).attempts.map((a) => a.detail);
+	const insert = (id: string, detail: string, at: number) =>
+		d1.exec(`INSERT INTO job_lead_browser_verification_attempts (id, instance_id, user_id, lead_id, attempt, run_id, state, outcome, detail, created_at, completed_at) VALUES ('${id}', 's1', 'u1', 'lead-1', 1, NULL, 'completed', 'temporarily_unverifiable', '${sql(detail)}', ${at}, ${at})`);
+
+	beforeEach(() => {
+		d1.exec(`UPDATE users SET preferences = '{"timezone":"Australia/Melbourne"}' WHERE id = 'u1'`);
+	});
+
+	it("is stored as a sentence when the run ends, classified from the full error", async () => {
+		await runLeadBrowserVerification(env, ENDED - 60_000);
+		runs.set("run-1", { id: "run-1", status: "failed", errorCode: "engine_failed", error: RAW_OTHER, policy: { engine: "codex" }, endedAt: ENDED, updatedAt: ENDED });
+		await runLeadBrowserVerification(env, ENDED);
+		expect((await queue())?.lastDetail).toBe("The Codex CLI stopped (exit code 1).");
+		expect(await attemptDetails()).toEqual(["The Codex CLI stopped (exit code 1)."]);
+	});
+
+	it("a limit run's attempt detail carries the reset in the owner's zone", async () => {
+		await runLeadBrowserVerification(env, ENDED - 60_000);
+		runs.set("run-1", { id: "run-1", status: "failed", errorCode: "engine_failed", error: RAW_LIMIT, policy: { engine: "codex" }, endedAt: ENDED, updatedAt: ENDED });
+		await runLeadBrowserVerification(env, ENDED);
+		expect(await attemptDetails()).toEqual([`Codex usage limit reached. ${RESET}`]);
+	});
+
+	it("a stored raw row reads back as the sentence through the lead and the attempt, and drops a reset that has passed", async () => {
+		const stored = `The verification run ended failed (engine_failed): ${RAW_LIMIT}`;
+		d1.exec(`UPDATE job_lead_browser_verifications SET last_detail = '${sql(stored)}', updated_at = ${ENDED}`);
+		insert("a1", stored, ENDED);
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			vi.setSystemTime(ENDED + 60_000);
+			const { leads: [l], attempts: [a] } = await listLeadVerifications(env, "s1", "u1");
+			expect(l.lastDetail).toBe(`Codex usage limit reached. ${RESET}`);
+			expect(a.detail).toBe(`Codex usage limit reached. ${RESET}`);
+			vi.setSystemTime(ENDED + 86_400_000);
+			const after = await listLeadVerifications(env, "s1", "u1");
+			expect(after.leads[0].lastDetail).toBe("Codex usage limit reached.");
+			expect(after.attempts[0].detail).toBe("Codex usage limit reached.");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("a row clipped when written reads as the exit-code sentence; other details are untouched", async () => {
+		const clipped = `The verification run ended failed (engine_failed): ${RAW_LIMIT}`.slice(0, 120);
+		d1.exec(`UPDATE job_lead_browser_verifications SET last_detail = '${sql(clipped)}'`);
+		insert("a1", "Browser verification: active.", ENDED);
+		insert("a2", "The verification run ended failed (runner_lost): gone", ENDED + 1);
+		insert("a3", "Codex usage limit reached.", ENDED + 2);
+		const { leads: [l], attempts } = await listLeadVerifications(env, "s1", "u1");
+		expect(l.lastDetail).toBe("The Codex CLI stopped (exit code 1).");
+		expect(attempts.map((a) => a.detail).sort()).toEqual(["Browser verification: active.", "Codex usage limit reached.", "The verification run ended failed (runner_lost): gone"]);
 	});
 });
 

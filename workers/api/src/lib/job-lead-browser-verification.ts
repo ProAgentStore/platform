@@ -37,6 +37,8 @@ import { requestOwnerAttention } from "./owner-attention.js";
 import type { LeadVerification, LeadVerificationListResponse, VerificationAttempt, VerificationState } from "./job-lead-browser-verification-types.js";
 import type { Env } from "../types.js";
 import { clip } from "./job-lead-queue.js";
+import { accountTimeZone } from "./account-timezone.js";
+import { readableVerificationDetail } from "./verification-engine-failure.js";
 import { deferUntil, type InfrastructureFailure, infrastructureFailure, infrastructureFailureOfDetail } from "./verification-infrastructure.js";
 import { readGmailScoutLeadRecords } from "./gmail-scout/scan.js";
 import { pushScoutLeadsToJobs } from "./gmail-scout/jobs-push.js";
@@ -71,7 +73,13 @@ interface LeadRow {
 	closed_reason?: string | null;
 }
 
-const presentLead = (r: LeadRow): LeadVerification => ({
+/** The owner's zone and the clock a stored row is read back with (#1598): a reset time is printed in the zone and dropped once past. */
+interface ReadCtx {
+	zone: string | undefined;
+	now: number;
+}
+
+const presentLead = (r: LeadRow, ctx: ReadCtx): LeadVerification => ({
 	instanceId: r.instance_id,
 	leadId: r.lead_id,
 	workKey: r.work_key,
@@ -83,7 +91,7 @@ const presentLead = (r: LeadRow): LeadVerification => ({
 	nextAttemptAt: iso(r.next_attempt_at) ?? "",
 	awaitingSince: iso(r.awaiting_since) ?? "",
 	lastOutcome: (BROWSER_VERIFICATION_OUTCOMES as readonly string[]).includes(r.last_outcome ?? "") ? (r.last_outcome as BrowserVerificationOutcome) : null,
-	lastDetail: r.last_detail,
+	lastDetail: readableVerificationDetail(r.last_detail, r.updated_at, ctx.zone, ctx.now),
 	updatedAt: iso(r.updated_at) ?? "",
 	closedReason: r.closed_reason === "consent_expired" ? "consent_expired" : null,
 });
@@ -100,14 +108,14 @@ interface AttemptRow {
 	completed_at: number | null;
 }
 
-const presentAttempt = (r: AttemptRow): VerificationAttempt => ({
+const presentAttempt = (r: AttemptRow, ctx: ReadCtx): VerificationAttempt => ({
 	id: r.id,
 	leadId: r.lead_id,
 	attempt: r.attempt,
 	runId: r.run_id,
 	state: r.state,
 	outcome: (BROWSER_VERIFICATION_OUTCOMES as readonly string[]).includes(r.outcome ?? "") ? (r.outcome as BrowserVerificationOutcome) : null,
-	detail: r.detail,
+	detail: readableVerificationDetail(r.detail, r.completed_at ?? r.created_at, ctx.zone, ctx.now),
 	createdAt: iso(r.created_at) ?? "",
 	completedAt: iso(r.completed_at),
 });
@@ -155,6 +163,13 @@ export function pageTitleFromRun(run: LocalBrowserRun | null): string | undefine
 	return titles.size === 1 ? [...titles][0] : undefined;
 }
 
+/** The detail to store for a finished run: `outcomeFromRun`'s, with an `engine_failed` run's raw CLI output read as a sentence (#1598). Built from the full error, before any clip. */
+async function writtenDetail(env: Env, run: LocalBrowserRun | null, userId: string): Promise<string> {
+	const { detail } = outcomeFromRun(run);
+	if (run?.errorCode !== "engine_failed") return detail;
+	return readableVerificationDetail(detail, run.endedAt ?? run.updatedAt, await accountTimeZone(env, userId)) ?? detail;
+}
+
 /** The typed outcome a finished run reported — anything unreadable is temporarily_unverifiable, never a guess. */
 export function outcomeFromRun(run: LocalBrowserRun | null): { outcome: BrowserVerificationOutcome; detail: string } {
 	if (!run) return { outcome: "temporarily_unverifiable", detail: "The verification run could not be found." };
@@ -173,13 +188,14 @@ export function outcomeFromRun(run: LocalBrowserRun | null): { outcome: BrowserV
 }
 
 
-export async function listLeadVerifications(env: DB, instanceId: string, userId: string, limit = 50): Promise<LeadVerificationListResponse> {
+export async function listLeadVerifications(env: Env, instanceId: string, userId: string, limit = 50): Promise<LeadVerificationListResponse> {
 	const lim = Math.max(1, Math.min(200, limit));
 	const [leads, attempts] = await Promise.all([
 		env.DB.prepare("SELECT * FROM job_lead_browser_verifications WHERE instance_id = ?1 AND user_id = ?2 ORDER BY updated_at DESC LIMIT ?3").bind(instanceId, userId, lim).all<LeadRow>(),
 		env.DB.prepare("SELECT * FROM job_lead_browser_verification_attempts WHERE instance_id = ?1 AND user_id = ?2 ORDER BY created_at DESC LIMIT ?3").bind(instanceId, userId, lim).all<AttemptRow>(),
 	]);
-	return { leads: (leads.results ?? []).map(presentLead), attempts: (attempts.results ?? []).map(presentAttempt) };
+	const ctx: ReadCtx = { zone: await accountTimeZone(env, userId), now: Date.now() };
+	return { leads: (leads.results ?? []).map((r) => presentLead(r, ctx)), attempts: (attempts.results ?? []).map((r) => presentAttempt(r, ctx)) };
 }
 
 async function getLeadRow(env: DB, instanceId: string, leadId: string): Promise<LeadRow | null> {
@@ -505,7 +521,7 @@ export async function dispatchLeadVerification(env: Env, row: LeadRow, now = Dat
 	}
 	const refused = run.status === "failed" ? infrastructureFailure(run.errorCode, run.error, now) : null;
 	if (refused) {
-		await recordAttempt(env, row, { attempt: row.attempts, state: "completed", runId: run.id, outcome: "temporarily_unverifiable", detail: outcomeFromRun(run).detail }, now);
+		await recordAttempt(env, row, { attempt: row.attempts, state: "completed", runId: run.id, outcome: "temporarily_unverifiable", detail: await writtenDetail(env, run, row.user_id) }, now);
 		await deferLead(env, row, refused, run.policy.engine, row.attempts, now);
 		return "awaiting";
 	}
@@ -523,7 +539,8 @@ export async function reconcileVerificationAttempts(env: Env, now = Date.now(), 
 		if (run && (run.status === "queued" || run.status === "running" || run.status === "paused")) continue;
 		const row = await getLeadRow(env, a.instance_id, a.lead_id);
 		if (!row) continue;
-		const { outcome, detail } = outcomeFromRun(run);
+		const { outcome } = outcomeFromRun(run);
+		const detail = await writtenDetail(env, run, a.user_id);
 		const claimed = await env.DB.prepare("UPDATE job_lead_browser_verification_attempts SET state = 'completed', outcome = ?1, detail = ?2, completed_at = ?3 WHERE id = ?4 AND state = 'dispatched'")
 			.bind(outcome, clip(detail), now, a.id)
 			.run();
@@ -603,7 +620,7 @@ export async function verifyLeadNow(env: Env, instanceId: string, userId: string
 	if (row.state !== "awaiting") return { error: `This lead's verification is ${row.state}; only a waiting one can be started now.`, status: 409 };
 	const state = await dispatchLeadVerification(env, row, now);
 	const after = await getLeadRow(env, instanceId, leadId);
-	return { state, lead: presentLead(after ?? row) };
+	return { state, lead: presentLead(after ?? row, { zone: await accountTimeZone(env, userId), now: Date.now() }) };
 }
 
 export interface InfrastructureReopenCounts {
