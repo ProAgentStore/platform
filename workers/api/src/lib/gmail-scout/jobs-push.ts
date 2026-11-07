@@ -11,7 +11,6 @@ import type { Env } from "../../types.js";
 import { callJobsTool } from "../jobs-app.js";
 import { canonicalJobUrl } from "../job-lead-triage.js";
 import { logEvent } from "../events.js";
-import { readGmailScoutLeadRecords } from "./scan.js";
 
 export const JOBS_PUSH_BATCH = 50;
 /** Leads in these states are the owner's or the verifier's "no": never sent. Awaiting ones are sent once verified. */
@@ -57,9 +56,10 @@ export function toJobsLead(data: Record<string, unknown>, now = Date.now()): Job
 	};
 }
 
-export async function pushScoutLeadsToJobs(env: Env, instanceId: string, userId: string): Promise<{ sent: number }> {
+/** `read` is the Scout's lead reader, passed in because scan.ts imports this module. */
+export async function pushScoutLeadsToJobs(env: Env, instanceId: string, userId: string, read: () => Promise<Array<{ id?: string; data?: Record<string, unknown> }>>): Promise<{ sent: number }> {
 	try {
-		const pending = (await readGmailScoutLeadRecords(env, instanceId)).flatMap((r) => {
+		const pending = (await read()).flatMap((r) => {
 			if (!r.id || !r.data || r.data.jobs_pushed_at || NOT_PUSHED_STATUSES.has(text(r.data.status))) return [];
 			const lead = toJobsLead(r.data);
 			return lead ? [{ id: r.id, lead }] : [];
