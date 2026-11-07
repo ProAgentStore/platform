@@ -5,7 +5,7 @@ import type { BrowserWebsiteAccessWire } from "../browser-website-policy.js";
  * and the durable fill run. Every statement is scoped by `user_id`; runs also by `instance_id`.
  */
 import type { Env } from "../../types.js";
-import { type ApplicationStatus, type JobApplication, writeBackToLead } from "../local-artifact/store.js";
+import { type ApplicationStatus, type JobApplication, mirrorToJobs, writeBackToLead } from "../local-artifact/store.js";
 import { type LocalApplyMode, type LocalApplyPause, traceUrl } from "./contract.js";
 import type { LocalApplyHandoffTerminalReason } from "./handoff-contract.js";
 import type { GateCheck } from "./policy.js";
@@ -125,7 +125,10 @@ export async function moveApplication(env: DB, app: Pick<JobApplication, "id" | 
 	]);
 	const moved = !!(await env.DB.prepare("SELECT 1 AS ok FROM job_application_events WHERE id = ?1").bind(auditId).first<{ ok: number }>());
 	// The lead the application came from shows its status (#953).
-	if (moved) await writeBackToLead(env, userId, app.id);
+	if (moved) {
+		await writeBackToLead(env, userId, app.id);
+		await mirrorToJobs(env, userId, app.id);
+	}
 	return moved;
 }
 

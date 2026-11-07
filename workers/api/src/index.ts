@@ -87,6 +87,8 @@ import { runIssueSync } from "./lib/issue-sync.js";
 import { syncActiveLocalBrowserRuns } from "./lib/local-browser/sync.js";
 import { sweepExpiredBrowserArtifacts } from "./lib/browser-artifacts.js";
 import { syncActiveTailorRuns } from "./lib/local-artifact/tailor.js";
+import { setApplicationMirror } from "./lib/local-artifact/store.js";
+import { syncApplicationToJobs, syncPendingToJobs } from "./lib/jobs-tailored.js";
 import { syncActiveApplyReconciliations, syncActiveApplyRuns } from "./lib/local-apply/apply.js";
 import { failExpiredCodeWaits } from "./lib/local-apply/agent-sign-in.js";
 import { expireScheduledUpdateOps, failStaleUpdateOps } from "./lib/runner-update-ops.js";
@@ -132,6 +134,9 @@ export { AgentLoopWorkflow } from "./workflows/agent-loop.js";
 export { RunnerUpdateWorkflow } from "./lib/runner-update-workflow.js";
 // Re-export the WebSocket relay DO for wrangler
 export { RelayDO } from "./relay-do.js";
+
+// #1586: application changes are mirrored to the Jobs app (the store cannot import this: it would close an import cycle).
+setApplicationMirror(syncApplicationToJobs);
 
 const app = new Hono<{ Bindings: Env }>();
 /** The assembled app, exported for the route-table guards (`approval-gate.test.ts` walks `app.routes`). */
@@ -443,6 +448,8 @@ export default {
 		ctx.waitUntil(syncActiveLocalBrowserRuns(env).catch((err) => logUnhandled(env, err, { path: "scheduled:local-browser", method: "CRON" })));
 		// The same pull for Application Tailor runs (#956), plus the materials_ready outbox backstop.
 		ctx.waitUntil(syncActiveTailorRuns(env).catch((err) => logUnhandled(env, err, { path: "scheduled:application-tailor", method: "CRON" })));
+		// #1586: retry any application the Jobs app is behind on (its own failures are recorded on the row).
+		ctx.waitUntil(syncPendingToJobs(env).catch((err) => logUnhandled(env, err, { path: "scheduled:jobs-tailored-sync", method: "CRON" })));
 		// The same pull for Application Runner fills (#957).
 		ctx.waitUntil(syncActiveApplyRuns(env).catch((err) => logUnhandled(env, err, { path: "scheduled:application-runner", method: "CRON" })));
 		// #1467: the agent-driven sign-in's 5-minute code wait only got evaluated when the runner

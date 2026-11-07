@@ -295,6 +295,26 @@ export async function writeBackToLead(env: DB, userId: string, applicationId: st
 	}
 }
 
+type ApplicationMirror = (env: Env, userId: string, applicationId: string) => Promise<void>;
+let mirror: ApplicationMirror | null = null;
+/**
+ * Where an application's changes are mirrored to the Jobs app (#1586). Registered once by the Worker entry
+ * (index.ts) rather than imported here: the mirror reaches the whole tool/trigger graph, which reaches back to this store.
+ */
+export function setApplicationMirror(fn: ApplicationMirror | null): void {
+	mirror = fn;
+}
+
+/** Tell the mirror an application changed. Never throws and never blocks the move; the per-minute sweep retries what it could not do. */
+export async function mirrorToJobs(env: DB, userId: string, applicationId: string): Promise<void> {
+	if (!env.AGENT || !mirror) return;
+	try {
+		await mirror(env as Env, userId, applicationId);
+	} catch {
+		// Best-effort by design: the mirror records its own failures, and syncPendingToJobs retries.
+	}
+}
+
 /** The cron backstop: re-send the state of applications that moved recently. Idempotent on the lead's side. */
 export async function syncLeadWritebacks(env: DB, sinceMs: number, limit = 50): Promise<number> {
 	const { results } = await env.DB.prepare(
@@ -442,7 +462,10 @@ export async function settleApplication(env: DB, instanceId: string, userId: str
 		).bind(auditId, runId, now, id, instanceId, userId, s.to),
 	]);
 	const settled = !!(await env.DB.prepare("SELECT 1 AS ok FROM job_application_events WHERE id = ?1").bind(auditId).first<{ ok: number }>());
-	if (settled) await writeBackToLead(env, userId, id);
+	if (settled) {
+		await writeBackToLead(env, userId, id);
+		await mirrorToJobs(env, userId, id);
+	}
 	return settled;
 }
 

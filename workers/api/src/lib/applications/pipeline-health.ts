@@ -32,7 +32,8 @@ export type PipelineProblemCode =
 	| "source_never_scanned"
 	| "source_not_scheduled"
 	| "source_stale"
-	| "source_junk_leads";
+	| "source_junk_leads"
+	| "jobs_sync_failing";
 
 export interface PipelineProblem {
 	code: PipelineProblemCode;
@@ -80,6 +81,13 @@ export interface EdgeFact {
 	dead: number;
 }
 
+/** Applications a Tailor could not mirror to the Jobs app (#1586). A missing grant is not counted: Jobs is opt-in. */
+export interface JobsSyncFact {
+	instanceId: string;
+	failing: number;
+	lastError: string | null;
+}
+
 export interface SourceFact {
 	instanceId: string;
 	runtime: string | null;
@@ -97,7 +105,7 @@ const utc = (v: string | null): number => (v ? Date.parse(v.includes("T") ? v : 
 const iso = (v: string | null): string | null => (Number.isFinite(utc(v)) ? new Date(utc(v)).toISOString() : null);
 
 /** Pure: the facts in, every problem out. */
-export function pipelineHealthFrom(input: { pipeline: { scouts: string[]; tailors: string[]; runners: string[] }; edges: EdgeFact[]; sources: SourceFact[]; now: number }): PipelineHealth {
+export function pipelineHealthFrom(input: { pipeline: { scouts: string[]; tailors: string[]; runners: string[] }; edges: EdgeFact[]; sources: SourceFact[]; now: number; jobsSync?: JobsSyncFact[] }): PipelineHealth {
 	const problems: PipelineProblem[] = [];
 	for (const e of input.edges) {
 		if (!e.enabled) problems.push({ code: "edge_disabled", connectionId: e.id, message: `The ${e.eventType === "job.application.materials_ready" ? "Tailor → Runner" : "Scout → Tailor"} connection ${e.id} is disabled, so nothing moves along it until it is re-enabled.` });
@@ -105,6 +113,9 @@ export function pipelineHealthFrom(input: { pipeline: { scouts: string[]; tailor
 	}
 	if (input.pipeline.scouts.length && !input.pipeline.tailors.length) problems.push({ code: "no_tailor", message: "No Application Tailor is connected, so an approved lead cannot get materials." });
 	if (input.pipeline.tailors.length && !input.pipeline.runners.length) problems.push({ code: "no_runner", message: "No Application Runner is connected, so ready materials cannot be filled." });
+	for (const j of input.jobsSync ?? []) {
+		if (j.failing > 0) problems.push({ code: "jobs_sync_failing", instanceId: j.instanceId, message: `Tailor ${j.instanceId} could not send ${j.failing} application${j.failing === 1 ? "" : "s"} to the Jobs app (last error: ${j.lastError ?? "none recorded"}). It retries every 15 minutes; check the Tailor's MCP grant and account for the Jobs endpoint.` });
+	}
 	const sources: SourceHealth[] = input.sources.map((s) => {
 		const g = s.gmail;
 		const kind: SourceHealth["kind"] = g ? "gmail" : s.runtime === "local_browser" ? "browser" : "none";
@@ -149,7 +160,16 @@ export async function pipelineHealth(env: Env, uid: string, pipeline: { scouts: 
 			return { instanceId, runtime: caps?.runtime ?? null, gmail, browser };
 		}),
 	);
-	return pipelineHealthFrom({ pipeline, edges, sources, now });
+	const jobsSync = await Promise.all(
+		pipeline.tailors.map(async (instanceId): Promise<JobsSyncFact> => {
+			const row = await env.DB.prepare("SELECT COUNT(*) AS n, MAX(jobs_sync_error) AS e FROM job_applications WHERE instance_id = ?1 AND user_id = ?2 AND jobs_sync_error IS NOT NULL AND jobs_sync_error NOT LIKE 'no_grant:%' AND jobs_sync_at >= ?3")
+				.bind(instanceId, uid, now - 14 * 24 * 60 * 60_000)
+				.first<{ n: number; e: string | null }>()
+				.catch(() => null);
+			return { instanceId, failing: row?.n ?? 0, lastError: row?.e ?? null };
+		}),
+	);
+	return pipelineHealthFrom({ pipeline, edges, sources, now, jobsSync });
 }
 
 /**
