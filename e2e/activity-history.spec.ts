@@ -86,7 +86,7 @@ test.describe("History above the timeline", () => {
 		await expect(page.getByTestId("history-empty")).toHaveCount(0);
 	});
 
-	test("?panel= scrolls to and focuses that panel", async ({ page }) => {
+	test("mobile — ?panel= scrolls to and focuses that panel", async ({ page }) => {
 		await page.setViewportSize({ width: 390, height: 500 });
 		await setup(page);
 		await page.goto(`${HISTORY}&panel=deliveries`);

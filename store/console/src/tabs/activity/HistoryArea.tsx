@@ -55,8 +55,13 @@ export default function HistoryArea({ instanceId, caps, view }: { instanceId: st
 		focused.current = true;
 		const panel = view.panel && reportOf(view.panel).rows > 0 ? document.getElementById(`history-panel-${view.panel}`) : null;
 		const target = panel ?? areaRef.current;
-		target?.scrollIntoView({ block: "start" });
-		target?.focus({ preventScroll: true });
+		// After layout settles: WebKit scrolled the document instead of the tab's own scroller when this ran in the commit.
+		requestAnimationFrame(() =>
+			requestAnimationFrame(() => {
+				target?.scrollIntoView({ block: "start" });
+				target?.focus({ preventScroll: true });
+			}),
+		);
 	});
 
 	const empty = historyIsEmpty(shown.map(reportOf));
