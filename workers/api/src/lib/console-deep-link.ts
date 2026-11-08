@@ -21,7 +21,7 @@
  * The console is a BrowserRouter: a `#fragment` is ignored (`checkConsoleLink`), so there is no anchor
  * finer than a tab or a record page. A "field" is answered with the tab that holds it.
  */
-import { applicationHandoffLink, codingSessionLink, instanceFilesUploadLink, instanceLink, instancePermissionsLink, instanceRunLink, localBrowserRunLink, secureInputNotificationLink } from "./console-links.js";
+import { applicationHandoffLink, codingSessionLink, instanceFilesUploadLink, instanceLink, instancePermissionsLink, instanceRunLink, instanceSettingsSubtabLink, localBrowserRunLink, secureInputNotificationLink } from "./console-links.js";
 
 /** The console's public origin. `/console/…` paths resolve here (and on console.proagentstore.online without the prefix). */
 export const CONSOLE_ORIGIN = "https://proagentstore.online";
@@ -41,6 +41,16 @@ const COLLECTION_TOOLS = ["create_collection", "list_collections", "insert_recor
 const canUse = (caps: LinkCaps, names: readonly string[]) => !caps.tools || names.some((n) => caps.tools?.includes(n));
 /** Mirrors `showsKnowledgeSubTab(caps, "files")` in the console. */
 export const canUploadInstanceFiles = (caps: LinkCaps) => canUse(caps, FILE_TOOLS) || canUse(caps, KB_TOOLS);
+
+/** The Settings sub-tabs in bar order (mirrors `store/console/src/lib/settingsSubtab.ts`; held equal by `console-deep-link.test.ts`). */
+export const SETTINGS_SUBTAB_SECTIONS: ReadonlyArray<{ id: "agent" | "browser" | "automation" | "notifications" | "instructions" | "general"; label: string; shown: (caps: LinkCaps) => boolean; needs?: string }> = [
+	{ id: "agent", label: "Agent", shown: () => true },
+	{ id: "browser", label: "Browser", shown: (c) => ["browser", "local_browser", "local_apply"].includes(c.runtime ?? "") || c.surfaces.includes("apply"), needs: "a browser runtime or the apply surface" },
+	{ id: "automation", label: "Automation", shown: () => true },
+	{ id: "notifications", label: "Notifications", shown: () => true },
+	{ id: "instructions", label: "Instructions", shown: () => true },
+	{ id: "general", label: "General", shown: () => true },
+];
 
 /** Every instance tab, with the console's rule for showing it (mirrors `surfaces.tsx` `SURFACES`). */
 export const CONSOLE_SECTIONS: ReadonlyArray<{ id: string; label: string; shown: (caps: LinkCaps) => boolean; needs?: string }> = [
@@ -66,7 +76,7 @@ export const CONSOLE_SECTIONS: ReadonlyArray<{ id: string; label: string; shown:
 /** What the link should open. At most one of these per call — a record page already names its tab. */
 export type ConsoleTarget =
 	| { kind: "instance" }
-	| { kind: "section"; section: string }
+	| { kind: "section"; section: string; /** Only with `settings`: opens that Settings sub-tab. */ subtab?: string }
 	/** Knowledge's Files uploader, only where uploaded data is readable by this instance. */
 	| { kind: "filesUpload" }
 	/** A loop run: its coding session when it drives one, else the Assistant where a chat-driven run reports. */
@@ -107,6 +117,16 @@ export function buildConsoleLink(instanceId: string, target: ConsoleTarget, caps
 			if (!spec.shown(caps)) {
 				const shown = CONSOLE_SECTIONS.filter((s) => s.shown(caps)).map((s) => s.id);
 				return { error: `This instance does not show the ${spec.label} tab (it needs ${spec.needs}), so a link to it would land on another tab. It shows: ${shown.join(", ")}.` };
+			}
+			if (target.subtab !== undefined) {
+				if (spec.id !== "settings") return { error: `subtab only applies to section settings, not ${spec.id}.` };
+				const sub = SETTINGS_SUBTAB_SECTIONS.find((s) => s.id === target.subtab);
+				if (!sub) return { error: `"${target.subtab}" is not a Settings sub-tab. Sub-tabs: ${SETTINGS_SUBTAB_SECTIONS.map((s) => s.id).join(", ")}.` };
+				if (!sub.shown(caps)) {
+					const shown = SETTINGS_SUBTAB_SECTIONS.filter((s) => s.shown(caps)).map((s) => s.id);
+					return { error: `This instance does not show the Settings ${sub.label} sub-tab (it needs ${sub.needs}), so a link to it would land on another sub-tab. It shows: ${shown.join(", ")}.` };
+				}
+				return make(instanceSettingsSubtabLink(instanceId, sub.id), `the Settings tab, ${sub.label}`);
 			}
 			return make(spec.id === "chat" ? instanceLink(instanceId) : `${instanceLink(instanceId)}/${spec.id}`, `the ${spec.label} tab`);
 		}

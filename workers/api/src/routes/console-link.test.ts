@@ -55,6 +55,16 @@ describe("GET /v1/instances/:id/console-link (#938)", () => {
 		expect(refused.body.error).toMatch(/does not show the Coding tab.*It shows: chat, repo/);
 	});
 
+	it("links a Settings sub-tab (#1614), refusing one not shown and a subtab without section=settings", async () => {
+		expect((await link("i1", "?section=settings&subtab=automation")).body.path).toBe("/console/instances/i1/settings?subtab=automation");
+		const refused = await link("i1", "?section=settings&subtab=browser");
+		expect(refused.status).toBe(400);
+		expect(refused.body.error).toMatch(/does not show the Settings Browser sub-tab.*It shows: agent, automation/);
+		expect((await link("i1", "?subtab=automation")).status).toBe(400);
+		expect((await link("i1", "?section=knowledge&subtab=files")).status).toBe(400);
+		expect((await link("i1", "?section=settings&subtab=automation&run_id=run_code")).status).toBe(400);
+	});
+
 	it("links an eligible owner's Files uploader and reports a structured capability refusal", async () => {
 		const eligible = await link("i2", "?target=files-upload");
 		expect(eligible.body).toMatchObject({

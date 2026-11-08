@@ -6,7 +6,8 @@
  */
 import { describe, expect, it } from "vitest";
 import { checkConsoleLink, INSTANCE_TABS } from "../../../../store/console/src/lib/routes";
-import { buildConsoleLink, CONSOLE_ORIGIN, CONSOLE_SECTIONS, type ConsoleLink, type ConsoleTarget, type LinkCaps } from "./console-deep-link";
+import { SETTINGS_SUBTABS, visibleSettingsSubtabs } from "../../../../store/console/src/lib/settingsSubtab";
+import { buildConsoleLink, CONSOLE_ORIGIN, CONSOLE_SECTIONS, SETTINGS_SUBTAB_SECTIONS, type ConsoleLink, type ConsoleTarget, type LinkCaps } from "./console-deep-link";
 
 const CODER: LinkCaps = { surfaces: ["coding"] };
 const REPO_CHAT: LinkCaps = { surfaces: ["repo"], tools: ["search_knowledge", "list_knowledge", "read_knowledge"] };
@@ -106,5 +107,35 @@ describe("buildConsoleLink", () => {
 	it("escapes ids so one cannot add path segments the console would drop", () => {
 		const { path } = ok({ kind: "task", taskId: "a/b" });
 		expect(path).toBe("/console/instances/inst_1/tasks/a%2Fb");
+	});
+});
+
+describe("Settings sub-tab links (#1614)", () => {
+	const GMAIL_SCOUT: LinkCaps = { surfaces: ["chat", "settings"], runtime: "local_browser" };
+	const CLOUD_CHAT: LinkCaps = { surfaces: ["chat"], runtime: null };
+	const settings = (subtab: string, caps: LinkCaps) => buildConsoleLink("inst_1", { kind: "section", section: "settings", subtab }, caps);
+
+	it("mirrors the console's sub-tab ids and gating for a Gmail Scout, a coding agent and a cloud-only chat agent", () => {
+		expect(SETTINGS_SUBTAB_SECTIONS.map((s) => s.id)).toEqual([...SETTINGS_SUBTABS]);
+		for (const caps of [GMAIL_SCOUT, CODER, CLOUD_CHAT, APPLY, { surfaces: [], runtime: "local_apply" }, { surfaces: [], runtime: "browser" }]) {
+			expect(SETTINGS_SUBTAB_SECTIONS.filter((s) => s.shown(caps)).map((s) => s.id)).toEqual(visibleSettingsSubtabs(caps));
+		}
+	});
+
+	it("links a shown sub-tab and names it", () => {
+		const link = ok({ kind: "section", section: "settings", subtab: "browser" }, GMAIL_SCOUT);
+		expect(link.path).toBe("/console/instances/inst_1/settings?subtab=browser");
+		expect(link.lands).toBe("the Settings tab, Browser");
+		expect(ok({ kind: "section", section: "settings", subtab: "automation" }, CLOUD_CHAT).lands).toBe("the Settings tab, Automation");
+	});
+
+	it("refuses a sub-tab not shown, listing those shown, and an unknown one", () => {
+		const r = settings("browser", CLOUD_CHAT);
+		expect("error" in r && r.error).toMatch(/does not show the Settings Browser sub-tab.*It shows: agent, automation, notifications, instructions, general\./);
+		expect(settings("logs", CLOUD_CHAT)).toHaveProperty("error");
+	});
+
+	it("refuses a sub-tab on any other section", () => {
+		expect(buildConsoleLink("inst_1", { kind: "section", section: "knowledge", subtab: "files" }, CODER)).toHaveProperty("error");
 	});
 });

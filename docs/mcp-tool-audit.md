@@ -344,7 +344,7 @@ tools with no calls.
 | `set_instance_connector_account` | `instance-tools/connectors.ts` | write | — | 127 | — | y | 2 | 0 | keep |
 | `set_instance_connector_consent` | `instance-tools/connectors.ts` | write | — | 88 | — | y | 11 | 0 | keep |
 | `sync_github_installations` | `instance-tools/connectors.ts` | write | — | 159 | y | — | 2 | 0 | keep |
-| `get_console_link` | `instance-tools/console-link.ts` | read | — | 202 | y | — | 0 | 0 | keep |
+| `get_console_link` | `instance-tools/console-link.ts` | read | — | 219 | y | — | 0 | 0 | keep |
 | `list_instance_permission_requests` | `instance-tools/console-link.ts` | read | — | 117 | — | — | 0 | 0 | keep |
 | `connect_discord_bot` | `instance-tools/discord.ts` | write | — | 89 | — | y | 2 | 0 | keep |
 | `disconnect_discord_bot` | `instance-tools/discord.ts` | destructive | — | 37 | — | — | 0 | 0 | keep |

@@ -487,7 +487,7 @@ const TABLE: Record<string, Row> = {
 	// #1131: runs the request's owner-approved command under sudo; `dry_run` previews without touching the network.
 	secure_input_sudo: ["secureInput", "runtime", null, "envelope", "dry_run,instance_id,request_id,token"],
 	secure_input_status: ["secureInput", "read", null, null, "instance_id,request_id,token"],
-	get_console_link: ["consoleLink", "read", null, null, "instance_id,permission_request_id,run_id,section,secure_input_id,target,task_id,token"],
+	get_console_link: ["consoleLink", "read", null, null, "instance_id,permission_request_id,run_id,section,secure_input_id,subtab,target,task_id,token"],
 	list_instance_permission_requests: ["consoleLink", "read", null, null, "instance_id,token"],
 	get_application_runner_settings: ["applications", "read", null, null, "instance_id,token"],
 	get_application_tailor_settings: ["applications", "read", null, null, "instance_id,token"],

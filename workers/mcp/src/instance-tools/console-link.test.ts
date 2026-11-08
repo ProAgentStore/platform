@@ -57,6 +57,12 @@ describe("get_console_link (#938)", () => {
 		expect(seen).toEqual(["https://api.test/v1/instances/i1/console-link?section=permissions"]);
 	});
 
+	it("forwards section=settings with its subtab (#1614)", async () => {
+		const { seen, call } = getConsoleLink({ status: 200, body: { url: "u", path: "p", lands: "the Settings tab, Automation" } });
+		await call({ instance_id: "i1", section: "settings", subtab: "automation" });
+		expect(seen).toEqual(["https://api.test/v1/instances/i1/console-link?section=settings&subtab=automation"]);
+	});
+
 	it("returns the API-verified Files uploader link through the read-only console-link tool", async () => {
 		const link = {
 			url: "https://proagentstore.online/console/instances/i1/knowledge?subtab=files",

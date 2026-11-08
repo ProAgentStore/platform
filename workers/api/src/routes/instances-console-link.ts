@@ -25,8 +25,11 @@ export function registerConsoleLinkRoutes(router: Hono<{ Bindings: Env }>): void
 		const given = (["section", "target", "run_id", "task_id", "secure_input_id", "permission_request_id", "application_handoff_id"] as const).filter((k) => q(k));
 		if (given.length > 1) throw new HttpError(400, `Give one console-link target, not ${given.join(" and ")} — a record's page already sits on its own tab.`);
 
+		// `subtab` refines section=settings; it is not a second target, so it is not in `given`.
+		if (q("subtab") && q("section").toLowerCase() !== "settings") throw new HttpError(400, "subtab only applies together with section=settings.");
+
 		let target: ConsoleTarget = { kind: "instance" };
-		if (q("section")) target = { kind: "section", section: q("section").toLowerCase() };
+		if (q("section")) target = { kind: "section", section: q("section").toLowerCase(), ...(q("subtab") ? { subtab: q("subtab").toLowerCase() } : {}) };
 		else if (q("target")) {
 			if (q("target") !== "files-upload") throw new HttpError(400, `Unknown console-link target "${q("target")}"`);
 			target = { kind: "filesUpload" };
