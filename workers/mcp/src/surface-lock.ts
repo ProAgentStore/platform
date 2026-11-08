@@ -1286,4 +1286,5 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.217": "sha256:b9332a60139bc2f1bb038000aff061f8c4438089a13044ea8c67ff0fdb3ccf3e", // #1600: get_console_link section argument lists every console tab (adds research, applications, permissions); no tool added.
 	"0.1.218": "sha256:57e235a9af83d2c4de8d2c49e443ed4e6e0e8cf8ed124cb13b28b0057cd0c416", // #1614: get_console_link takes an optional subtab (with section settings) naming the Settings sub-tab; no tool added.
 	"0.1.219": "sha256:d93a04b542cc4d221d5ea2d06e363e2a2c3c9fd8495c5198c64dd091cc750f5a", // #1591: get_console_link section argument lists the Scans tab (Gmail Job Search Scouts only); no tool added.
+	"0.1.220": "sha256:1b564940c971d7a1bceae8c9663973bbdf40c7635403cb210f279464522a1c06", // #1619: set_application_runner_settings accountCreation now describes the owner's account registration / password reset authorization; no tool added.
 };

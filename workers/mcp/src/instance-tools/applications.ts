@@ -497,7 +497,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 					maxPages: z.coerce.number().int().optional(),
 					maxActions: z.coerce.number().int().optional(),
 					signInEmail: z.string().nullable().optional().describe("The address your SEEK account uses (#1106). Set, a fill paused for a SEEK sign-in signs itself in with the code SEEK emails there, read from the Gmail this Runner is pinned to (which must be the same address, with email access on). null turns it off."),
-					accountCreation: z.boolean().optional().describe("Legacy saved setting, default false. The account-creation executor was retired in #1422; changing this field currently does not create accounts, reset passwords or enable Gmail verification. Existing vault sign-in and supported email-code sign-in are separate capabilities. Do not claim registration or recovery is enabled from this setting."),
+					accountCreation: z.boolean().optional().describe("The owner's standing authorization (#1619), default false, for the Application Runner to register an employer-site account or reset its password on a sign-in wall: Profile address, a generated password saved to the vault, Gmail code or link. Frozen into each run when it starts; a later change affects only later runs. It needs Full browser tools, email access, and the Gmail pinned to the Profile address. CAPTCHA, MFA and unaccepted terms still go to the owner"),
 					autoSubmit: z
 						.object({
 							enabled: z.boolean().optional(),
