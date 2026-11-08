@@ -79,6 +79,15 @@ describe("accepted full native application tools", () => {
 		await f.bridge.callTool("browser_snapshot"); expect(f.callTool.mock.calls.at(-1)?.[2]).toBeUndefined();
 		await f.bridge.callTool("finish_sign_in"); expect(clear).toHaveBeenCalledOnce();
 	});
+	it("holds a login_required block while the sign-in pause is unresolved and clears it once resolved", async () => {
+		let release: (o: "resumed") => void = () => {};
+		const f = fixture({ pause: () => new Promise((done) => { release = done; }) });
+		const pending = f.bridge.callTool("request_sign_in");
+		await Promise.resolve(); await Promise.resolve();
+		expect(f.bridge.blocked).toEqual({ reason: "login_required", questions: ["Sign in to example.test on this machine's application browser, then retry. Nothing was submitted."] });
+		release("resumed"); await pending;
+		expect(f.bridge.blocked).toBeNull();
+	});
 	it("refuses a sign-in code request after redirect and clears credentials", async () => {
 		const code = vi.fn(async () => true); const clear = vi.fn();
 		const f = fixture({ pause: async () => "sign_in", requestSignInCode: code, signInDone: clear });

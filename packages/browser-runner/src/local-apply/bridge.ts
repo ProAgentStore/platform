@@ -201,7 +201,7 @@ interface PageState {
 	unavailable: LocalApplyUnavailableReason | null;
 }
 
-const signInQuestion = (site: string) => `Sign in to ${site} on this machine's application browser, then retry. Nothing was submitted.`;
+export const signInQuestion = (site: string) => `Sign in to ${site} on this machine's application browser, then retry. Nothing was submitted.`;
 const text = (t: string, isError = false): ToolResult => ({ content: [{ type: "text", text: t }], ...(isError ? { isError: true } : {}) });
 const textOf = (r: { content?: Array<{ type?: string; text?: string }> }) => (r.content ?? []).map((c) => c.text ?? "").join("\n");
 export class ApplyBridge {
@@ -251,7 +251,7 @@ export class ApplyBridge {
 	) {
 		this.replay = new ApplyReplay(host, shots);
 		this.browser = { uploadContext: () => browser.uploadContext?.() ?? null, listTools: () => browser.listTools(), callTool: (name, args, opts) => this.replay.call(browser, name, args, opts), refused: (tool, args, reason) => browser.refused?.(tool, args, reason) };
-		if (host.toolAccess === "full") this.full = new FullApplyTools(this.browser, host, () => ({ actions: this.actions, filled: this.filled, uploaded: this.uploaded.size }), (approved) => { this.supervisorApproved = approved; });
+		if (host.toolAccess === "full") this.full = new FullApplyTools(this.browser, host, () => ({ actions: this.actions, filled: this.filled, uploaded: this.uploaded.size }), (approved) => { this.supervisorApproved = approved; }, (blocked) => { this.blocked = blocked; });
 	}
 
 	callTool(name: string, args: Record<string, unknown> = {}): Promise<ToolResult> {

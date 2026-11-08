@@ -3,7 +3,8 @@ import { mkdirSync, readFileSync, realpathSync, lstatSync, writeFileSync } from 
 import { extname, isAbsolute, join } from "node:path";
 /** Opt-in native tools: no interpretation of page content or native schema rewriting. */
 import type { BrowserTools } from "../local-browser/bridge.js";
-import type { ApplyBridgeHost, ToolResult } from "./bridge.js";
+import { signInQuestion, type ApplyBridgeHost, type ToolResult } from "./bridge.js";
+import { siteKeyOf } from "./site-session.js";
 import { applyTools } from "./tool-schemas.js";
 import { decisionReason, parseDecision } from "./answer-decision.js";
 import type { LocalApplyArtifactKind, LocalApplyTaskEnvelope } from "./contract.js";
@@ -29,7 +30,7 @@ export class FullApplyTools {
 	private credentialOrigin: string | null = null;
 	private submissionPage: object | null = null;
 	private submissionUrl = "";
-	constructor(private readonly browser: BrowserTools, private readonly host: ApplyBridgeHost, private readonly counts: () => { actions: number; filled: number; uploaded: number }, private readonly approve: (approved: boolean) => void) {}
+	constructor(private readonly browser: BrowserTools, private readonly host: ApplyBridgeHost, private readonly counts: () => { actions: number; filled: number; uploaded: number }, private readonly approve: (approved: boolean) => void, private readonly setBlocked: (blocked: { reason: "login_required"; questions: string[] } | null) => void) {}
 	async listTools(): Promise<NativeTool[]> {
 		this.inventory ??= await this.browser.listTools();
 		return [...this.inventory, ...applyTools([], false).filter((t) => TASK_TOOLS.has(t.name)).map((t) => t.name === "supervisor_checkpoint" ? { ...t, description: "Request review of an uncertain decision under the configured escalation level, or obtain an immediate before_submit authorization. Routine initial and page-change checkpoints are optional in full mode." } : t.name === "upload_artifact" ? { ...t, description: "Select an approved, hash-verified document in the current upload input. Observe the website afterward to verify acceptance." } : t), {
@@ -83,8 +84,12 @@ export class FullApplyTools {
 		const page = this.host.page?.(); const url = page?.url?.();
 		if (!url || !/^https?:/.test(url)) return response("A current website page is required for sign-in.", true);
 		const origin = new URL(url).origin;
-		const outcome = await this.host.pause({ reason: "login_required", url, domain: new URL(url).hostname });
+		const domain = new URL(url).hostname;
+		// Like the structured pauseFor: a pause that never resolves (the CLI gave up, the run ended) is a login_required block.
+		this.setBlocked({ reason: "login_required", questions: [signInQuestion(siteKeyOf(domain))] });
+		const outcome = await this.host.pause({ reason: "login_required", url, domain });
 		if (outcome === "stopped" || this.host.isStopped?.()) return response("Sign-in stopped.", true);
+		this.setBlocked(null);
 		if (outcome === "sign_in") {
 			if (this.host.page?.() !== page || new URL(page!.url!()).origin !== origin) { this.host.signInDone?.(); return response("The credential origin changed. Request sign-in again from the current page.", true); }
 			this.credentialOrigin = origin;
