@@ -257,8 +257,8 @@ describe("the verdict is pushed once it is final — and as what it is (#1031)",
 			{
 				title: expect.stringMatching(/could not verify a job/),
 				body: expect.stringMatching(/“Platform Engineer” at Acme could not be verified — no eligible browser was available \(fallback: mark_unverifiable\)/),
-				// Not a Gmail Scout (#1591): a local_browser instance with no queue screen opens Settings → Browser.
-				url: "/console/instances/s1/settings?subtab=browser",
+				// Not a Gmail Scout (#1591): a local_browser instance lists its queue in Activity's History (#1604).
+				url: "/console/instances/s1/activity?view=history&panel=verifications",
 				event: "browser_verification_failed",
 				kind: "alert",
 			},

@@ -108,9 +108,9 @@ describe("deepLinkFor — every notification subject opens a real page (#894)", 
 		expect(links.deepLinkFor({ kind: "application", instanceId: "i1", applicationId: "a b/c" })).toBe("/console/instances/i1/applications?application=a%20b%2Fc");
 		// #1602: a job-lead decision opens THAT lead in the Data tab, not the tab's first page.
 		expect(links.deepLinkFor(s["job-lead"])).toBe("/console/instances/i1/data?lead=x2");
-		// #1591: a verification verdict opens the Scans tab for a Gmail Scout, else Settings → Browser (no queue screen yet, #1604).
+		// #1591: a verification verdict opens the Scans tab for a Gmail Scout, else the History verifications panel (#1604).
 		expect(links.deepLinkFor({ kind: "browser-verification", instanceId: "i1", scans: true })).toBe("/console/instances/i1/scans");
-		expect(links.deepLinkFor({ kind: "browser-verification", instanceId: "i1", scans: false })).toBe("/console/instances/i1/settings?subtab=browser");
+		expect(links.deepLinkFor({ kind: "browser-verification", instanceId: "i1", scans: false })).toBe("/console/instances/i1/activity?view=history&panel=verifications");
 		expect(links.applicationHandoffLink("i1", "handoff_2")).toBe("/console/instances/i1/applications?handoff=handoff_2");
 		expect(links.applicationReconciliationHandoffLink("i1", "handoff_2")).toBe("/console/instances/i1/applications?reconciliation_handoff=handoff_2");
 	});

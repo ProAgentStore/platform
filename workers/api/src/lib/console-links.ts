@@ -249,7 +249,7 @@ export function secureInputNotificationLink(instanceId: string, requestId: strin
  * `panel` focuses one panel; query state like `?subtab=`, because the splat is read as `<tab>/<sessionId>`.
  * Panel ids are `HISTORY_PANELS` in the console's `lib/activityView.ts`.
  */
-export function instanceActivityHistoryLink(instanceId: string, panel?: "loop-runs" | "takeovers" | "browser-launch" | "secure-inputs" | "deliveries"): string {
+export function instanceActivityHistoryLink(instanceId: string, panel?: "loop-runs" | "takeovers" | "verifications" | "browser-launch" | "secure-inputs" | "deliveries"): string {
 	return `${instanceLink(instanceId)}/activity?view=history${panel ? `&panel=${panel}` : ""}`;
 }
 
@@ -327,7 +327,7 @@ export type NotificationSubject =
 	| { kind: "job-lead"; instanceId: string; leadId: string }
 	/**
 	 * A browser verification's verdict (#1031). `scans` is true for a Gmail Scout, whose verification queue is on its Scans tab
-	 * (#1591); any other `local_browser` instance has no queue screen yet, so it lands on Settings → Browser.
+	 * (#1591); any other `local_browser` instance lists its queue in Activity's History `verifications` panel (#1604).
 	 */
 	| { kind: "browser-verification"; instanceId: string; scans: boolean }
 	/** A secure-input request waiting for the owner (#934). */
@@ -382,7 +382,7 @@ export function deepLinkFor(subject: NotificationSubject): DeepLink {
 			case "job-lead":
 				return `${instanceDataLink(subject.instanceId)}?lead=${encodeURIComponent(subject.leadId)}`;
 			case "browser-verification":
-				return subject.scans ? instanceScansLink(subject.instanceId) : instanceSettingsSubtabLink(subject.instanceId, "browser");
+				return subject.scans ? instanceScansLink(subject.instanceId) : instanceActivityHistoryLink(subject.instanceId, "verifications");
 			case "secure-input":
 				return secureInputNotificationLink(subject.instanceId, subject.requestId);
 			case "website-request":

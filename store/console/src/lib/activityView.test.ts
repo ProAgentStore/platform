@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { activityViewFromSearch, HISTORY_PANELS, historyIsEmpty, needingFirst, orderPanels, runNeedsOwner, showsHistoryPanel, type PanelNeed } from "./activityView";
+import { activityViewFromSearch, HISTORY_PANELS, historyIsEmpty, needingFirst, orderPanels, orderVerifications, runNeedsOwner, showsHistoryPanel, verificationHost, verificationTakeover, type PanelNeed } from "./activityView";
+import type { BrowserTakeover } from "./browserTakeovers";
+import type { LeadVerification } from "./gmailScout";
 
 const q = (s: string) => new URLSearchParams(s);
 const need = (...ids: PanelNeed["id"][]): PanelNeed[] => HISTORY_PANELS.map((id) => ({ id, needsOwner: ids.includes(id) }));
@@ -89,5 +91,39 @@ describe("the finder panel is the server's verdict, never the runtime or a slug 
 		expect(showsHistoryPanel({ runtime: "local_browser", originalFinder: true }, "finder")).toBe(true);
 		expect(showsHistoryPanel({ runtime: "local_browser" }, "finder")).toBe(false);
 		expect(showsHistoryPanel({ runtime: "local_browser", originalFinder: false }, "finder")).toBe(false);
+	});
+});
+
+describe("the verifications panel (#1604)", () => {
+	it("is for a local_browser agent that is not a Gmail Scout, by the server's verdict", () => {
+		expect(showsHistoryPanel({ runtime: "local_browser", surfaces: [] }, "verifications")).toBe(true);
+		expect(showsHistoryPanel({ runtime: "local_browser", sourceMode: null, surfaces: [] }, "verifications")).toBe(true);
+		expect(showsHistoryPanel({ runtime: "local_browser", sourceMode: "gmail", surfaces: [] }, "verifications")).toBe(false);
+		expect(showsHistoryPanel({ runtime: "coding", surfaces: ["coding"] }, "verifications")).toBe(false);
+		expect(showsHistoryPanel({ runtime: "browser", surfaces: [] }, "verifications")).toBe(false);
+	});
+
+	const lead = (leadId: string, over: Partial<LeadVerification> = {}): LeadVerification => ({ leadId, canonicalUrl: `https://WWW.Seek.com.au/job/${leadId}`, expectedTitle: null, expectedCompany: null, state: "awaiting", attempts: 0, nextAttemptAt: "", lastOutcome: null, lastDetail: null, ...over });
+	const tk = (id: string, over: Partial<BrowserTakeover> = {}): BrowserTakeover => ({ id, subjectKind: "manual", subjectId: "site-consent:www.seek.com.au", state: "requested", reason: "consent_required", mobileAllowed: false, endReason: null, expiresAt: "", createdAt: "", activatedAt: null, endedAt: null, ...over });
+
+	it("keys a lead by the lower-cased host of its canonicalUrl", () => {
+		expect(verificationHost(lead("a"))).toBe("www.seek.com.au");
+		expect(verificationHost(lead("a", { canonicalUrl: "not a url" }))).toBeNull();
+	});
+	it("a lead needs the owner when it is awaiting and a live manual takeover is for its host", () => {
+		expect(verificationTakeover(lead("a"), [tk("t1")])?.id).toBe("t1");
+		expect(verificationTakeover(lead("a"), [tk("t1", { state: "active" })])?.id).toBe("t1");
+	});
+	it("not for another host, a closed takeover, a non-manual one, or a lead that is not awaiting", () => {
+		expect(verificationTakeover(lead("a"), [tk("t1", { subjectId: "site-consent:other.example" })])).toBeNull();
+		expect(verificationTakeover(lead("a"), [tk("t1", { state: "ended" })])).toBeNull();
+		expect(verificationTakeover(lead("a"), [tk("t1", { subjectKind: "runtime_task" })])).toBeNull();
+		expect(verificationTakeover(lead("a", { state: "dispatched" }), [tk("t1")])).toBeNull();
+		expect(verificationTakeover(lead("a"), [])).toBeNull();
+	});
+	it("rows needing the owner sort first, the rest keep the server's order", () => {
+		const leads = [lead("x", { canonicalUrl: "https://other.example/1" }), lead("y"), lead("z", { canonicalUrl: "https://other.example/2" })];
+		expect(orderVerifications(leads, [tk("t1")]).map((v) => v.leadId)).toEqual(["y", "x", "z"]);
+		expect(orderVerifications(leads, []).map((v) => v.leadId)).toEqual(["x", "y", "z"]);
 	});
 });

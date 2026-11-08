@@ -1,49 +1,22 @@
-import { useCallback, useEffect, useState } from "react";
-import { api } from "@proagentstore/sdk/client";
+import { useState } from "react";
 import Button from "../../components/Button";
 import Card from "../../components/Card";
 import LoadFailed from "../../components/LoadFailed";
-import { type BrowserTakeover, type BrowserTakeoverListResponse, isLive, takeoverRow } from "../../lib/browserTakeovers";
+import { isLive, takeoverRow } from "../../lib/browserTakeovers";
 import { needingFirst } from "../../lib/activityView";
 import { type PanelProps, useReport } from "./useReport";
+import type { TakeoversState } from "./useTakeovers";
 
 /**
  * Activity → History → recent browser takeovers (#1031; moved from Settings → Browser in #1590). A live one
  * is something waiting for the owner, so it is listed first. A live site-consent request offers Allow as well
  * as Decline: Settings has no control that allows a host nobody has decided yet.
  */
-export default function TakeoversPanel({ instanceId, onReport, highlightId }: PanelProps & { highlightId: string | null }) {
-	const [takeovers, setTakeovers] = useState<BrowserTakeover[]>([]);
-	const [loaded, setLoaded] = useState(false);
-	const [failed, setFailed] = useState("");
+export default function TakeoversPanel({ onReport, highlightId, state }: PanelProps & { highlightId: string | null; state: TakeoversState }) {
+	const { takeovers, loaded, failed, load, allow: allowHost, decline: declineTakeover } = state;
 	const [msg, setMsg] = useState("");
-
-	const load = useCallback(async () => {
-		try {
-			const t = await api<BrowserTakeoverListResponse>(`/v1/instances/${instanceId}/browser-takeovers?limit=10`);
-			setTakeovers(t.takeovers);
-			setLoaded(true);
-			setFailed("");
-		} catch (e) {
-			setFailed(e instanceof Error ? e.message : String(e));
-		}
-	}, [instanceId]);
-	useEffect(() => {
-		void load();
-	}, [load]);
-
-	const act = async (run: () => Promise<unknown>) => {
-		setMsg("");
-		try {
-			await run();
-			await load();
-		} catch (e) {
-			setMsg(e instanceof Error ? e.message : String(e));
-		}
-	};
-	const decline = (id: string) => act(() => api(`/v1/instances/${instanceId}/browser-takeovers/${id}`, { method: "PATCH", body: JSON.stringify({ state: "ended" }) }));
-	// The call the research run's own "allow this site" pause action makes. The next verification pass sees the host allowed and closes the takeover as resumed.
-	const allow = (host: string) => act(() => api(`/v1/instances/${instanceId}/local-browser/consent`, { method: "PUT", body: JSON.stringify({ scope: "navigate", domain: host, decision: "allow" }) }));
+	const decline = async (id: string) => setMsg(await declineTakeover(id));
+	const allow = async (host: string) => setMsg(await allowHost(host));
 
 	const gone = loaded && highlightId !== null && !takeovers.some((t) => t.id === highlightId);
 	useReport("takeovers", onReport, loaded ? "ready" : failed ? "failed" : "loading", takeovers.length + (gone ? 1 : 0), takeovers.some(isLive));

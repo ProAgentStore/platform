@@ -15,7 +15,9 @@ import FinderPanel from "./FinderPanel";
 import LoopRunsPanel from "./LoopRunsPanel";
 import SecureInputsPanel from "./SecureInputsPanel";
 import TakeoversPanel from "./TakeoversPanel";
+import VerificationsPanel from "./VerificationsPanel";
 import type { PanelProps } from "./useReport";
+import { useTakeovers } from "./useTakeovers";
 
 /**
  * Activity's History area (#1590): what is waiting for the owner and what already happened, ABOVE the
@@ -35,10 +37,13 @@ export default function HistoryArea({ instanceId, caps, view }: { instanceId: st
 		});
 	}, []);
 
+	// One takeovers request, read by the takeovers panel and by the verifications panel that joins them to its leads (#1604).
+	const takeovers = useTakeovers(instanceId, showsHistoryPanel(caps, "takeovers"));
 	const panelProps = { instanceId, onReport };
 	const renderers: Partial<Record<HistoryPanelId, () => ReactNode>> = {
 		"loop-runs": () => <LoopRunsPanel {...panelProps} />,
-		takeovers: () => <TakeoversPanel {...panelProps} highlightId={view.takeover} />,
+		takeovers: () => <TakeoversPanel {...panelProps} highlightId={view.takeover} state={takeovers} />,
+		verifications: () => <VerificationsPanel {...panelProps} takeovers={takeovers} />,
 		"browser-launch": () => <BrowserLaunchPanel {...panelProps} />,
 		"secure-inputs": () => <SecureInputsPanel {...panelProps} />,
 		finder: () => <FinderPanel {...panelProps} />,

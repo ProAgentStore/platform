@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import { notificationsResponse, NOTIFICATION_VOCABULARY } from "./notification-fixtures";
-import { installHistoryRoutes, LOCAL_BROWSER_INSTANCE } from "./activity-history-mock";
+import { BROWSER_INSTANCE, installHistoryRoutes, LOCAL_BROWSER_INSTANCE } from "./activity-history-mock";
 import { installFleetRoutes } from "./runner-fleet-mock";
 import { FINDER_INSTANCE, installFinderRoutes } from "./original-finder-mock";
 import { installScansRoutes } from "./gmail-scout-mock";
@@ -3601,15 +3601,15 @@ test("the Browser sub-tab sweep fixtures really render the lists and the CLI war
 });
 
 /**
- * Activity with History open and every panel seeded (#1590): a `local_browser` fixture, so the takeovers and the last
- * launch show too, and `installHistoryRoutes`'s rows in loop runs and queue, takeovers (one live site-consent), launch,
+ * Activity with History open and every panel seeded (#1590): a `local_browser` fixture that is not a Gmail Scout, so the takeovers, the
+ * verification queue (#1604) and the last launch show too, and `installHistoryRoutes`'s rows in loop runs and queue, takeovers (one live site-consent), launch,
  * secure inputs and deliveries. The default instance is a browser agent that never visits `/activity`.
  */
 async function openSeededHistory(page: Page) {
-	await mockSignedInConsole(page, { instances: [LOCAL_BROWSER_INSTANCE] });
+	await mockSignedInConsole(page, { instances: [BROWSER_INSTANCE] });
 	await installHistoryRoutes(page);
 	await page.goto("/console/instances/inst-1/activity?view=history");
-	for (const id of ["history-loop-runs", "bv-takeovers", "browser-launch-receipt", "secure-input-history", "history-deliveries"]) {
+	for (const id of ["history-loop-runs", "bv-takeovers", "history-verifications", "browser-launch-receipt", "secure-input-history", "history-deliveries"]) {
 		await expect(page.getByTestId(id), `${id} did not render`).toBeVisible();
 	}
 	await page.waitForLoadState("networkidle");

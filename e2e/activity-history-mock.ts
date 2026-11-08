@@ -12,6 +12,8 @@ const API = "https://api.proagentstore.online";
 const PREFIX = "/v1/instances/inst-1";
 
 export const LOCAL_BROWSER_INSTANCE = { id: "inst-1", agent_id: "agent-1", name: "Gmail Job Search Scout", status: "active", slug: "job-search-scout", category: "productivity", icon_bg: "#7c3aed", sourceMode: "gmail", capabilities: { surfaces: ["chat", "settings"], runtime: "local_browser" } };
+/** A local_browser agent that is not a Gmail Scout (#1604): its verification queue is a History panel. */
+export const BROWSER_INSTANCE = { ...LOCAL_BROWSER_INSTANCE, name: "Job Researcher", slug: "job-researcher", sourceMode: undefined };
 export const CODING_INSTANCE = { id: "inst-1", agent_id: "a-coder", name: "pags platform", agentName: "Repo Coder", status: "active", slug: "coder", category: "developer", icon_bg: "#0f766e", capabilities: { surfaces: ["coding"], runtime: "coding" } };
 
 const iso = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000).toISOString();
@@ -35,12 +37,18 @@ const takeover = (id: string, over: Record<string, unknown> = {}) => ({
 	...over,
 });
 
+export const verification = (leadId: string, over: Record<string, unknown> = {}) => ({
+	leadId, canonicalUrl: `https://www.seek.com.au/job/${leadId}`, expectedTitle: `Role ${leadId}`, expectedCompany: "Acme", state: "awaiting", attempts: 0, nextAttemptAt: iso(-5), lastOutcome: null, lastDetail: null, ...over,
+});
+
 export interface HistoryMockOptions {
 	/** Paths (relative to the instance) answered with a 500, to force one panel's failure. */
 	fail?: string[];
 	runs?: unknown[];
 	queue?: Array<{ id: string; objective: string }>;
 	takeovers?: unknown[];
+	/** `GET /job-leads/browser-verifications` rows (#1604). */
+	verifications?: unknown[];
 	/** `null` = the runner reports no launch. */
 	session?: { status: string; launch: unknown } | null;
 	secureInputs?: unknown[];
@@ -62,6 +70,8 @@ export function seededHistory(): HistoryMockOptions {
 			takeover("t-old"),
 			takeover("t-consent", { subjectKind: "manual", subjectId: "site-consent:www.seek.com.au", state: "requested", reason: "manual", endReason: null, endedAt: null }),
 		],
+		// One waits on the seek.com.au consent takeover above (needs the owner), one is closed and can be verified again.
+		verifications: [verification("lead-closed", { state: "unverifiable", closedReason: "consent_expired", attempts: 3, canonicalUrl: "https://boards.example.org/jobs/9" }), verification("lead-wait")],
 		session: { status: "connected", launch: LAUNCH },
 		secureInputs: [{ id: "si-1", status: "consumed", label: "GitHub token", destinationScope: "instance", oneShot: true, expiresAt: iso(-60), createdAt: iso(300), consumedAt: iso(290) }],
 		deliveries: [
@@ -114,6 +124,9 @@ export async function installHistoryRoutes(page: Page, opts: HistoryMockOptions 
 			if (moving) queue = [moving, ...queue.filter((q) => q !== moving)];
 			return json({ column: { id: "waiting", title: "Waiting" }, items: [] });
 		}
+
+		if (rest.startsWith("/job-leads/browser-verifications") && method === "GET") return json({ leads: opts.verifications ?? [], attempts: [] });
+		if (/^\/job-leads\/[^/]+\/browser-verification$/.test(rest) && method === "POST") return json({ ok: true });
 
 		if (rest.startsWith("/browser-takeovers") && method === "GET") return json({ takeovers });
 		const patch = rest.match(/^\/browser-takeovers\/([^/]+)$/);

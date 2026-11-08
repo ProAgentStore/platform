@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
-import { CODING_INSTANCE, installHistoryRoutes, LAUNCH, LOCAL_BROWSER_INSTANCE, seededHistory, type HistoryMockOptions } from "./activity-history-mock";
+import { BROWSER_INSTANCE, CODING_INSTANCE, installHistoryRoutes, LAUNCH, LOCAL_BROWSER_INSTANCE, seededHistory, type HistoryMockOptions } from "./activity-history-mock";
 
 /**
  * #1590 — Activity's History area: the panels that moved out of Settings (loop runs and queue, takeovers, last
@@ -11,7 +11,7 @@ const API = "https://api.proagentstore.online";
 const ACTIVITY = "/console/instances/inst-1/activity";
 const HISTORY = `${ACTIVITY}?view=history`;
 
-type Instance = typeof LOCAL_BROWSER_INSTANCE | typeof CODING_INSTANCE;
+type Instance = typeof LOCAL_BROWSER_INSTANCE | typeof BROWSER_INSTANCE | typeof CODING_INSTANCE;
 
 async function setup(page: Page, opts: { instance?: Instance; history?: HistoryMockOptions } = {}) {
 	await page.addInitScript((t) => window.localStorage.setItem("pags:session", t), "test-pags-token");
@@ -195,6 +195,73 @@ test.describe("takeovers", () => {
 		const rows = page.getByTestId("takeover-row");
 		await expect(rows.first()).toContainText("wants to be opened");
 		await expect(rows.last()).toContainText("Takeover ended");
+	});
+});
+
+test.describe("browser verification queue (#1604)", () => {
+	const VERIFICATIONS = "GET /job-leads/browser-verifications?limit=20";
+
+	test("a local_browser agent that is not a Gmail Scout lists both leads, the one waiting on the owner first, with Allow and Decline", async ({ page }) => {
+		const { requests, calls } = await setup(page, { instance: BROWSER_INSTANCE });
+		await page.goto(`${HISTORY}&panel=verifications`);
+		const panel = page.getByTestId("history-verifications");
+		const rows = panel.getByTestId("verification-row");
+		await expect(rows).toHaveCount(2);
+		await expect(rows.first()).toContainText("Role lead-wait · Acme: waiting for the browser");
+		await expect(rows.last()).toContainText("closed because its site was not allowed in time");
+		// Only the lead waiting on the seek.com.au takeover offers Allow / Decline; the join makes no second takeovers request.
+		await expect(panel.getByRole("button", { name: "Allow" })).toHaveCount(1);
+		expect(requests.filter((r) => r.startsWith("GET /browser-takeovers"))).toHaveLength(1);
+		// Needing the owner, the panel keeps its place among the panels that do (loop runs, takeovers).
+		expect((await panelOrder(page)).slice(0, 3)).toEqual(["history-panel-loop-runs", "history-panel-takeovers", "history-panel-verifications"]);
+		const waiting = rows.filter({ hasText: "lead-wait" });
+		const closed = rows.filter({ hasText: "lead-closed" });
+		await waiting.getByRole("button", { name: "Allow" }).click();
+		await expect.poll(() => calls.filter((c) => c.path === "/local-browser/consent")).toEqual([{ method: "PUT", path: "/local-browser/consent", body: { scope: "navigate", domain: "www.seek.com.au", decision: "allow" } }]);
+		await waiting.getByRole("button", { name: "Verify now" }).click();
+		await expect.poll(() => calls.map((c) => `${c.method} ${c.path}`)).toContain("POST /job-leads/lead-wait/browser-verification");
+		await closed.getByRole("button", { name: "Verify again" }).click();
+		await expect.poll(() => calls.map((c) => `${c.method} ${c.path}`)).toContain("POST /job-leads/lead-closed/browser-verification");
+		expect(requests.filter((r) => r === VERIFICATIONS).length).toBeGreaterThanOrEqual(3);
+	});
+
+	test("Decline ends the takeover that asks", async ({ page }) => {
+		const { calls } = await setup(page, { instance: BROWSER_INSTANCE });
+		await page.goto(HISTORY);
+		await page.getByTestId("history-verifications").getByRole("button", { name: "Decline" }).click();
+		await expect.poll(() => calls.filter((c) => c.method === "PATCH")).toEqual([{ method: "PATCH", path: "/browser-takeovers/t-consent", body: { state: "ended" } }]);
+	});
+
+	test("the Gmail Scout fixture shows the list in Scans and not in Activity", async ({ page }) => {
+		const { requests } = await setup(page);
+		await page.goto(HISTORY);
+		await expect(page.getByTestId("bv-takeovers")).toBeVisible();
+		await expect(page.getByTestId("history-verifications")).toHaveCount(0);
+		expect(requests.filter((r) => r.includes("browser-verifications"))).toEqual([]);
+	});
+
+	test("a coding agent requests nothing for it", async ({ page }) => {
+		const { requests } = await setup(page, { instance: CODING_INSTANCE });
+		await page.goto(HISTORY);
+		await expect(page.getByTestId("history-loop-runs")).toBeVisible();
+		expect(requests.filter((r) => r.includes("browser-verifications"))).toEqual([]);
+	});
+
+	test("an empty queue renders nothing", async ({ page }) => {
+		await setup(page, { instance: BROWSER_INSTANCE, history: { ...seededHistory(), verifications: [] } });
+		await page.goto(HISTORY);
+		await expect(page.getByTestId("bv-takeovers")).toBeVisible();
+		await expect(page.getByTestId("history-verifications")).toHaveCount(0);
+	});
+
+	test("a fetch failure shows a compact Retry in place of the list; the other panels still render", async ({ page }) => {
+		await setup(page, { instance: BROWSER_INSTANCE, history: { ...seededHistory(), fail: ["/job-leads/browser-verifications"] } });
+		await page.goto(HISTORY);
+		const failed = page.getByTestId("history-failed-verifications");
+		await expect(failed.getByRole("button", { name: "Retry" })).toBeVisible();
+		await expect(page.getByTestId("history-verifications")).toHaveCount(0);
+		await expect(page.getByTestId("history-loop-runs")).toBeVisible();
+		await expect(page.getByTestId("bv-takeovers")).toBeVisible();
 	});
 });
 

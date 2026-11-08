@@ -2,8 +2,9 @@ import { Link } from "react-router-dom";
 import Button from "../../components/Button";
 import Card from "../../components/Card";
 import LoadFailed from "../../components/LoadFailed";
+import VerificationQueue from "../../components/VerificationQueue";
 import GmailScoutScanLog from "../settings/GmailScoutScanLog";
-import { type GmailScoutStatus, type LeadVerification, hasScans, jobsPushLine, leadVerificationLine, leadsNotReachingJobs, rejectionSummary, scanTime } from "../../lib/gmailScout";
+import { type GmailScoutStatus, type LeadVerification, hasScans, jobsPushLine, leadsNotReachingJobs, rejectionSummary, scanTime } from "../../lib/gmailScout";
 
 export interface ScansViewProps {
 	instanceId: string;
@@ -83,20 +84,7 @@ export default function ScansView(props: ScansViewProps) {
 		{verifications.length ? (
 			<div className="mt-4" data-testid="gmail-scout-verifications">
 				<h3 className="text-xs text-muted-soft mb-1">Browser verification</h3>
-				<p className="text-xs text-muted mb-1">Leads the server could not check are checked in this Scout's browser — only the posting itself, never your alert link. Only a job found active can be applied for.</p>
-				<ul className="flex flex-col gap-1 text-xs">
-					{verifications.map((v) => {
-						const line = leadVerificationLine(v);
-						return (
-							<li key={v.leadId} className="flex flex-wrap gap-2 items-center">
-								<span className={line.tone === "ok" ? "text-success" : line.tone === "warn" ? "text-warning" : "text-muted"}>{line.text}</span>
-								{v.lastDetail && <span className="text-muted-soft">{v.lastDetail}</span>}
-								{line.canVerifyNow && <Button size="sm" variant="ghost" disabled={busy} onClick={() => props.onVerify(v.leadId)}>{v.state === "unverifiable" ? "Verify again" : "Verify now"}</Button>}
-								{v.state === "active" && hasData && <Link to={`${base}/data?lead=${encodeURIComponent(v.leadId)}`} className="text-accent underline">Triage in Data</Link>}
-							</li>
-						);
-					})}
-				</ul>
+				<VerificationQueue verifications={verifications} busy={busy} onVerify={props.onVerify} triageBase={hasData ? base : null} />
 			</div>
 		) : null}
 		{state.failureCount ? <p className="mt-3 text-sm text-danger">{state.failureCount} scan failure(s){state.lastFailureAt ? `; latest ${scanTime(state.lastFailureAt)}` : ""}: {state.lastFailureMessage || "Unknown failure"}</p> : null}
