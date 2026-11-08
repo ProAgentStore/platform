@@ -33,6 +33,8 @@ export interface LinkCaps {
 	runtime?: string | null;
 	/** The declared tool allowlist; absent/null means "the surface default", which shows tool-gated tabs. */
 	tools?: readonly string[] | null;
+	/** `"gmail"` for a Gmail Job Search Scout (`isGmailScoutInstance`) — what shows the Scans tab (#1591). */
+	sourceMode?: string | null;
 }
 
 const KB_TOOLS = ["search_knowledge", "list_knowledge", "read_knowledge", "add_knowledge", "update_knowledge", "delete_knowledge"];
@@ -69,6 +71,7 @@ export const CONSOLE_SECTIONS: ReadonlyArray<{ id: string; label: string; shown:
 	{ id: "feedback", label: "Feedback", shown: () => true },
 	{ id: "indexing", label: "Index", shown: (c) => c.surfaces.includes("repo") || canUse(c, KB_TOOLS), needs: "the repo surface or knowledge tools" },
 	{ id: "data", label: "Data", shown: (c) => canUse(c, COLLECTION_TOOLS), needs: "collection tools" },
+	{ id: "scans", label: "Scans", shown: (c) => c.sourceMode === "gmail", needs: 'a Gmail Job Search Scout (source mode "gmail")' },
 	{ id: "settings", label: "Settings", shown: () => true },
 	{ id: "permissions", label: "Permissions", shown: () => true },
 ];

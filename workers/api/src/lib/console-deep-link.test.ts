@@ -74,6 +74,14 @@ describe("buildConsoleLink", () => {
 		ok({ kind: "section", section: "data" }, { surfaces: [] });
 	});
 
+	it("shows the Scans tab only for a Gmail Scout, by source mode and not by tools (#1591)", () => {
+		expect(ok({ kind: "section", section: "scans" }, { surfaces: [], sourceMode: "gmail" }).path).toBe("/console/instances/inst_1/scans");
+		for (const caps of [CODER, { surfaces: [], runtime: "local_apply", tools: ["gmail_search", "gmail_read_message"] }, { surfaces: [], sourceMode: null }]) {
+			const refused = buildConsoleLink("inst_1", { kind: "section", section: "scans" }, caps);
+			expect("error" in refused && refused.error).toMatch(/does not show the Scans tab.*It shows: chat/);
+		}
+	});
+
 	it("shows the Research tab only for a local browser agent (#946)", () => {
 		expect(ok({ kind: "section", section: "research" }, { surfaces: [], runtime: "local_browser" }).path).toBe("/console/instances/inst_1/research");
 		expect(buildConsoleLink("inst_1", { kind: "section", section: "research" }, CODER)).toHaveProperty("error");

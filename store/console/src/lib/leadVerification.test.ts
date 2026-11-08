@@ -43,12 +43,10 @@ describe("lead browser verification (#1030)", () => {
 		expect(JOB_LEAD_PIPELINE.indexOf("awaiting_browser_verification")).toBe(JOB_LEAD_PIPELINE.indexOf("unverified") + 1);
 	});
 
-	it("reads and dispatches through the same routes as MCP's job_lead_browser_verifications / verify_job_lead_now", () => {
+	it("MCP's job_lead_browser_verifications / verify_job_lead_now use the routes the Scans tab calls", () => {
+		// The console half is behavioural, not a read of its source (#1591): e2e/scans-tab.spec.ts clicks Verify now and
+		// asserts the list GET and the verify POST on exactly these two routes.
 		const mcp = readFileSync(join(__dirname, "../../../../workers/mcp/src/instance-tools/browser-verification.ts"), "utf8");
-		const ui = readFileSync(join(__dirname, "../tabs/settings/GmailScoutSection.tsx"), "utf8");
-		for (const route of ["/job-leads/browser-verifications", "/browser-verification`"]) {
-			expect(mcp).toContain(route);
-			expect(ui).toContain(route);
-		}
+		for (const route of ["/job-leads/browser-verifications", "/browser-verification`"]) expect(mcp).toContain(route);
 	});
 });

@@ -40,6 +40,7 @@ import { clip } from "./job-lead-queue.js";
 import { accountTimeZone } from "./account-timezone.js";
 import { readableVerificationDetail } from "./verification-engine-failure.js";
 import { deferUntil, type InfrastructureFailure, infrastructureFailure, infrastructureFailureOfDetail } from "./verification-infrastructure.js";
+import { isGmailScoutInstance } from "./gmail-scout/config.js";
 import { readGmailScoutLeadRecords } from "./gmail-scout/scan.js";
 import { pushScoutLeadsToJobs } from "./gmail-scout/jobs-push.js";
 
@@ -243,7 +244,7 @@ const VERDICT_WORDS: Partial<Record<VerificationState, string>> = {
  * A verification reached its verdict (#1031), pushed as the event the instance's notification policy
  * decides: `browser_verification_failed` when it could not be verified — no eligible browser, or every
  * attempt unreadable — else `browser_verification_completed`. Only a FINAL verdict: an attempt that will be
- * retried is not one. The text names the job by title, never its URL; the link is Settings, by id.
+ * retried is not one. The text names the job by title, never its URL; the link is the Scans tab for a Gmail Scout (#1591), else Settings → Browser.
  */
 async function notifyVerdict(env: Env, row: LeadRow, state: VerificationState, why: string | null): Promise<void> {
 	const words = VERDICT_WORDS[state];
@@ -257,7 +258,7 @@ async function notifyVerdict(env: Env, row: LeadRow, state: VerificationState, w
 		"local-browser",
 		failed ? `✕ ${agent} could not verify a job` : `✓ ${agent} verified a job`,
 		`${job} ${words}${failed && why ? ` — ${why}` : ""}.`,
-		deepLinkFor({ kind: "browser-verification", instanceId: row.instance_id }),
+		deepLinkFor({ kind: "browser-verification", instanceId: row.instance_id, scans: await isGmailScoutInstance(env, row.instance_id) }),
 		{ kind: failed ? "alert" : "update", instanceId: row.instance_id, key: `lead-verification:${row.lead_id}`, event: failed ? "browser_verification_failed" : "browser_verification_completed" },
 	);
 }
@@ -468,7 +469,7 @@ async function deferLead(env: Env, row: LeadRow, f: InfrastructureFailure, engin
 		"local-browser",
 		`${agent} is out of ${engine} quota`,
 		`The ${engine} engine hit its usage limit${f.resetAt ? ` (it resets ${new Date(f.resetAt).toISOString()})` : ""}. Job verification is paused until ${when} and no attempts were used. You can switch the engine in Settings → Agent (Research) to continue now.`,
-		deepLinkFor({ kind: "browser-verification", instanceId: row.instance_id }),
+		deepLinkFor({ kind: "browser-verification", instanceId: row.instance_id, scans: await isGmailScoutInstance(env, row.instance_id) }),
 		{ kind: "alert", instanceId: row.instance_id, key: `engine-quota:${row.instance_id}:${engine}` },
 	).catch(() => undefined);
 }

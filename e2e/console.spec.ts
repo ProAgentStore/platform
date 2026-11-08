@@ -4,6 +4,7 @@ import { notificationsResponse, NOTIFICATION_VOCABULARY } from "./notification-f
 import { installHistoryRoutes, LOCAL_BROWSER_INSTANCE } from "./activity-history-mock";
 import { installFleetRoutes } from "./runner-fleet-mock";
 import { FINDER_INSTANCE, installFinderRoutes } from "./original-finder-mock";
+import { installScansRoutes } from "./gmail-scout-mock";
 
 const API = "https://api.proagentstore.online";
 const TEST_TOKEN = "test-pags-token";
@@ -3626,6 +3627,22 @@ async function openFinderHistory(page: Page) {
 	await page.waitForTimeout(300);
 }
 
+/**
+ * Scans with every row seeded (#1591): a Gmail Scout fixture (`local_browser`, `sourceMode: gmail`) passed as `options.instances`,
+ * because the default sweep instance (`surfaces: ["apply"]`, `runtime: "browser"`) does not show Scans. Two receipts (one with a
+ * Jobs problem, so the warning line shows) and a verification queue in each state, with Verify now and Verify again.
+ */
+async function openSeededScans(page: Page) {
+	await mockSignedInConsole(page, { instances: [LOCAL_BROWSER_INSTANCE] });
+	await installScansRoutes(page);
+	await page.goto("/console/instances/inst-1/scans");
+	for (const id of ["gmail-scout-receipts", "gmail-scout-verifications", "scans-jobs-warning"]) {
+		await expect(page.getByTestId(id), `${id} did not render`).toBeVisible();
+	}
+	await page.waitForLoadState("networkidle");
+	await page.waitForTimeout(300);
+}
+
 test.describe("mobile — no horizontal overflow (regression guard for the missing-w-full bug)", () => {
 	// Phones. The bug (page container sizing to max-content instead of the viewport)
 	// only shows below the sm: breakpoint (640px) and needs real content to trigger.
@@ -3699,6 +3716,15 @@ test.describe("mobile — no horizontal overflow (regression guard for the missi
 			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
 			const real = escapes.filter((e) => !/^(dt|dd)\b.* escapes div\.contents /.test(e));
 			expect(real, `a box past its own container at ${width}w: ${real.join(", ")}`).toEqual([]);
+		});
+		test(`no horizontal scroll at ${width}px — Scans, receipts and verifications seeded`, async ({ page }) => {
+			await page.setViewportSize({ width, height: 812 });
+			await openSeededScans(page);
+			const { mainOv, docOv, wide, escapes } = await measureOverflow(page);
+			expect(mainOv, `<main> overflows by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+			expect(escapes, `a box past its own container at ${width}w: ${escapes.join(", ")}`).toEqual([]);
 		});
 		for (const route of routes) {
 			test(`no horizontal scroll at ${width}px — ${route}`, async ({ page }) => {
@@ -4762,6 +4788,13 @@ test.describe("mobile — every control clears the 24px minimum target (#389)", 
 	test(`no target under ${MIN_TARGET}px on Activity History, Original Finder seeded`, async ({ page }) => {
 		await page.setViewportSize({ width: 390, height: 812 });
 		await openFinderHistory(page);
+		const findings = await measureTargets(page, MIN_TARGET);
+		expect(findings, `targets under ${MIN_TARGET}px: ${findings.join(" · ")}`).toEqual([]);
+	});
+
+	test(`no target under ${MIN_TARGET}px on Scans, receipts and verifications seeded`, async ({ page }) => {
+		await page.setViewportSize({ width: 390, height: 812 });
+		await openSeededScans(page);
 		const findings = await measureTargets(page, MIN_TARGET);
 		expect(findings, `targets under ${MIN_TARGET}px: ${findings.join(" · ")}`).toEqual([]);
 	});

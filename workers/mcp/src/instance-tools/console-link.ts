@@ -23,7 +23,7 @@ export function registerConsoleLinkTools(server: McpServer, ctx: InstanceToolsCt
 			section: z
 				.string()
 				.optional()
-				.describe("A console tab: chat, apply, board, repo, coding, tmux, research, applications, activity, stats, knowledge, behaviour, feedback, indexing, data, settings or permissions."),
+				.describe("A console tab: chat, apply, board, repo, coding, tmux, research, applications, activity, stats, knowledge, behaviour, feedback, indexing, data, scans, settings or permissions."),
 			subtab: z
 				.enum(["agent", "browser", "automation", "notifications", "instructions", "general"])
 				.optional()

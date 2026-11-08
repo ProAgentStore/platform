@@ -35,6 +35,18 @@ export function gmailScoutSourceMode(config: string | null | undefined): boolean
 	}
 }
 
+/**
+ * Is this instance a Gmail Job Search Scout (#1591)? The one rule (#1115): the instance's or its agent's
+ * `source_mode`, never its tools (the Application Runner declares the same Gmail reads). Callers that already
+ * hold both configs (`GET /my/instances`, batched) use `gmailScoutSourceMode` on each directly.
+ */
+export async function isGmailScoutInstance(env: Env, instanceId: string): Promise<boolean> {
+	const r = await env.DB.prepare("SELECT i.config AS instance_config, a.config AS agent_config FROM agent_instances i JOIN agents a ON a.id = i.agent_id WHERE i.id = ?1")
+		.bind(instanceId)
+		.first<{ instance_config: string | null; agent_config: string | null }>();
+	return !!r && (gmailScoutSourceMode(r.instance_config) || gmailScoutSourceMode(r.agent_config));
+}
+
 export async function getGmailScoutConfig(env: Env, instanceId: string): Promise<GmailScoutConfig | null> {
 	const r = await env.DB.prepare("SELECT id, instance_id, pinned_email, enabled, created_at, updated_at FROM gmail_scout_configs WHERE instance_id = ?1").bind(instanceId).first<Record<string, unknown>>();
 	return r ? configRow(r) : null;

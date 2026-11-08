@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { buildConsoleLink, type ConsoleTarget } from "../lib/console-deep-link.js";
+import { isGmailScoutInstance } from "../lib/gmail-scout/config.js";
 import { getHandoffById } from "../lib/local-apply/store.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import type { Env } from "../types.js";
@@ -65,7 +66,8 @@ export function registerConsoleLinkRoutes(router: Hono<{ Bindings: Env }>): void
 		}
 
 		const caps = await capabilitiesForInstance(c.env, instanceId, session.uid);
-		const link = buildConsoleLink(instanceId, target, { surfaces: caps?.surfaces ?? [], runtime: caps?.runtime ?? null, tools: caps?.tools });
+		const sourceMode = (await isGmailScoutInstance(c.env, instanceId)) ? "gmail" : null;
+		const link = buildConsoleLink(instanceId, target, { surfaces: caps?.surfaces ?? [], runtime: caps?.runtime ?? null, tools: caps?.tools, sourceMode });
 		if ("error" in link) return c.json(link, 400);
 		return c.json(link);
 	});

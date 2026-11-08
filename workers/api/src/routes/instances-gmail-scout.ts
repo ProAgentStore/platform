@@ -1,6 +1,6 @@
 import type { Context, Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
-import { getGmailScoutConfig, gmailScoutSourceMode, putGmailScoutConfig } from "../lib/gmail-scout/config.js";
+import { getGmailScoutConfig, isGmailScoutInstance, putGmailScoutConfig } from "../lib/gmail-scout/config.js";
 import { gmailScoutStatus, parseReprocessInput, reprocessGmailScout, scanGmailScout } from "../lib/gmail-scout/scan.js";
 import { listGmailScoutReceipts } from "../lib/gmail-scout/receipts.js";
 import { repairJobLeads } from "../lib/gmail-scout/repair.js";
@@ -10,10 +10,8 @@ import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 
 /** The inbox scanner is a dedicated Scout source, never a generic mailbox reader for any agent. */
-export async function requireGmailScoutInstance(env: Env, instance: { agent_id: string; config: string }): Promise<void> {
-	if (gmailScoutSourceMode(instance.config)) return;
-	const agent = await env.DB.prepare("SELECT config FROM agents WHERE id = ?1").bind(instance.agent_id).first<{ config: string | null }>();
-	if (gmailScoutSourceMode(agent?.config)) return;
+export async function requireGmailScoutInstance(env: Env, instance: { id: string }): Promise<void> {
+	if (await isGmailScoutInstance(env, instance.id)) return;
 	throw new HttpError(409, "This instance is not configured as a Gmail Job Search Scout source.");
 }
 

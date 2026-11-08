@@ -1,6 +1,13 @@
 /** Why a scanned message did not become a lead (#1023) — a category, never the message. */
 export type GmailScoutRejection = "missing_fields" | "stale" | "security_alert" | "digest" | "multiple_listings" | "no_specific_job_url" | "no_work_key" | "redirect_unresolved" | "posting_not_live" | "posting_unverifiable" | "posting_mismatch" | "prior_application" | "search_results_page";
 
+/** `JobsPushOutcome` (workers/api `gmail-scout/receipts.ts`): `reason` is why leads did not reach Jobs, or null. */
+export interface GmailScoutJobsPush {
+	sent: number;
+	failed: number;
+	reason: string | null;
+}
+
 /** One Gmail Scout scan receipt (#1023), scheduled or on demand. */
 export interface GmailScoutScanReceipt {
 	id: string;
@@ -17,6 +24,8 @@ export interface GmailScoutScanReceipt {
 	rejected: Partial<Record<GmailScoutRejection, number>>;
 	/** Leads the server could not check, waiting for browser verification (#1030). Absent on an older API. */
 	awaitingBrowserVerification?: number | null;
+	/** What pushing this scan's leads to the Jobs app did (#1605). Absent on an older API; null before a push ran. */
+	jobsPush?: GmailScoutJobsPush | null;
 	errorMessage: string | null;
 	lastMessageId: string | null;
 	/** #1247: the exact Gmail search and window. Absent on an older API. */
@@ -180,4 +189,71 @@ export function leadVerificationLine(v: LeadVerification): { text: string; tone:
 /** A scan time for display, in the viewer's zone. The API sends ISO-8601 UTC for every scan time (#1597). */
 export function scanTime(iso: string): string {
 	return new Date(iso).toLocaleString();
+}
+
+// ── What the Scans tab and the Settings one-liner show of a scan (#1591) ──
+
+/** `GET /v1/instances/:id/gmail-scout/status`. */
+export interface GmailScoutStatus {
+	config: { pinnedEmail: string | null; enabled: boolean } | null;
+	state: { lastScanAt: string | null; candidateCount: number; dedupeCount: number; failureCount: number; lastFailureAt: string | null; lastFailureMessage: string | null };
+	leadCount: number;
+	newLeadCount: number;
+	/** #1023 — absent on an older API. Newest first. */
+	receipts?: GmailScoutScanReceipt[];
+}
+
+const JOBS_PUSH_REASON_WORDS: Record<string, string> = {
+	not_connected: "Jobs is not connected",
+	ambiguous: "more than one Jobs account is connected",
+	pinned_account_gone: "the chosen Jobs account is gone",
+	failed: "the Jobs call failed",
+	no_grant: "this agent has no Jobs grant",
+};
+
+/** The reasons that are an incident the owner can fix — `no_grant` is a state (`jobs-push.ts`), not one. */
+const JOBS_PUSH_INCIDENTS = new Set(["not_connected", "ambiguous", "pinned_account_gone", "failed"]);
+
+/** "3 sent to Jobs · not sent to Jobs: Jobs is not connected" — what a receipt's push to Jobs did; empty when it is unknown or did nothing. */
+export function jobsPushLine(receipt: Pick<GmailScoutScanReceipt, "jobsPush">): string {
+	const push = receipt.jobsPush;
+	if (!push) return "";
+	const parts: string[] = [];
+	if (push.sent > 0) parts.push(`${push.sent} sent to Jobs`);
+	if (push.reason) parts.push(`not sent to Jobs: ${JOBS_PUSH_REASON_WORDS[push.reason] ?? push.reason.replace(/_/g, " ")}`);
+	return parts.join(" · ");
+}
+
+/** The newest completed receipt (the list is newest first, but a scan still running or failed is not an answer about Jobs). */
+function newestCompleted(receipts: GmailScoutScanReceipt[] | undefined): GmailScoutScanReceipt | null {
+	return (receipts ?? []).filter((r) => r.status === "completed").sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))[0] ?? null;
+}
+
+/** Did the newest completed scan fail to reach Jobs for a reason the owner can fix? */
+export function leadsNotReachingJobs(receipts: GmailScoutScanReceipt[] | undefined): boolean {
+	const reason = newestCompleted(receipts)?.jobsPush?.reason;
+	return !!reason && JOBS_PUSH_INCIDENTS.has(reason);
+}
+
+/** Has anything been scanned — by the scan state or by a receipt? */
+export function hasScans(status: Pick<GmailScoutStatus, "state" | "receipts">): boolean {
+	return !!status.state.lastScanAt || !!status.receipts?.length;
+}
+
+/**
+ * The one line Settings → Agent shows of the scans (#1591), in the order the first that holds wins. It never asserts a state
+ * before the status loaded, and a failed scan or a Jobs problem is not hidden by the default sub-tab.
+ */
+export function scanSummary(input: { status: GmailScoutStatus | null; failed: boolean }): { text: string; tone: "muted" | "warn"; link: boolean } {
+	const { status, failed } = input;
+	if (failed) return { text: "Couldn't check", tone: "muted", link: true };
+	if (!status) return { text: "Checking…", tone: "muted", link: false };
+	const { lastScanAt, lastFailureAt, failureCount } = status.state;
+	if (failureCount > 0 && lastFailureAt && (!lastScanAt || Date.parse(lastFailureAt) >= Date.parse(lastScanAt))) {
+		return { text: `Last scan failed ${scanTime(lastFailureAt)}`, tone: "warn", link: true };
+	}
+	const last = lastScanAt ?? newestCompleted(status.receipts)?.startedAt ?? null;
+	if (!last) return { text: "No scans yet", tone: "muted", link: true };
+	if (leadsNotReachingJobs(status.receipts)) return { text: `Last scan ${scanTime(last)}, leads not reaching Jobs`, tone: "warn", link: true };
+	return { text: `Last scan ${scanTime(last)}`, tone: "muted", link: true };
 }

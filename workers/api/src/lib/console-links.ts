@@ -253,6 +253,11 @@ export function instanceActivityHistoryLink(instanceId: string, panel?: "loop-ru
 	return `${instanceLink(instanceId)}/activity?view=history${panel ? `&panel=${panel}` : ""}`;
 }
 
+/** A Gmail Scout's Scans tab (#1591): scans, per-email logs, the browser-verification queue and the Jobs push outcome. */
+export function instanceScansLink(instanceId: string): string {
+	return `${instanceLink(instanceId)}/scans`;
+}
+
 /** An instance's Settings tab — where its triggers, runner and brain are configured. */
 export function instanceSettingsLink(instanceId: string): string {
 	return `${instanceLink(instanceId)}/settings`;
@@ -320,8 +325,11 @@ export type NotificationSubject =
 	| { kind: "browser-takeover"; instanceId: string; takeover: { id: string; subjectKind: string; subjectId: string } }
 	/** A verified job lead awaiting Apply/Skip (#1585): that lead, opened in the Data tab with its triage buttons (#1602). */
 	| { kind: "job-lead"; instanceId: string; leadId: string }
-	/** A browser verification's verdict (#1031): Settings, where the instance's verification queue is listed. */
-	| { kind: "browser-verification"; instanceId: string }
+	/**
+	 * A browser verification's verdict (#1031). `scans` is true for a Gmail Scout, whose verification queue is on its Scans tab
+	 * (#1591); any other `local_browser` instance has no queue screen yet, so it lands on Settings → Browser.
+	 */
+	| { kind: "browser-verification"; instanceId: string; scans: boolean }
 	/** A secure-input request waiting for the owner (#934). */
 	| { kind: "secure-input"; instanceId: string; requestId: string }
 	/** An exact owner-scoped permission request, focused inside Permissions & Connections (#1009). */
@@ -374,7 +382,7 @@ export function deepLinkFor(subject: NotificationSubject): DeepLink {
 			case "job-lead":
 				return `${instanceDataLink(subject.instanceId)}?lead=${encodeURIComponent(subject.leadId)}`;
 			case "browser-verification":
-				return instanceSettingsLink(subject.instanceId);
+				return subject.scans ? instanceScansLink(subject.instanceId) : instanceSettingsSubtabLink(subject.instanceId, "browser");
 			case "secure-input":
 				return secureInputNotificationLink(subject.instanceId, subject.requestId);
 			case "website-request":

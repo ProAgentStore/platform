@@ -9,6 +9,7 @@ import FeedbackTab from "../tabs/FeedbackTab";
 import IndexingTab from "../tabs/IndexingTab";
 import KnowledgeTab from "../tabs/KnowledgeTab";
 import RepoTab from "../tabs/RepoTab";
+import ScansTab from "../tabs/ScansTab";
 import SettingsTab from "../tabs/SettingsTab";
 import PermissionsTab from "../tabs/PermissionsTab";
 import ResearchTab from "../tabs/ResearchTab";
@@ -47,6 +48,7 @@ export type SurfaceId =
 	| "behaviour"
 	| "feedback"
 	| "data"
+	| "scans"
 	| "settings"
 	| "permissions";
 
@@ -369,6 +371,17 @@ export const SURFACES: SurfaceDef[] = [
 		show: (caps) => canUse(caps, COLLECTION_TOOLS),
 		scroll: true,
 		render: ({ instanceId }) => <DataTab instanceId={instanceId} />,
+	},
+	{
+		id: "scans",
+		label: "Scans",
+		icon: "📬",
+		// A CAPABILITY label, gated on the server's source-mode verdict like Settings' Gmail source (`isGmailScout`, #1115): the
+		// Application Runner declares the same Gmail reads and has no scans. Scan status and the verification queue moved here
+		// from Settings → Agent, which keeps only the source configuration (#1591).
+		show: isGmailScout,
+		scroll: true,
+		render: ({ instanceId, caps }) => <ScansTab instanceId={instanceId} hasData={visibleSurfaces(caps).some((s) => s.id === "data")} />,
 	},
 	{
 		id: "settings",

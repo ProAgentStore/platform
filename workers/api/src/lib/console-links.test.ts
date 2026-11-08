@@ -61,7 +61,7 @@ describe("deepLinkFor — every notification subject opens a real page (#894)", 
 		"application-handoff": { kind: "application-handoff", instanceId: id, handoffId: other },
 		"browser-takeover": { kind: "browser-takeover", instanceId: id, takeover: { id: other, subjectKind: "runtime_task", subjectId: other } },
 		"job-lead": { kind: "job-lead", instanceId: id, leadId: other },
-		"browser-verification": { kind: "browser-verification", instanceId: id },
+		"browser-verification": { kind: "browser-verification", instanceId: id, scans: true },
 		"secure-input": { kind: "secure-input", instanceId: id, requestId: other },
 		"permission-request": { kind: "permission-request", instanceId: id, requestId: other },
 		"account-approval": { kind: "account-approval", requestId: other },
@@ -108,6 +108,9 @@ describe("deepLinkFor — every notification subject opens a real page (#894)", 
 		expect(links.deepLinkFor({ kind: "application", instanceId: "i1", applicationId: "a b/c" })).toBe("/console/instances/i1/applications?application=a%20b%2Fc");
 		// #1602: a job-lead decision opens THAT lead in the Data tab, not the tab's first page.
 		expect(links.deepLinkFor(s["job-lead"])).toBe("/console/instances/i1/data?lead=x2");
+		// #1591: a verification verdict opens the Scans tab for a Gmail Scout, else Settings → Browser (no queue screen yet, #1604).
+		expect(links.deepLinkFor({ kind: "browser-verification", instanceId: "i1", scans: true })).toBe("/console/instances/i1/scans");
+		expect(links.deepLinkFor({ kind: "browser-verification", instanceId: "i1", scans: false })).toBe("/console/instances/i1/settings?subtab=browser");
 		expect(links.applicationHandoffLink("i1", "handoff_2")).toBe("/console/instances/i1/applications?handoff=handoff_2");
 		expect(links.applicationReconciliationHandoffLink("i1", "handoff_2")).toBe("/console/instances/i1/applications?reconciliation_handoff=handoff_2");
 	});

@@ -156,6 +156,8 @@ function ownerEnv() {
 	const forwards: Forward[] = [];
 	const row = (sql: string): Record<string, unknown> | null => {
 		if (/FROM users/i.test(sql)) return { suspended: 0, roles: '["user"]', github_login: null };
+		// `isGmailScoutInstance` (#1591) reads the instance's and its agent's config in one joined query.
+		if (/AS instance_config/i.test(sql)) return { instance_config: "{}", agent_config: '{"source_mode":"gmail"}' };
 		if (/FROM agents/i.test(sql)) {
 			// The Gmail Scout status route has a source-mode gate before it asks its private lead
 			// collection. This owner fixture is intentionally one source that is eligible to reach

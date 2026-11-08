@@ -22,9 +22,11 @@ beforeEach(() => {
 	d1.exec(`INSERT INTO agents (id, owner_id, slug, name, config) VALUES
 	  ('coder', 'u1', 't938-coder', 'Coder', '{"capabilities":{"surfaces":["coding"],"runtime":"coding"}}'),
 	  ('rc', 'u1', 't938-repo', 'Repo Chat', '{"capabilities":{"surfaces":["repo"],"tools":["search_knowledge"]}}'),
-	  ('no-files', 'u1', 't1003-no-files', 'No Files', '{"capabilities":{"tools":["write_code"]}}')`);
+	  ('no-files', 'u1', 't1003-no-files', 'No Files', '{"capabilities":{"tools":["write_code"]}}'),
+	  ('scout-agent', 'u1', 't1591-scout', 'Scout', '{"source_mode":"gmail","capabilities":{"surfaces":[],"runtime":"local_browser"}}'),
+	  ('runner', 'u1', 't1591-runner', 'Runner', '{"capabilities":{"surfaces":[],"runtime":"local_apply","tools":["gmail_search","gmail_read_message"]}}')`);
 	d1.exec(`INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES
-	  ('i1', 'coder', 'u1', 'active', '{}'), ('i2', 'rc', 'u1', 'active', '{}'), ('i3', 'no-files', 'u1', 'active', '{}'), ('other', 'coder', 'u2', 'active', '{}')`);
+	  ('i1', 'coder', 'u1', 'active', '{}'), ('i2', 'rc', 'u1', 'active', '{}'), ('i3', 'no-files', 'u1', 'active', '{}'), ('i-scout-agent', 'scout-agent', 'u1', 'active', '{}'), ('i-scout-inst', 'runner', 'u1', 'active', '{"source_mode":"gmail"}'), ('i-runner', 'runner', 'u1', 'active', '{}'), ('other', 'coder', 'u2', 'active', '{}')`);
 	d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, max_iterations, started_at, session_id) VALUES
 	  ('run_code', 'u1', 'i1', 'fix', 5, 1, 'sess_9'), ('run_chat', 'u1', 'i1', 'chat', 5, 1, NULL), ('run_foreign', 'u2', 'other', 'x', 5, 1, 's')`);
 	d1.exec(`INSERT INTO instance_runtime_tasks (id, instance_id, user_id, type, status, payload, created_at, updated_at) VALUES ('t_7', 'i1', 'u1', 'browser', 'running', '{}', 1, 1)`);
@@ -53,6 +55,16 @@ describe("GET /v1/instances/:id/console-link (#938)", () => {
 		const refused = await link("i2", "?section=coding");
 		expect(refused.status).toBe(400);
 		expect(refused.body.error).toMatch(/does not show the Coding tab.*It shows: chat, repo/);
+	});
+
+	it("links Scans for a Gmail Scout declared on the agent or the instance, and refuses another instance with its shown tabs (#1591)", async () => {
+		expect((await link("i-scout-agent", "?section=scans")).body.path).toBe("/console/instances/i-scout-agent/scans");
+		expect((await link("i-scout-inst", "?section=scans")).body.path).toBe("/console/instances/i-scout-inst/scans");
+		// The Application Runner declares the same two Gmail reads but is not a Scout.
+		const refused = await link("i-runner", "?section=scans");
+		expect(refused.status).toBe(400);
+		expect(refused.body.error).toMatch(/does not show the Scans tab.*It shows: chat,.*settings/);
+		expect(refused.body.error).not.toMatch(/shows:.*scans/);
 	});
 
 	it("links a Settings sub-tab (#1614), refusing one not shown and a subtab without section=settings", async () => {

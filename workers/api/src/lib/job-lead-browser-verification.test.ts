@@ -257,11 +257,19 @@ describe("the verdict is pushed once it is final — and as what it is (#1031)",
 			{
 				title: expect.stringMatching(/could not verify a job/),
 				body: expect.stringMatching(/“Platform Engineer” at Acme could not be verified — no eligible browser was available \(fallback: mark_unverifiable\)/),
-				url: "/console/instances/s1/settings",
+				// Not a Gmail Scout (#1591): a local_browser instance with no queue screen opens Settings → Browser.
+				url: "/console/instances/s1/settings?subtab=browser",
 				event: "browser_verification_failed",
 				kind: "alert",
 			},
 		]);
+	});
+
+	it("a Gmail Scout's verdict opens its Scans tab, where the queue is listed (#1591)", async () => {
+		startAs = "offline";
+		d1.exec(`UPDATE agent_instances SET config = '{"source_mode":"gmail","browserVerification":{"enabled":true,"fallback":"mark_unverifiable"}}' WHERE id = 's1'`);
+		await runLeadBrowserVerification(env, 2_000);
+		expect(pushes.map((p) => p.url)).toEqual(["/console/instances/s1/scans"]);
 	});
 
 	it("wait: nothing while it waits, one failure push when the limit closes it", async () => {

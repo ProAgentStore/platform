@@ -1285,4 +1285,5 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.216": "sha256:2c4367f822b9856e3ac33397b3108c228f24686721f9cd76269a07b084daf1e1", // #1611: repair_job_leads takes scope=infrastructure_failures, which reopens leads closed only by an engine usage limit or an overloaded runner.
 	"0.1.217": "sha256:b9332a60139bc2f1bb038000aff061f8c4438089a13044ea8c67ff0fdb3ccf3e", // #1600: get_console_link section argument lists every console tab (adds research, applications, permissions); no tool added.
 	"0.1.218": "sha256:57e235a9af83d2c4de8d2c49e443ed4e6e0e8cf8ed124cb13b28b0057cd0c416", // #1614: get_console_link takes an optional subtab (with section settings) naming the Settings sub-tab; no tool added.
+	"0.1.219": "sha256:d93a04b542cc4d221d5ea2d06e363e2a2c3c9fd8495c5198c64dd091cc750f5a", // #1591: get_console_link section argument lists the Scans tab (Gmail Job Search Scouts only); no tool added.
 };

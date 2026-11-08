@@ -4,6 +4,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
+import ScansTab from "../tabs/ScansTab";
 import SettingsTab from "../tabs/SettingsTab";
 import { isGmailScout, SURFACES, showsKnowledgeSubTab, surfaceOwnsHeader, visibleSurfaces } from "./surfaces";
 
@@ -270,8 +271,18 @@ describe("isGmailScout — the server's source_mode verdict, never the Gmail rea
 	it("an instance the server lists with source mode gmail is a Scout", () => {
 		expect(isGmailScout({ sourceMode: "gmail" })).toBe(true);
 	});
-	it("SettingsTab renders GmailScoutSection — the only caller of /gmail-scout/status — only for a Scout, on the Agent sub-tab", () => {
-		const html = (isGmail: boolean) =>
+	it("the Scans tab is shown for a Scout only, by source mode — the Job Application Runner, with the same Gmail reads, does not get it (#1591)", () => {
+		const ids = (caps: Parameters<typeof visibleSurfaces>[0]) => visibleSurfaces(caps).map((s) => s.id);
+		expect(ids({ surfaces: [], runtime: "local_browser", sourceMode: "gmail" })).toContain("scans");
+		expect(ids({ surfaces: [], runtime: "local_apply", tools: GMAIL_READS, sourceMode: null })).not.toContain("scans");
+		expect(ids({ surfaces: ["apply"], runtime: "browser" })).not.toContain("scans");
+		// After Data and before Settings, in the same place the Worker's section table and INSTANCE_TABS put it.
+		const order = SURFACES.map((s) => s.id);
+		expect(order.indexOf("scans")).toBe(order.indexOf("data") + 1);
+		expect(order.indexOf("settings")).toBe(order.indexOf("scans") + 1);
+	});
+	it("Settings and the Scans tab each read /gmail-scout/status for what they need: the source config and one line, never a state before it loaded", () => {
+		const settings = (isGmail: boolean) =>
 			renderToStaticMarkup(
 				createElement(
 					MemoryRouter,
@@ -279,8 +290,15 @@ describe("isGmailScout — the server's source_mode verdict, never the Gmail rea
 					createElement(SettingsTab, { instanceId: "i", isApply: false, isGmailScout: isGmail, caps: {}, onUnsubscribe: () => undefined }),
 				),
 			);
-		expect(html(true)).toContain("settings-section-gmail-scout");
-		expect(html(false)).not.toContain("settings-section-gmail-scout");
+		const html = settings(true);
+		expect(html).toContain("settings-section-gmail-scout");
+		expect(html).toContain("Save Gmail source");
+		expect(html).toContain("Checking…");
+		// The scan dashboard moved out of Settings: only the one line points at it.
+		for (const moved of ["Scan now", "Recent scans", "Browser verification", "Candidates"]) expect(html, moved).not.toContain(moved);
+		expect(settings(false)).not.toContain("settings-section-gmail-scout");
 		expect(codeOf("./surfaces.tsx")).toContain("isGmailScout={isGmailScout(caps)}");
+		// The tab renders from the same hook, loading first.
+		expect(renderToStaticMarkup(createElement(MemoryRouter, null, createElement(ScansTab, { instanceId: "i", hasData: true })))).toContain("scans-loading");
 	});
 });
