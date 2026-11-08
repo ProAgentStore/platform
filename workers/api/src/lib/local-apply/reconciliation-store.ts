@@ -1,6 +1,7 @@
 /** Exact-attempt, owner-scoped reconciliation persistence; never infers submission from missing events. */
 import { HttpError } from "../auth.js";
 import { trustedDocumentPreflightFailure } from "./preflight-failure.js";
+import { runLogProvesNoSubmission } from "./run-log-proof.js";
 import type { Env } from "../../types.js";
 import type { JobApplication } from "../local-artifact/store.js";
 import { fingerprintOf, jobIdentityOf, sameFingerprint, type ApprovalFingerprint } from "./approval.js";
@@ -10,7 +11,7 @@ type DB = Pick<Env, "DB"> & Partial<Pick<Env, "AGENT">>;
 
 export type LocalApplyReconciliationState = "requested" | "no_submission_proven" | "submission_confirmed" | "ambiguous" | "unavailable" | "rejected";
 /** A proof kind has no free text/evidence payload, by design. */
-export type LocalApplyReconciliationProofKind = "authorized_site_history_no_submission" | "authorized_site_receipt_confirmed" | "ambiguous_site_history" | "authorized_profile_unavailable";
+export type LocalApplyReconciliationProofKind = "authorized_site_history_no_submission" | "authorized_site_receipt_confirmed" | "ambiguous_site_history" | "authorized_profile_unavailable" | "run_native_call_log_no_submission";
 
 export interface LocalApplyReconciliation {
 	id: string;
@@ -82,7 +83,33 @@ const UNCERTAIN_SQL = `(a.status = 'blocked' AND a.block_reason = 'submit_unconf
 export async function fullSubmissionNeedsReconciliation(env: DB, uid: string, app: JobApplication, run: ApplyRun | null): Promise<boolean> {
 	if (!run) return !!app.fillRunId;
 	if (!fullUnverifiedAttempt(run, app) || app.fillRunId !== run.id) return false;
-	return !reconciliationProvesNoSubmission(await getLocalApplyReconciliation(env, run.id, run.instanceId, uid), app, run);
+	if (reconciliationProvesNoSubmission(await getLocalApplyReconciliation(env, run.id, run.instanceId, uid), app, run)) return false;
+	return !reconciliationProvesNoSubmission(await proveNoSubmissionFromRunLog(env, uid, app, run), app, run);
+}
+
+/**
+ * #1579: the run's own complete, retained native-call log is exact-run proof that nothing was sent.
+ * Persisted as an ordinary reconciliation record bound to the run and the current materials. It may
+ * replace an inconclusive (ambiguous/unavailable/requested) record but never a proven or confirmed one.
+ */
+export async function proveNoSubmissionFromRunLog(env: DB, uid: string, app: JobApplication, run: ApplyRun, now = Date.now()): Promise<LocalApplyReconciliation | null> {
+	const existing = await getLocalApplyReconciliation(env, run.id, run.instanceId, uid);
+	if (existing && (existing.state === "no_submission_proven" || existing.state === "submission_confirmed")) return existing;
+	if (!uncertainAttemptBinding(app, run) || !(await runLogProvesNoSubmission(env, uid, app, run))) return existing;
+	const requested = existing ?? await requestLocalApplyReconciliation(env, { app, run, userId: uid, actor: "system" }, now);
+	if (!requested || requested.jobIdentity !== jobIdentityOf(app)) return existing;
+	if (requested.state !== "requested") {
+		const fp = fingerprintOf(app);
+		const reset = await env.DB.prepare(
+			`UPDATE local_apply_reconciliations SET reconciliation_state = 'requested', proof_kind = NULL, resolved_at = NULL, updated_at = ?1,
+			   material_lead_version = ?2, material_profile_version = ?3, material_resume_sha = ?4, material_cover_letter_sha = ?5
+			 WHERE id = ?6 AND run_id = ?7 AND user_id = ?8 AND reconciliation_state IN ('ambiguous', 'unavailable', 'rejected')`,
+		).bind(now, fp.leadVersion, fp.profileVersion, fp.resumeSha, fp.coverLetterSha, requested.id, run.id, uid).run();
+		if ((reset.meta?.changes ?? 0) === 0) return existing;
+	}
+	const fresh = await getLocalApplyReconciliation(env, run.id, run.instanceId, uid);
+	if (!fresh) return existing;
+	return (await recordLocalApplyReconciliationProof(env, { reconciliation: fresh, app, run, userId: uid, state: "no_submission_proven", proofKind: "run_native_call_log_no_submission", actor: "system" }, now)) ?? existing;
 }
 
 export async function assertFullSubmissionReconciled(env: DB, uid: string, app: JobApplication): Promise<void> {
@@ -192,7 +219,7 @@ export async function markLocalApplyReconciliationHandoff(env: DB, input: { cont
 }
 
 function validReconciliationProof(state: LocalApplyReconciliationState, proofKind: LocalApplyReconciliationProofKind): boolean {
-	return (state === "no_submission_proven" && proofKind === "authorized_site_history_no_submission") ||
+	return (state === "no_submission_proven" && (proofKind === "authorized_site_history_no_submission" || proofKind === "run_native_call_log_no_submission")) ||
 		(state === "submission_confirmed" && proofKind === "authorized_site_receipt_confirmed") ||
 		(state === "ambiguous" && proofKind === "ambiguous_site_history") ||
 		(state === "unavailable" && proofKind === "authorized_profile_unavailable");
@@ -243,7 +270,7 @@ export async function recordLocalApplyReconciliationProof(
  * predicate: it never creates a run, replaces an approval, or makes an uncertain attempt retryable.
  */
 export function reconciliationProvesNoSubmission(reconciliation: LocalApplyReconciliation | null, app: JobApplication, run: ApplyRun): boolean {
-	return !!reconciliation && reconciliation.state === "no_submission_proven" && reconciliation.proofKind === "authorized_site_history_no_submission" && uncertainAttemptBinding(app, run) && reconciliation.applicationId === app.id && reconciliation.runId === run.id && reconciliation.instanceId === run.instanceId && reconciliation.jobIdentity === jobIdentityOf(app) && sameFingerprint(reconciliation.materialFingerprint, fingerprintOf(app));
+	return !!reconciliation && reconciliation.state === "no_submission_proven" && (reconciliation.proofKind === "authorized_site_history_no_submission" || reconciliation.proofKind === "run_native_call_log_no_submission") && uncertainAttemptBinding(app, run) && reconciliation.applicationId === app.id && reconciliation.runId === run.id && reconciliation.instanceId === run.instanceId && reconciliation.jobIdentity === jobIdentityOf(app) && sameFingerprint(reconciliation.materialFingerprint, fingerprintOf(app));
 }
 
 /**

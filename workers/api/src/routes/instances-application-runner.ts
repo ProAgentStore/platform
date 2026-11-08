@@ -21,7 +21,7 @@ import { HANDOFF_TTL_MS, ensureFillHandoff, relayFillHandoff } from "../lib/loca
 import { LOCAL_APPLY_RECONCILIATION_HANDOFF_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_STATUS_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_FRAME_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_INPUT_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_RESUME_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_END_PATH, LOCAL_APPLY_RECONCILIATION_RUN_PATH, LOCAL_APPLY_RECONCILIATION_STATUS_PATH, type LocalApplyReconciliationEnvelope, type LocalApplyReconciliationStatus } from "../lib/local-apply/handoff-contract.js";
 import { RUNNER_DEFAULTS, RUNNER_SETTINGS_KEY, acknowledgeAutoSubmit, effectiveRunnerSettings, mergeRunnerSettings } from "../lib/local-apply/policy.js";
 import { applicationAudit, getApplyRun, getHandoffById, getLocalApplyHandoffForRun, markLocalApplyHandoff, listApplyRuns } from "../lib/local-apply/store.js";
-import { createLocalApplyReconciliationHandoff, getLocalApplyReconciliation, getLocalApplyReconciliationHandoff, getLocalApplyReconciliationHandoffById, markLocalApplyReconciliationHandoff, recordLocalApplyReconciliationProof, requestLocalApplyReconciliation } from "../lib/local-apply/reconciliation-store.js";
+import { createLocalApplyReconciliationHandoff, getLocalApplyReconciliation, getLocalApplyReconciliationHandoff, getLocalApplyReconciliationHandoffById, markLocalApplyReconciliationHandoff, proveNoSubmissionFromRunLog, recordLocalApplyReconciliationProof, requestLocalApplyReconciliation } from "../lib/local-apply/reconciliation-store.js";
 import { SUPERVISOR_SCHEMA_VERSION, isSupervisorDirective, issueSupervisorDirective, listSupervisorCheckpoints } from "../lib/local-apply/supervision.js";
 import { getOwnedApplication } from "../lib/local-artifact/store.js";
 import { applicationHandoffLink, applicationReconciliationHandoffLink } from "../lib/console-links.js";
@@ -223,6 +223,9 @@ export function registerApplicationRunnerRoutes(router: Hono<{ Bindings: Env }>)
 		const { uid, instanceId, run } = await ownedRun(c);
 		const app = await getOwnedApplication(c.env, uid, run.applicationId);
 		if (!app) throw new HttpError(404, "Application not found");
+		// #1579: a complete, safe retained call log of this exact run settles it without any browser.
+		const logged = await proveNoSubmissionFromRunLog(c.env, uid, app, run);
+		if (logged?.state === "no_submission_proven" && logged.proofKind === "run_native_call_log_no_submission") return c.json({ reconciliation: logged, runner: { state: "ended" as const } } satisfies ApplicationReconciliationResponse, 201);
 		const reconciliation = await requestLocalApplyReconciliation(c.env, { app, run, userId: uid }, Date.now());
 		if (!reconciliation) throw new HttpError(409, "Read-only reconciliation is available only for this exact ended uncertain attempt, including Full browser runs with unverified external effects.");
 		const envelope = reconciliationEnvelope(reconciliation, run, app);
@@ -235,7 +238,9 @@ export function registerApplicationRunnerRoutes(router: Hono<{ Bindings: Env }>)
 		if (!res) return c.json({ reconciliation, runner: { state: "waiting_for_runtime" } } satisfies ApplicationReconciliationResponse, 202);
 		const status = (await runtimeJson(res)) as LocalApplyReconciliationStatus & { error?: string };
 		if (status.reconciliationId !== reconciliation.id || status.runId !== run.id || status.applicationId !== app.id) {
-			throw new HttpError(409, "The Runner rejected this exact read-only reconciliation binding.");
+			// The Runner's own refusal (HTTP status + its message) is the only way to tell an invalid
+			// envelope (e.g. empty allowDomains) from an old CLI without this route (#1579).
+			throw new HttpError(409, `The Runner rejected this exact read-only reconciliation binding (HTTP ${res.status}${typeof status.error === "string" && status.error ? `: ${status.error.slice(0, 200)}` : ""}).`);
 		}
 		const website = await auxiliaryWebsiteAccess(c.env, uid, instanceId, "reconciliation", reconciliation.id, status);
 		if (website) return c.json({ reconciliation, runner: { state: "ended" as const }, ...website }, 409);
