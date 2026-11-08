@@ -947,7 +947,7 @@ registerTraceRoutes(instanceRoutes); // the unified run trace: legacy window + t
  * one, then a declared `voiceLanguage` setting on top of the language.
  *
  * `hasOverride` is presence, not value equality — an override whose fields happen to match your
- * defaults is still an override, and the console's "Using your defaults / Customise" control has to
+ * defaults is still an override, and the console's "follows your account / Override for this agent" row has to
  * show what the user chose, not what the numbers came out as.
  */
 async function effectiveVoice(
