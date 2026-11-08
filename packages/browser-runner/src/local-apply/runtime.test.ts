@@ -1181,7 +1181,7 @@ describe("sign-in secrets (#1412)", () => {
 		expect(() => rt.signInSecrets({ runId: "run-1", secrets: { NOT_A_NAME: "x" } })).toThrow(/at least one of PAGS_LOGIN_USERNAME/);
 		const st = rt.signInSecrets({ runId: "run-1", secrets: { PAGS_LOGIN_USERNAME: "jane@example.com", PAGS_LOGIN_PASSWORD: "hunter2-never-seen", NOT_A_NAME: "dropped" } });
 		expect(st.state).toBe("running");
-		expect(st.signIn).toEqual({ state: "signing_in", origin: "jobs.example.com", secrets: ["PAGS_LOGIN_USERNAME", "PAGS_LOGIN_PASSWORD"], codeRequested: false });
+		expect(st.signIn).toEqual({ state: "signing_in", origin: "jobs.example.com", secrets: ["PAGS_LOGIN_USERNAME", "PAGS_LOGIN_PASSWORD"], codeRequested: false, newPasswordRequested: false, linkRequested: false });
 		expect(store.provided).toEqual([{ PAGS_LOGIN_USERNAME: "jane@example.com", PAGS_LOGIN_PASSWORD: "hunter2-never-seen" }]);
 		expect((await held).content[0].text).toMatch(/PAGS_LOGIN_USERNAME, PAGS_LOGIN_PASSWORD/);
 		// The CLI asks for the emailed code; the status says so; the next provisioning wakes it.
@@ -1225,6 +1225,73 @@ describe("sign-in secrets (#1412)", () => {
 		expect(() => plain.signInSecrets({ runId: "run-2", secrets: { PAGS_LOGIN_PASSWORD: "x" } })).toThrow(expect.objectContaining({ status: 409, code: "sign_in_secrets_unavailable" }));
 		plain.cancel({ runId: "run-2" });
 		await held;
+	});
+
+	describe("account registration and reset operations (#1619)", () => {
+		const fullEnvelope = (accountOperations: boolean, runId = "run-1") => {
+			const input = envelope(runId === "run-1" ? {} : { runId, requestId: `t1:lead-1:${runId}:materials` });
+			input.policy = { ...input.policy, toolAccess: "full", toolAccessAcceptance: { revision: "full_playwright_v1", acceptedAt: "2026-11-05T00:00:00Z", acceptedBy: "owner", instanceId: input.instanceId }, ...(accountOperations ? { accountOperations: true } : {}) };
+			return input;
+		};
+		const toolNames = (rt: LocalApplyRuntime, runId = "run-1") => (rt.bridge({ runId, op: "list" }) as Promise<{ tools: Array<{ name: string }> }>).then((r) => r.tools.map((x) => x.name));
+
+		it("lists the operations only for a run frozen with the owner's authorization", async () => {
+			browser.configureToolAccess = async () => {};
+			try {
+				const off = runtimeWithSecrets(secretStore()); off.start(fullEnvelope(false)); await settle();
+				expect(await toolNames(off)).not.toContain("request_new_password");
+				expect((await call(off, "request_new_password")).isError).toBe(true);
+				off.closeAll();
+				const on = runtimeWithSecrets(secretStore()); on.start(fullEnvelope(true, "run-2")); await settle();
+				expect(await toolNames(on, "run-2")).toEqual(expect.arrayContaining(["request_new_password", "request_sign_in_link"]));
+				on.closeAll();
+			} finally { delete browser.configureToolAccess; }
+		});
+
+		it("issues the new password on the cloud's answer, opens the mailbox link in the page without ever reporting it, and confirms on finish", async () => {
+			browser.configureToolAccess = async () => {};
+			const goto = vi.fn(async () => null);
+			runPage = { isClosed: () => false, url: () => "https://careers.ats.example/signin", goto } as unknown as Page;
+			const store = secretStore();
+			const rt = runtimeWithSecrets(store);
+			try {
+				rt.start(fullEnvelope(true)); await settle();
+				const signIn = call(rt, "request_sign_in"); await settle();
+				expect(rt.status({ runId: "run-1" })).toMatchObject({ state: "paused", pause: { reason: "login_required", domain: "careers.ats.example" } });
+				rt.signInSecrets({ runId: "run-1", secrets: { PAGS_LOGIN_USERNAME: "owner@example.test" } });
+				const answer = (await signIn).content[0].text;
+				expect(answer).toMatch(/holds no saved password/);
+				expect(answer).toMatch(/request_new_password/);
+				expect(answer).not.toContain("owner@example.test");
+
+				const pw = call(rt, "request_new_password"); await settle();
+				expect(rt.status({ runId: "run-1" }).signIn).toMatchObject({ newPasswordRequested: true, linkRequested: false });
+				rt.signInSecrets({ runId: "run-1", secrets: { PAGS_NEW_PASSWORD: "Gen3rated-secret-pw!" } });
+				expect((await pw).isError).toBeFalsy();
+				expect(rt.status({ runId: "run-1" }).signIn?.secrets).toEqual(["PAGS_LOGIN_USERNAME", "PAGS_NEW_PASSWORD"]);
+
+				const link = call(rt, "request_sign_in_link"); await settle();
+				expect(rt.status({ runId: "run-1" }).signIn).toMatchObject({ linkRequested: true });
+				// Another site's link is refused outright; the wait is untouched.
+				expect(() => rt.signInSecrets({ runId: "run-1", link: "https://elsewhere.example.net/reset?token=abc" })).toThrow(/sign-in site/);
+				expect(() => rt.signInSecrets({ runId: "run-1", link: "javascript:alert(1)" })).toThrow(/sign-in site/);
+				expect(goto).not.toHaveBeenCalled();
+				rt.signInSecrets({ runId: "run-1", link: "https://mail.ats.example/reset?token=abcdef0123456789" });
+				const opened = await link;
+				expect(opened.isError).toBeFalsy();
+				expect(goto).toHaveBeenCalledWith("https://mail.ats.example/reset?token=abcdef0123456789", expect.anything());
+				expect(rt.status({ runId: "run-1" }).signIn?.linkRequested).toBe(false);
+				// One link per run: asking again is refused at once, not waited on.
+				expect((await call(rt, "request_sign_in_link")).isError).toBe(true);
+
+				expect((await call(rt, "finish_sign_in", { signedIn: true })).isError).toBeFalsy();
+				const status = rt.status({ runId: "run-1" });
+				expect(status.events.some((e) => e.detail?.tool === "agent_sign_in" && e.detail?.decision === "signed_in" && e.detail?.basis === "model_observed")).toBe(true);
+				expect(store.cleared).toBeGreaterThan(0);
+				const everything = JSON.stringify(status);
+				for (const v of ["Gen3rated-secret-pw!", "abcdef0123456789", "owner@example.test"]) expect(everything).not.toContain(v);
+			} finally { rt.closeAll(); delete browser.configureToolAccess; }
+		});
 	});
 });
 

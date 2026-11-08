@@ -301,6 +301,33 @@ export async function anyCredentialForHost(env: Env, instanceId: string, userId:
 	return best ? { id: best.r.id, provisional: best.r.provisional === 1 } : null;
 }
 
+/**
+ * #1619: keep a generated password in the vault BEFORE the agent types it into a registration or reset form, so a password the
+ * site may have accepted is never lost. One pending row per host: a leftover pending row from an earlier attempt is overwritten
+ * (it was never confirmed, so nothing signs in with it), never duplicated. `replacesId` is the confirmed row a reset replaces.
+ */
+export async function stagePendingPassword(env: Env, instanceId: string, userId: string, input: { host: string; username: string; loginUrl?: string; password: string; note: string }): Promise<{ pendingId: string; replacesId: string | null }> {
+	const existing = await anyCredentialForHost(env, instanceId, userId, input.host);
+	if (existing?.provisional) {
+		await updateCredential(env, instanceId, userId, existing.id, { domain: "", username: input.username, password: input.password, comments: input.note });
+		return { pendingId: existing.id, replacesId: null };
+	}
+	const pendingId = await createCredential(env, instanceId, userId, { domain: input.host, username: input.username, loginUrl: input.loginUrl, password: input.password, comments: input.note, provisional: true });
+	return { pendingId, replacesId: existing?.id ?? null };
+}
+
+/** #1619: the site accepted the new password. A registration confirms the pending row; a reset moves the password onto the row it replaces (keeping that row's username and notes) and drops the pending one. */
+export async function promotePendingPassword(env: Env, instanceId: string, userId: string, pendingId: string, replacesId: string | null, note: string): Promise<boolean> {
+	// A reset keeps the replaced row's own notes; the note is for a newly confirmed registration.
+	if (!replacesId) return confirmCredential(env, instanceId, userId, pendingId, note);
+	const pending = await env.DB.prepare("SELECT * FROM agent_credentials WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3 AND provisional = 1").bind(pendingId, instanceId, userId).first<CredRow>();
+	const password = pending ? (await decryptSecrets(env, pending))?.password : undefined;
+	if (!password) return false;
+	if (!(await updateCredential(env, instanceId, userId, replacesId, { domain: "", password }))) return false;
+	await deleteCredential(env, instanceId, userId, pendingId);
+	return true;
+}
+
 export async function updateCredential(env: Env, instanceId: string, userId: string, id: string, input: CredentialInput): Promise<boolean> {
 	const existing = await env.DB.prepare("SELECT * FROM agent_credentials WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3").bind(id, instanceId, userId).first<CredRow>();
 	if (!existing) return false;

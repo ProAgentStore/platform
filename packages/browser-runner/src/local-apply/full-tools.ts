@@ -34,8 +34,12 @@ export class FullApplyTools {
 	async listTools(): Promise<NativeTool[]> {
 		this.inventory ??= await this.browser.listTools();
 		return [...this.inventory, ...applyTools([], false).filter((t) => TASK_TOOLS.has(t.name)).map((t) => t.name === "supervisor_checkpoint" ? { ...t, description: "Request review of an uncertain decision under the configured escalation level, or obtain an immediate before_submit authorization. Routine initial and page-change checkpoints are optional in full mode." } : t.name === "upload_artifact" ? { ...t, description: "Select an approved, hash-verified document in the current upload input. Observe the website afterward to verify acceptance." } : t), {
-			name: "request_sign_in", description: "Request authorized credential provisioning for the current observed sign-in origin. The broker offers supported existing-account credentials before owner handoff; you perform the sign-in with the provisioned placeholders. A pause is not proof that a human must act; inspect the returned credentials or concrete blocker. This tool does not implement password reset or account registration.", inputSchema: { type: "object", properties: {}, additionalProperties: false },
-		}, { name: "finish_sign_in", description: "Clear provisioned credentials after observing sign-in completed or abandoning sign-in. This records no independent proof of authentication.", inputSchema: { type: "object", properties: {}, additionalProperties: false } }, {
+			name: "request_sign_in", description: "Request authorized credential provisioning for the current observed sign-in origin. The broker answers at once with what it holds for this site: a saved login, or the account address and no password. You perform the sign-in with the provisioned placeholders. A pause is not proof that a human must act; inspect the returned credentials or concrete blocker.", inputSchema: { type: "object", properties: {}, additionalProperties: false },
+		}, ...(this.host.accountOperations ? [{
+			name: "request_new_password", description: "Only for registering an account or resetting a password at the active sign-in origin. Provisions PAGS_NEW_PASSWORD, a generated password the broker has already recorded as pending in the vault. Type that name into the new-password fields. It is issued once per run.", inputSchema: { type: "object", properties: {}, additionalProperties: false },
+		}, {
+			name: "request_sign_in_link", description: "Reads the fresh reset or verification link the site emailed to the account address and opens it in the current page. The link is never shown to you. Call after the site says it sent one, then observe the page. Once per run.", inputSchema: { type: "object", properties: {}, additionalProperties: false },
+		}] : []), { name: "finish_sign_in", description: "Clear provisioned credentials after observing sign-in completed or abandoning sign-in. Pass signedIn: true only when you observed the authenticated account; that confirms a pending new password into the vault. This records no independent proof of authentication.", inputSchema: { type: "object", properties: { signedIn: { type: "boolean" } }, additionalProperties: false } }, {
 			name: "submit_application", description: "Intentionally submit this application once, through the supervised authorization gate. Requires auto_submit authorization and an immediately preceding before_submit checkpoint. Supply a target from the latest snapshot. Native tools must not be used to evade this authorization.",
 			inputSchema: { type: "object", properties: { ref: { type: "string" }, element: { type: "string" } }, required: ["ref"], additionalProperties: false },
 		}];
@@ -93,7 +97,12 @@ export class FullApplyTools {
 		if (outcome === "sign_in") {
 			if (this.host.page?.() !== page || new URL(page!.url!()).origin !== origin) { this.host.signInDone?.(); return response("The credential origin changed. Request sign-in again from the current page.", true); }
 			this.credentialOrigin = origin;
-			return response(`Authorized credential origin: ${origin}. Provisioned names: ${(this.host.signInSecrets?.() ?? []).join(", ")}. Type these names with native browser_type or browser_fill_form. Values are substituted only at this origin. Observe sign-in and call finish_sign_in afterward.`);
+			const names = this.host.signInSecrets?.() ?? [];
+			const saved = names.includes("PAGS_LOGIN_PASSWORD");
+			const next = saved ? "" : this.host.accountOperations
+				? " PAGS holds no saved password for this site. The owner has authorized account registration and password reset for this run: decide from the live page whether the account exists. If it does not, register it; if it does, use the site's own password recovery. Call request_new_password for the new password and request_sign_in_link for an emailed reset or verification link (request_sign_in_code for a numeric code). Never register again when the site says the account exists."
+				: " PAGS holds no saved password for this site and registration or password reset is not authorized for this run; report that and hand sign-in to the owner.";
+			return response(`Authorized credential origin: ${origin}. Provisioned names: ${names.join(", ")}. Type these names with native browser_type or browser_fill_form. Values are substituted only at this origin.${next} Observe sign-in and call finish_sign_in afterward.`);
 		}
 		return response("The owner resumed. Inspect the current page to determine sign-in state.");
 	}
@@ -106,7 +115,36 @@ export class FullApplyTools {
 		if (!after || new URL(after).origin !== this.credentialOrigin || this.host.isStopped?.()) { this.finishSignIn(); return response("Sign-in origin changed or the run stopped. Provisioned credentials cleared.", true); }
 		return response(ok ? "PAGS_LOGIN_CODE is provisioned for the bound origin. Type that name, then observe the result." : "No sign-in code was provisioned.", !ok);
 	}
-	finishSignIn(): ToolResult { this.credentialOrigin = null; this.host.signInDone?.(); return response("Provisioned credentials cleared. Authentication state remains a model observation."); }
+	/** The sign-in is still the same origin and the run is live; else it is cleared and the caller returns the refusal. */
+	private signInActive(): string | null {
+		const url = this.host.page?.()?.url?.();
+		if (!this.credentialOrigin) return "No authorized sign-in is active. Call request_sign_in first.";
+		if (!url || new URL(url).origin !== this.credentialOrigin || this.host.isStopped?.()) { this.finishSignIn(); return "Sign-in origin changed or the run stopped. Provisioned credentials cleared."; }
+		return null;
+	}
+	async newPassword(): Promise<ToolResult> {
+		if (!this.host.accountOperations) return response("Account registration and password reset are not authorized for this run.", true);
+		const refused = this.signInActive(); if (refused) return response(refused, true);
+		const ok = await this.host.requestNewPassword?.();
+		return response(ok ? "PAGS_NEW_PASSWORD is provisioned for the bound origin and recorded as pending in the vault. Type that name into the new-password fields, then observe the result. It is issued once per run." : "No new password was provisioned. Do not invent one; report the blocker and hand sign-in to the owner.", !ok);
+	}
+	async signInLink(): Promise<ToolResult> {
+		if (!this.host.accountOperations) return response("Account registration and password reset are not authorized for this run.", true);
+		const refused = this.signInActive(); if (refused) return response(refused, true);
+		const ok = await this.host.openSignInLink?.();
+		if (!ok) return response("No matching link was opened. A fresh account-matched link may not have arrived, or one was already used this run. Do not request another reset until you have observed the site; report the blocker if none arrives.", true);
+		const url = this.host.page?.()?.url?.();
+		// A link on another origin of the same site keeps the secrets bound to the origin the agent is now on.
+		if (url && /^https?:/.test(url)) this.credentialOrigin = new URL(url).origin;
+		return response("The emailed link was opened in the current page. Observe the page and continue; PAGS_NEW_PASSWORD is bound to the page's origin.");
+	}
+	finishSignIn(signedIn = false): ToolResult {
+		const url = this.host.page?.()?.url?.();
+		// The model's own observation of the authenticated account: the broker confirms a pending new password on it. Not independent proof.
+		if (signedIn && this.credentialOrigin) this.host.emit({ type: "policy.decision", ...(url && /^https?:/.test(url) ? { domain: new URL(url).hostname } : {}), detail: { tool: "agent_sign_in", class: "session", decision: "signed_in", basis: "model_observed" } });
+		this.credentialOrigin = null; this.host.signInDone?.();
+		return response("Provisioned credentials cleared. Authentication state remains a model observation.");
+	}
 	canSubmit(): boolean { return !!this.submissionPage && this.host.page?.() === this.submissionPage && this.host.page?.()?.url?.() === this.submissionUrl; }
 }
 

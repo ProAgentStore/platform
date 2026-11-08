@@ -489,12 +489,12 @@ login, username-only provisioning is currently limited to the supported SEEK hos
 `signInEmail` and permitted email access. The Gmail path reads a requested numeric sign-in code; it
 is not a general password-reset-link or account-verification service.
 
-Generic account discovery, password recovery/reset, password generation and registration credential
-storage/confirmation are **not delivered**. The saved `accountCreation` setting defaults to `false`
-and currently has no execution consumer; setting it to `true` does not enable registration. The old
-SEEK/Indeed account-creation macro and its host registry were removed. Likewise, a saved website
-allow list is access configuration, not evidence that authentication works there. An external
-employer ATS needs its observed destinations authorized; that does not supply missing broker tools.
+Since #1619, when the owner's `accountCreation` authorization is on (frozen per run), a sign-in wall with
+no saved login is answered immediately with the Profile address, and the agent can register or reset
+through `request_new_password`, `request_sign_in_link` and `request_sign_in_code`; a generated password is
+kept as a provisional vault credential and confirmed (or moved onto the replaced credential) only when
+the agent reports the account signed in. Account existence is the model's reading of the live page. A
+saved website allow list is access configuration, not evidence that authentication works there.
 
 Until the missing capability is implemented, report which step is unsupported and offer the same
 run's bounded browser handoff when available. Do not claim that an account was absent, recovered,

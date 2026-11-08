@@ -75,6 +75,12 @@ export interface ApplyBridgeHost {
 	signInSecrets?(): string[];
 	/** The CLI asked for the emailed code: resolves true once `PAGS_LOGIN_CODE` is provisioned, false when the wait ran out. */
 	requestSignInCode?(): Promise<boolean>;
+	/** #1619: the run's frozen owner authorization to register an account or reset a password. */
+	accountOperations?: boolean;
+	/** The CLI asked for a generated new password: resolves true once `PAGS_NEW_PASSWORD` is provisioned. */
+	requestNewPassword?(): Promise<boolean>;
+	/** The CLI asked for the mailbox's reset or verification link: resolves true once the runner opened it in the sign-in page. */
+	openSignInLink?(): Promise<boolean>;
 	/** The sign-in ended (signed in, or given up): the host wipes the secrets. */
 	signInDone?(): void;
 	/** Wait for a durable cloud directive at this exact, runner-observed checkpoint. */
@@ -304,8 +310,10 @@ export class ApplyBridge {
 			return { ...result, content: [{ type: "text", text: `Supervised-action result only. ${FULL_SUBMISSION_UNKNOWN}` }, ...result.content] };
 		}
 		if (this.full && name === "request_sign_in") return this.full.signIn();
-		if (this.full && name === "finish_sign_in") return this.full.finishSignIn();
+		if (this.full && name === "finish_sign_in") return this.full.finishSignIn(args.signedIn === true);
 		if (this.full && name === "request_sign_in_code") return this.full.signInCode();
+		if (this.full && name === "request_new_password") return this.full.newPassword();
+		if (this.full && name === "request_sign_in_link") return this.full.signInLink();
 		if (this.full && name === "upload_artifact") {
 			if (this.host.overTime() || ++this.actions > this.host.limits.maxActions) return text("The action or time limit is reached.", true);
 			return this.upload(args);

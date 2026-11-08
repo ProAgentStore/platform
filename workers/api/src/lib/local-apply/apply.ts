@@ -236,7 +236,7 @@ export function applyTaskEnvelope(run: ApplyRun, app: JobApplication, s: Applica
 		workspace: s.workspace,
 		sources: (["profile", "answers"] as const).filter((r) => s.sources[r]).map((role) => ({ role, path: s.sources[role] as string })),
 		artifacts: [app.resumeArtifact, app.coverLetterArtifact].filter((a): a is NonNullable<typeof a> => !!a).map((a) => ({ kind: a.kind, path: a.path, sha256: a.sha256 })),
-		policy: { mode: run.policy.mode, ...(run.policy.browserCommandTimeoutSeconds !== undefined ? { browserCommandTimeoutSeconds: run.policy.browserCommandTimeoutSeconds } : {}), ...(run.policy.toolAccess === "full" ? { toolAccess: "full" as const, toolAccessAcceptance: run.policy.toolAccessAcceptance } : {}), escalationLevel: run.policy.escalationLevel ?? "conservative", allowDomains: run.policy.allowDomains, ...(run.policy.browserWebsiteAccess ? { browserWebsiteAccess: run.policy.browserWebsiteAccess } : {}), ...(run.policy.gate.gateId ? { submitGate: { gateId: run.policy.gate.gateId } } : {}), ...(run.policy.screenshots === false ? { screenshots: false as const } : {}), blurFormFields: run.policy.blurFormFields !== false },
+		policy: { mode: run.policy.mode, ...(run.policy.browserCommandTimeoutSeconds !== undefined ? { browserCommandTimeoutSeconds: run.policy.browserCommandTimeoutSeconds } : {}), ...(run.policy.toolAccess === "full" ? { toolAccess: "full" as const, toolAccessAcceptance: run.policy.toolAccessAcceptance } : {}), ...(run.policy.toolAccess === "full" && run.policy.accountOperations ? { accountOperations: true as const } : {}), escalationLevel: run.policy.escalationLevel ?? "conservative", allowDomains: run.policy.allowDomains, ...(run.policy.browserWebsiteAccess ? { browserWebsiteAccess: run.policy.browserWebsiteAccess } : {}), ...(run.policy.gate.gateId ? { submitGate: { gateId: run.policy.gate.gateId } } : {}), ...(run.policy.screenshots === false ? { screenshots: false as const } : {}), blurFormFields: run.policy.blurFormFields !== false },
 		limits: run.policy.limits,
 		// #1079: what the owner already answered for this application, kept since an earlier fill stopped waiting.
 		...(ownerAnswers.length ? { ownerAnswers: ownerAnswers.map((a) => ({ question: a.question, answer: a.answer })) } : {}),
@@ -340,6 +340,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	const policy: ApplyRunPolicy = {
 		toolAccess: s.toolAccess,
 		toolAccessAcceptance: s.toolAccessAcceptance ? { ...s.toolAccessAcceptance } : null,
+		...(s.accountCreation ? { accountOperations: true as const } : {}),
 		escalationLevel: s.escalationLevel,
 		browserCommandTimeoutSeconds: s.browserCommandTimeoutSeconds,
 		engine: s.engine,

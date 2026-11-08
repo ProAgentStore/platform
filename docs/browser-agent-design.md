@@ -70,13 +70,12 @@ to SEEK. During a brokered sign-in it can read a recent numeric emailed code fro
 this is not a general reset-link or account-verification-link service. Its inherited sender matching
 and code extraction are technical debt, not a design for adding new employer branches.
 
-The old scripted registration path was removed in #1422. `accountCreation` remains a persisted
-compatibility boolean with **no execution consumer**; enabling it does not create accounts.
-There are no application auth operations for new/replacement password provisioning, reset-link
-consumption, registration verification links or confirmed credential promotion to the vault.
-The existing one-attempt sign-in state also does not implement a multi-step recovery lifecycle.
-These gaps require implementation and behavioral evidence across independent forms; instructions,
-manuals and a full native browser inventory do not establish that they work.
+The old scripted registration path was removed in #1422. #1619 restores registration and reset as
+broker operations the model drives: `accountCreation` is frozen into the run as `accountOperations`,
+`request_new_password` stores a generated password as a provisional vault row before handing the
+placeholder over, `request_sign_in_link` opens the account-matched mailbox link in the page without
+showing it, and `finish_sign_in` with `signedIn` confirms or moves the password. The model's
+signed-in report is its own observation; one new password and one link per run.
 Existing [#1533](https://github.com/ProAgentStore/platform/issues/1533) tracks frozen registration
 authorization; [#1226](https://github.com/ProAgentStore/platform/issues/1226) tracks autonomous
 authentication and account creation. This documentation and prompt change does not close either.

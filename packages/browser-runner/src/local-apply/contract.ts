@@ -69,11 +69,13 @@ export const EMAIL_CODE_SIGN_IN_SITES: readonly string[] = ["seek.com", "seek.co
  * call adds to the map (the emailed code arrives mid-sign-in). The status response carries `signIn` while it lasts.
  */
 export const LOCAL_APPLY_SIGN_IN_SECRETS_PATH = "/local-apply/sign-in-secrets";
-export const LOCAL_APPLY_SIGN_IN_SECRET_NAMES = ["PAGS_LOGIN_USERNAME", "PAGS_LOGIN_PASSWORD", "PAGS_LOGIN_CODE"] as const;
+export const LOCAL_APPLY_SIGN_IN_SECRET_NAMES = ["PAGS_LOGIN_USERNAME", "PAGS_LOGIN_PASSWORD", "PAGS_LOGIN_CODE", "PAGS_NEW_PASSWORD"] as const;
 export type LocalApplySignInSecretName = (typeof LOCAL_APPLY_SIGN_IN_SECRET_NAMES)[number];
 export interface LocalApplySignInSecretsRequest {
 	runId: string;
-	secrets: Partial<Record<LocalApplySignInSecretName, string>>;
+	secrets?: Partial<Record<LocalApplySignInSecretName, string>>;
+	/** #1619: an account-matched reset or verification link read from the mailbox. The runner opens it in the paused sign-in's own page and never reports it. Same site as the sign-in origin. */
+	link?: string;
 }
 export interface LocalApplySignInState {
 	state: "signing_in";
@@ -83,6 +85,10 @@ export interface LocalApplySignInState {
 	secrets: LocalApplySignInSecretName[];
 	/** The CLI asked for the emailed code and is waiting for `PAGS_LOGIN_CODE`. */
 	codeRequested: boolean;
+	/** #1619: the agent asked for a generated new-password placeholder (`PAGS_NEW_PASSWORD`). */
+	newPasswordRequested?: boolean;
+	/** #1619: the agent asked for the mailbox's reset or verification link, to be opened in its page. */
+	linkRequested?: boolean;
 }
 
 export type LocalApplyEngine = "claude" | "codex";
@@ -178,6 +184,8 @@ export interface LocalApplyTaskEnvelope {
 		escalationLevel?: LocalApplyEscalationLevel;
 		toolAccess?: LocalApplyToolAccess;
 		toolAccessAcceptance?: LocalApplyToolAccessAcceptance | null;
+		/** #1533/#1619: the owner's standing authorization to register an account or reset a password on an employer site, frozen when the run starts. Absent = not authorized. */
+		accountOperations?: boolean;
 		/** The sites the run may be on. Leaving them pauses (`external_redirect`). */
 		allowDomains: string[];
 		/** Explicit owner website policy (CLI 0.4.209); absent retains legacy behavior. */

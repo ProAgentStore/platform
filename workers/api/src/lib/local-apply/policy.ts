@@ -75,8 +75,9 @@ export interface ApplicationRunnerSettings {
 	 */
 	signInEmail: string | null;
 	/**
-	 * Retired (#1422): account creation (#1230) was one of the three hardcoded sign-in macros, and nothing reads this field any more. Kept
-	 * so an owner who set it before keeps a no-op setting rather than a rejected request.
+	 * The owner's standing authorization for the Runner to register an employer-site account or reset its password on a sign-in
+	 * wall, with the Profile identity, a generated password and the connected Gmail (#1619). Frozen into each run as
+	 * `policy.accountOperations` (#1533); a later change affects only runs started after it.
 	 */
 	accountCreation: boolean;
 }

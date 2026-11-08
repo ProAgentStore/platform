@@ -23,9 +23,10 @@ import type { Env } from "../../types.js";
 import { listConnectorAccounts, pinnedAccountFor, resolveConnectorAccount } from "../connector-accounts.js";
 import { connectorClient } from "../connectors/client.js";
 import { emailPermitted } from "../connectors/gmail.js";
-import { findCredentialForHost, passwordLoginForHost } from "../credentials.js";
+import { findCredentialForHost, generatePassword, passwordLoginForHost, promotePendingPassword, stagePendingPassword } from "../credentials.js";
 import { logEvent } from "../events.js";
-import { getMessage, listMessages } from "../gmail.js";
+import { extractLinks, getMessage, listMessages, rankConfirmationLinks } from "../gmail.js";
+import { getProfile } from "../profile.js";
 import { EMAIL_CODE_SIGN_IN_SITES, LOCAL_APPLY_SIGN_IN_SECRETS_PATH, type LocalApplySignInSecretName } from "./contract.js";
 import type { ApplicationRunnerSettings } from "./policy.js";
 import { type ApplyRun, type ApplyTraceEvent, getApplyRun, updateApplyRun } from "./store.js";
@@ -38,6 +39,8 @@ export interface RunnerSignIn {
 	origin: string;
 	secrets: string[];
 	codeRequested: boolean;
+	newPasswordRequested: boolean;
+	linkRequested: boolean;
 }
 
 /** What one status sync brought back that this step reads: the sign-in state and the page of events. */
@@ -50,6 +53,8 @@ export interface AgentSignInDeps {
 	credential(host: string): Promise<{ id: string; username?: string; password?: string } | null>;
 	/** Is a password login stored for the host? Side-effect free, for the "will anything try" question. */
 	hasCredential(host: string): Promise<boolean>;
+	/** The address the account is registered under: the Gmail this Runner is pinned to (which must be the Profile's address), or null when email is off, unpinned or the two differ. */
+	identity(): Promise<string | null>;
 	runner(path: string, body: unknown): Promise<{ status: number; body: unknown } | null>;
 	mailbox(): Promise<{ list(query: string, max: number): Promise<readonly { id: string; date: string }[]>; read(id: string): Promise<{ subject: string; text: string }> }>;
 }
@@ -61,6 +66,11 @@ interface Row {
 	credential_id: string | null;
 	code_requested_at: number | null;
 	code_message_id: string | null;
+	new_password_at: number | null;
+	pending_credential_id: string | null;
+	replaces_credential_id: string | null;
+	link_requested_at: number | null;
+	link_message_id: string | null;
 	failure: string | null;
 	updated_at: number;
 }
@@ -96,6 +106,7 @@ const FAILURE_TEXT: Record<string, (host: string) => string> = {
 	email_not_permitted: () => "Email access is off for the Application Runner, so it cannot read the sign-in code. Turn it on under Settings → Permissions & Connections.",
 	mailbox_unresolved: () => "No Gmail account is connected and pinned to the Application Runner, so the sign-in code could not be read.",
 	mailbox_unreadable: () => "The mailbox could not be read for the sign-in code.",
+	link_not_received: (h) => `${h} did not email a reset or verification link within five minutes of the agent asking for one.`,
 	code_not_received: (h) => `${h} did not email a sign-in code within five minutes of the agent asking for one.`,
 	interrupted: () => "The agent's sign-in was interrupted part-way.",
 };
@@ -116,6 +127,14 @@ function defaultDeps(env: Env, run: ApplyRun, uid: string): AgentSignInDeps {
 	return {
 		credential: (host) => findCredentialForHost(env, run.instanceId, uid, host),
 		hasCredential: async (host) => (await passwordLoginForHost(env, run.instanceId, uid, host)) !== null,
+		identity: async () => {
+			if (!(await emailPermitted(env, run.instanceId))) return null;
+			const resolved = resolveConnectorAccount(await listConnectorAccounts(env, uid, "gmail"), await pinnedAccountFor(env, run.instanceId, "gmail"), "Gmail");
+			const mailbox = resolved.ok ? resolved.account.accountId?.toLowerCase() : undefined;
+			if (!mailbox) return null;
+			const profile = (await getProfile(env, uid)).email?.trim().toLowerCase();
+			return !profile || profile === mailbox ? mailbox : null;
+		},
 		runner: async (path, body) => {
 			const runtime = await getLiveRuntime(env, run.instanceId, uid).catch(() => null);
 			if (!runtime) return null;
@@ -138,7 +157,25 @@ function seekSite(domain: string): string | null {
 /** The Gmail search for the host's sign-in mail: SEEK's three senders, else the host's registrable domain. */
 export function senderQuery(host: string): string {
 	if (seekSite(host)) return "from:(seek.com.au OR seek.com OR seek.co.nz)";
-	return `from:${host.split(".").slice(-2).join(".")}`;
+	return `from:${siteOf(host)}`;
+}
+
+/** The registrable-looking tail of a host (`career.example.com` → `example.com`), for sender and link matching. */
+const siteOf = (host: string): string => host.split(".").slice(-2).join(".");
+
+/** A link in a reset or verification mail: on the sign-in host's own site and carrying a token-like or purpose word, never a bare homepage or footer link. */
+const PURPOSE_LINK = /reset|recover|forgot|password|verif|confirm|activat|valid|token|code=|key=|otp/i;
+export function mailLinkIn(text: string, host: string): string | null {
+	const site = siteOf(host.toLowerCase());
+	const onSite = extractLinks(text).filter((l) => {
+		try {
+			const h = new URL(l).hostname.toLowerCase();
+			return (h === site || h.endsWith(`.${site}`)) && PURPOSE_LINK.test(l);
+		} catch {
+			return false;
+		}
+	});
+	return rankConfirmationLinks(onSite, site)[0] ?? null;
 }
 
 /** A paused sign-in with a host to sign in to. Pure, so the gate is tested as a gate. */
@@ -156,6 +193,8 @@ export function parseRunnerSignIn(raw: unknown): RunnerSignIn | null {
 		origin: typeof o.origin === "string" && o.origin.length <= 253 ? o.origin : "",
 		secrets: Array.isArray(o.secrets) ? o.secrets.filter((s): s is string => typeof s === "string") : [],
 		codeRequested: o.codeRequested === true,
+		newPasswordRequested: o.newPasswordRequested === true,
+		linkRequested: o.linkRequested === true,
 	};
 }
 
@@ -165,16 +204,23 @@ export function signedInEventIn(events: readonly ApplyTraceEvent[]): boolean {
 }
 
 /** What the cloud may hand over for the paused host: the vault login first, else on SEEK the account address the code goes to. */
-async function provisionable(env: Env, run: ApplyRun, settings: Pick<ApplicationRunnerSettings, "signInEmail">, deps: AgentSignInDeps, peek: boolean): Promise<{ secrets: Partial<Record<LocalApplySignInSecretName, string>>; credentialId: string | null } | null> {
+async function provisionable(env: Env, run: ApplyRun, settings: Pick<ApplicationRunnerSettings, "signInEmail">, deps: AgentSignInDeps, peek: boolean): Promise<{ secrets: Partial<Record<LocalApplySignInSecretName, string>>; credentialId: string | null; basis: string } | null> {
 	const host = run.pause?.domain as string;
 	if (peek) {
 		// The "will it try" question must not read the vault: a read stamps the credential as used.
-		if (await deps.hasCredential(host).catch(() => false)) return { secrets: {}, credentialId: null };
+		if (await deps.hasCredential(host).catch(() => false)) return { secrets: {}, credentialId: null, basis: "vault" };
 	} else {
 		const cred = await deps.credential(host).catch(() => null);
-		if (cred?.username && cred.password) return { secrets: { PAGS_LOGIN_USERNAME: cred.username, PAGS_LOGIN_PASSWORD: cred.password }, credentialId: cred.id };
+		if (cred?.username && cred.password) return { secrets: { PAGS_LOGIN_USERNAME: cred.username, PAGS_LOGIN_PASSWORD: cred.password }, credentialId: cred.id, basis: "vault" };
+		// #1619: an account the vault knows by address but not by password is reset under that address.
+		if (cred?.username && run.policy.accountOperations) return { secrets: { PAGS_LOGIN_USERNAME: cred.username }, credentialId: cred.id, basis: "account_operations" };
 	}
-	if (seekSite(host) && settings.signInEmail && (await emailPermitted(env, run.instanceId).catch(() => false))) return { secrets: { PAGS_LOGIN_USERNAME: settings.signInEmail }, credentialId: null };
+	if (seekSite(host) && settings.signInEmail && (await emailPermitted(env, run.instanceId).catch(() => false))) return { secrets: { PAGS_LOGIN_USERNAME: settings.signInEmail }, credentialId: null, basis: "sign_in_email" };
+	// #1619: no saved login. The owner's frozen authorization lets the agent register the account or reset its password under the Profile identity, so it is answered now, with the address and no password, not after a 20-minute owner pause.
+	if (run.policy.accountOperations) {
+		const identity = await deps.identity().catch(() => null);
+		if (identity) return { secrets: { PAGS_LOGIN_USERNAME: identity }, credentialId: null, basis: "account_operations" };
+	}
 	return null;
 }
 
@@ -200,7 +246,7 @@ export async function advanceAgentSignIn(
 	now: number,
 	deps: AgentSignInDeps = defaultDeps(env, run, uid),
 ): Promise<{ outcome: AgentSignInOutcome; run: ApplyRun }> {
-	const row = await env.DB.prepare("SELECT state, host, credential_id, code_requested_at, code_message_id, failure, updated_at FROM local_apply_agent_sign_ins WHERE run_id = ?1").bind(run.id).first<Row>();
+	const row = await env.DB.prepare("SELECT state, host, credential_id, code_requested_at, code_message_id, new_password_at, pending_credential_id, replaces_credential_id, link_requested_at, link_message_id, failure, updated_at FROM local_apply_agent_sign_ins WHERE run_id = ?1").bind(run.id).first<Row>();
 	const host = row?.host ?? (typeof run.pause?.domain === "string" ? run.pause.domain : "");
 	const trace = async (decision: string, detail: Record<string, string | number | boolean> = {}): Promise<void> => {
 		const event: ApplyTraceEvent = { type: "policy.decision", at: new Date(now).toISOString(), ...(host ? { domain: host } : {}), detail: { tool: "agent_sign_in", class: "session", source: "platform", decision, ...detail } };
@@ -236,42 +282,66 @@ export async function advanceAgentSignIn(
 			if (offer.credentialId) await logEvent(env, { source: "credentials", event: "credential.use", message: `Handed the login for ${host} to the agent's sign-in: ${taken ? "provisioned" : "not taken"}`, userId: uid, instanceId: run.instanceId, context: { host, credentialId: offer.credentialId, runId: run.id, via: "local_apply_agent", outcome: taken ? "provisioned" : "not_taken" } }).catch(() => undefined);
 			// #1422: no macro is left to fall back to — the owner hears of it, through this `failed` outcome, when the runner will not take the secrets.
 			if (!taken) return fail(provisioningFailure(res));
-			await trace("provisioned", { reason: names.join(","), ...(offer.credentialId ? { basis: "vault" } : { basis: "sign_in_email" }) });
+			await trace("provisioned", { reason: names.join(","), basis: offer.basis });
 			return { outcome: "provisioned", run };
 		}
 		if (row.state !== "signing_in") return { outcome: "not_applicable", run };
 		if (signedInEventIn(sync.events)) {
 			if (!(await settle("signing_in", "signed_in"))) return { outcome: "waiting", run };
 			await trace("signed_in");
+			// #1619: the agent saw the account signed in with the generated password: it becomes the vault login.
+			if (row.pending_credential_id) {
+				const when = new Date(now).toISOString().split("T")[0];
+				const saved = await promotePendingPassword(env, run.instanceId, uid, row.pending_credential_id, row.replaces_credential_id, `Created by the Application Runner on ${when}; the agent was signed in to ${host} with it.`).catch(() => false);
+				await trace(saved ? "credential_saved" : "credential_not_saved", { basis: row.replaces_credential_id ? "password_reset" : "registration" });
+				await logEvent(env, { source: "credentials", event: "credential.save", message: `${saved ? "Saved" : "Could not save"} the generated login for ${host} after the agent's ${row.replaces_credential_id ? "password reset" : "registration"}`, userId: uid, instanceId: run.instanceId, context: { host, credentialId: row.pending_credential_id, replaces: row.replaces_credential_id, runId: run.id, via: "local_apply_agent", saved } }).catch(() => undefined);
+			}
 			return { outcome: "signed_in", run };
 		}
 		// A wall again while the sign-in was the agent's: it did not get in. The owner hears of it from the caller. The
 		// first half-minute is the provisioning's own release landing in the run record, not a new wall.
 		if (run.status === "paused" && run.pause?.reason === "login_required") return now - row.updated_at < WALL_GRACE_MS ? { outcome: "waiting", run } : fail("not_signed_in");
-		if (sync.signIn?.codeRequested && !row.code_message_id) {
-			const requestedAt = row.code_requested_at ?? now;
-			if (!row.code_requested_at) {
-				await env.DB.prepare("UPDATE local_apply_agent_sign_ins SET code_requested_at = ?2, updated_at = ?2 WHERE run_id = ?1").bind(run.id, now).run();
-				await trace("code_requested");
+		// #1619: the agent asked for a generated password; one per run, held in the vault as pending before it is handed over.
+		if (sync.signIn?.newPasswordRequested && run.policy.accountOperations && !row.new_password_at) {
+			const claimed = ((await env.DB.prepare("UPDATE local_apply_agent_sign_ins SET new_password_at = ?2, updated_at = ?2 WHERE run_id = ?1 AND new_password_at IS NULL").bind(run.id, now).run()).meta?.changes ?? 0) > 0;
+			if (!claimed) return { outcome: "waiting", run };
+			const username = (await deps.credential(host).catch(() => null))?.username ?? (await deps.identity().catch(() => null));
+			if (!username) return fail("mailbox_unresolved");
+			const password = generatePassword();
+			const staged = await stagePendingPassword(env, run.instanceId, uid, { host, username, loginUrl: run.pause?.url, password, note: `Generated by the Application Runner on ${new Date(now).toISOString().split("T")[0]}; ${host} has not yet confirmed it.` });
+			await env.DB.prepare("UPDATE local_apply_agent_sign_ins SET pending_credential_id = ?2, replaces_credential_id = ?3 WHERE run_id = ?1").bind(run.id, staged.pendingId, staged.replacesId).run();
+			const res = await deps.runner(LOCAL_APPLY_SIGN_IN_SECRETS_PATH, { runId: run.id, secrets: { PAGS_NEW_PASSWORD: password } });
+			if (res?.status !== 200) return fail("runner_unavailable");
+			await trace("new_password_issued", { basis: staged.replacesId ? "password_reset" : "registration" });
+			return { outcome: "waiting", run };
+		}
+		// An emailed reset or verification link (#1619) or code (#1412): the freshest account-matched mail since the agent asked.
+		const mailKind = sync.signIn?.linkRequested && run.policy.accountOperations && !row.link_message_id ? "link" : sync.signIn?.codeRequested && !row.code_message_id ? "code" : null;
+		if (mailKind) {
+			const col = mailKind === "link" ? "link" : "code";
+			const requestedAt = (mailKind === "link" ? row.link_requested_at : row.code_requested_at) ?? now;
+			if (!(mailKind === "link" ? row.link_requested_at : row.code_requested_at)) {
+				await env.DB.prepare(`UPDATE local_apply_agent_sign_ins SET ${col}_requested_at = ?2, updated_at = ?2 WHERE run_id = ?1`).bind(run.id, now).run();
+				await trace(`${col}_requested`);
 			}
 			if (!(await emailPermitted(env, run.instanceId))) return fail("email_not_permitted");
 			const resolved = resolveConnectorAccount(await listConnectorAccounts(env, uid, "gmail"), await pinnedAccountFor(env, run.instanceId, "gmail"), "Gmail");
 			if (!resolved.ok || !resolved.account.accountId) return fail("mailbox_unresolved");
 			const mailbox = resolved.account.accountId.toLowerCase();
 			const mail = await deps.mailbox();
-			// A mail sent before the code was asked for is an old code; two minutes of clock skew either way.
+			// A mail sent before the request is an old one; two minutes of clock skew either way.
 			const hits = (await mail.list(`${senderQuery(host)} newer_than:1d`, 5)).filter((h) => Date.parse(h.date) >= requestedAt - 120_000);
 			for (const hit of hits) {
 				const msg = await mail.read(hit.id);
-				const code = signInCodeIn(msg.subject, msg.text);
-				if (!code) continue;
-				const res = await deps.runner(LOCAL_APPLY_SIGN_IN_SECRETS_PATH, { runId: run.id, secrets: { PAGS_LOGIN_CODE: code } });
+				const value = mailKind === "link" ? mailLinkIn(msg.text, host) : signInCodeIn(msg.subject, msg.text);
+				if (!value) continue;
+				const res = await deps.runner(LOCAL_APPLY_SIGN_IN_SECRETS_PATH, mailKind === "link" ? { runId: run.id, link: value } : { runId: run.id, secrets: { PAGS_LOGIN_CODE: value } });
 				if (res?.status !== 200) return fail("runner_unavailable");
-				await env.DB.prepare("UPDATE local_apply_agent_sign_ins SET code_message_id = ?2, updated_at = ?3 WHERE run_id = ?1").bind(run.id, hit.id, now).run();
-				await trace("code_read", { mailbox, messageId: hit.id });
+				await env.DB.prepare(`UPDATE local_apply_agent_sign_ins SET ${col}_message_id = ?2, updated_at = ?3 WHERE run_id = ?1`).bind(run.id, hit.id, now).run();
+				await trace(`${col}_read`, { mailbox, messageId: hit.id });
 				return { outcome: "waiting", run };
 			}
-			if (now - requestedAt > CODE_WAIT_MS) return fail("code_not_received");
+			if (now - requestedAt > CODE_WAIT_MS) return fail(mailKind === "link" ? "link_not_received" : "code_not_received");
 			return { outcome: "waiting", run };
 		}
 		if (run.status !== "running" && now - row.updated_at > STALE_MS) return fail("interrupted");

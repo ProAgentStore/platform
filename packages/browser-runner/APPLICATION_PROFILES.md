@@ -83,13 +83,17 @@ the old macros and `account-creation-hosts.json` were removed in #1422. The curr
   The runner's observed sign-in result is needed before the flow is treated as successful. Failed or
   unsupported sign-in reports a reason and offers the owner handoff when available.
 
-**Account creation and recovery are not currently implemented generically.** `accountCreation` is a
-saved setting, default `false`, with no execution consumer. Setting it to `true` does not create accounts,
-generate or save new passwords, or confirm registration credentials. Those missing capabilities,
-account-existence discovery and reset/recovery-link handling must be implemented before claiming the
-owner's full sequence works. The former SEEK/Indeed registration support must not be advertised as
-current. Website allow lists and credential origins remain independent controls; adding a domain
-does not implement sign-in for that site.
+**Account registration and password reset (#1619).** `accountCreation` is the owner's standing
+authorization, default `false`, frozen into each run as `policy.accountOperations` (#1533). When it is
+on and the run has no saved login, the broker answers `request_sign_in` at once with the Profile
+address (the pinned Gmail, which must match the Profile email) and no password. The agent then decides
+from the live page: `request_new_password` provisions `PAGS_NEW_PASSWORD`, a generated password held as
+a provisional vault row before it is typed; `request_sign_in_link` opens the fresh, same-site reset or
+verification link read from Gmail in the page without ever showing it to the model. `finish_sign_in`
+with `signedIn: true` (the model's own observation, not independent proof) confirms the registration
+or moves the password onto the replaced vault row. One new password and one link per run; CAPTCHA, MFA
+and unaccepted terms still go to the owner. Without the authorization and a saved login, the owner
+handoff remains.
 
 See the [runtime user manual](../../platform-docs/browser-runtime.md#signing-in-recovering-access-and-creating-an-account)
 and [browser-agent design contract](../../docs/browser-agent-design.md) for the target behavior and

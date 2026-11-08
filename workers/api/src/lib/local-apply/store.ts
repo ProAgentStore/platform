@@ -312,6 +312,8 @@ export const isTerminalApplyRun = (s: ApplyRunStatus) => TERMINAL.includes(s);
 export interface ApplyRunPolicy {
 	toolAccess?: import("./contract.js").LocalApplyToolAccess;
 	toolAccessAcceptance?: import("./contract.js").LocalApplyToolAccessAcceptance | null;
+	/** #1533/#1619: the owner's account registration / password reset authorization, frozen when the run starts. Absent = not authorized. */
+	accountOperations?: boolean;
 	/** Frozen at creation; older runs retain conservative escalation. */
 	escalationLevel?: import("./contract.js").LocalApplyEscalationLevel;
 	browserWebsiteAccess?: BrowserWebsiteAccessWire;

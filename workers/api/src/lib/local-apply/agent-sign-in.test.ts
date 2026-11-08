@@ -5,9 +5,9 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Env } from "../../types.js";
-import { createCredential, findCredentialForHost, passwordLoginForHost } from "../credentials.js";
+import { createCredential, findCredentialForHost, listCredentials, passwordLoginForHost } from "../credentials.js";
 import { type RealSchemaD1, realSchemaD1, seedTenant } from "../d1-sqlite.js";
-import { type AgentSignInDeps, advanceAgentSignIn, agentSignInApplies, agentSignInWillTry, failExpiredCodeWaits, parseRunnerSignIn, senderQuery, signedInEventIn, signInCodeIn } from "./agent-sign-in.js";
+import { type AgentSignInDeps, advanceAgentSignIn, agentSignInApplies, agentSignInWillTry, failExpiredCodeWaits, parseRunnerSignIn, mailLinkIn, senderQuery, signedInEventIn, signInCodeIn } from "./agent-sign-in.js";
 import { type ApplyRun, type ApplyTraceEvent, getApplyRun } from "./store.js";
 
 const UID = "u1";
@@ -28,7 +28,7 @@ let d1: RealSchemaD1;
 let emailPermission: boolean;
 const env = () => ({ DB: d1.DB, KEY_ENCRYPTION_KEY: KEK, AGENT: { idFromName: (n: string) => n, get: () => ({ fetch: async () => Response.json({ permissions: { email: emailPermission } }) }) } }) as unknown as Env;
 
-const running = (secrets: string[], codeRequested = false) => ({ signIn: { state: "signing_in", origin: "login.seek.com", secrets, codeRequested } });
+const running = (secrets: string[], codeRequested = false, more: { newPasswordRequested?: boolean; linkRequested?: boolean } = {}) => ({ signIn: { state: "signing_in", origin: "login.seek.com", secrets, codeRequested, ...more } });
 
 /** A fake runner that records every request, and a fake mailbox of SEEK mail. */
 function fakes(opts: { answer?: unknown; status?: number; mail?: Array<{ id: string; date: string; subject: string; text: string }> } = {}) {
@@ -36,6 +36,7 @@ function fakes(opts: { answer?: unknown; status?: number; mail?: Array<{ id: str
 	const read: string[] = [];
 	const mail = opts.mail ?? [];
 	const deps: AgentSignInDeps = {
+		identity: async () => (emailPermission ? JOB_MAILBOX : null),
 		credential: (host) => findCredentialForHost(env(), INSTANCE, UID, host),
 		hasCredential: async (host) => (await passwordLoginForHost(env(), INSTANCE, UID, host)) !== null,
 		runner: async (path, body) => {
@@ -58,10 +59,10 @@ function fakes(opts: { answer?: unknown; status?: number; mail?: Array<{ id: str
 
 const run = async (id = RUN): Promise<ApplyRun> => (await getApplyRun(env(), INSTANCE, UID, id)) as ApplyRun;
 const row = (id = RUN) => d1.DB.prepare("SELECT * FROM local_apply_agent_sign_ins WHERE run_id = ?1").bind(id).first<Record<string, unknown>>();
-const insertRun = (id: string, pause: object) =>
+const insertRun = (id: string, pause: object, policy: object = {}) =>
 	d1.exec(
 		`INSERT INTO local_apply_runs (id, instance_id, user_id, application_id, request_id, status, policy, pause, created_at, updated_at)
-		 VALUES ('${id}', '${INSTANCE}', '${UID}', 'app-${id}', 'req-${id}', 'paused', '{}', '${JSON.stringify(pause)}', ${T0}, ${T0})`,
+		 VALUES ('${id}', '${INSTANCE}', '${UID}', 'app-${id}', 'req-${id}', 'paused', '${JSON.stringify(policy)}', '${JSON.stringify(pause)}', ${T0}, ${T0})`,
 	);
 const setRunning = (id = RUN) => d1.exec(`UPDATE local_apply_runs SET status = 'running', pause = NULL WHERE id = '${id}'`);
 const store = () => createCredential(env(), INSTANCE, UID, { domain: "indeed.com", username: USERNAME, password: PASSWORD } as Parameters<typeof createCredential>[3]);
@@ -242,7 +243,7 @@ describe("the agent-driven sign-in (#1412 acceptance)", () => {
 		expect(agentSignInApplies({ status: "paused", pause: INDEED_PAUSE as ApplyRun["pause"] })).toBe(true);
 		expect(agentSignInApplies({ status: "running", pause: null })).toBe(false);
 		expect(agentSignInApplies({ status: "paused", pause: { reason: "captcha" } as ApplyRun["pause"] })).toBe(false);
-		expect(parseRunnerSignIn(running(["PAGS_LOGIN_USERNAME"], true).signIn)).toEqual({ origin: "login.seek.com", secrets: ["PAGS_LOGIN_USERNAME"], codeRequested: true });
+		expect(parseRunnerSignIn(running(["PAGS_LOGIN_USERNAME"], true).signIn)).toEqual({ origin: "login.seek.com", secrets: ["PAGS_LOGIN_USERNAME"], codeRequested: true, newPasswordRequested: false, linkRequested: false });
 		expect(parseRunnerSignIn({ state: "other" })).toBeNull();
 		expect(parseRunnerSignIn(undefined)).toBeNull();
 		expect(signedInEventIn([SIGNED_IN])).toBe(true);
@@ -310,5 +311,125 @@ describe("failExpiredCodeWaits — the 5-minute wait evaluated independently of 
 
 	it("never touches a run with no sign-in row at all", async () => {
 		expect(await failExpiredCodeWaits(env(), T0 + 10 * 60_000)).toBe(0);
+	});
+});
+
+describe("account registration and password reset by the agent (#1619)", () => {
+	const AUTH = { accountOperations: true };
+	const ATS_PAUSE = { reason: "login_required", domain: "careers.ats-fixture.test", url: "https://careers.ats-fixture.test/signin", question: "Sign in." };
+	const ask = (more: { newPasswordRequested?: boolean; linkRequested?: boolean; codeRequested?: boolean }) => ({ signIn: parseRunnerSignIn({ state: "signing_in", origin: ATS_PAUSE.domain, secrets: ["PAGS_LOGIN_USERNAME"], codeRequested: more.codeRequested === true, ...more }), events: [] as ApplyTraceEvent[] });
+	const advance = (t: number, sync: Parameters<typeof advanceAgentSignIn>[4], f: ReturnType<typeof fakes>) => run().then((r) => advanceAgentSignIn(env(), UID, r, { signInEmail: null }, sync, t, f.deps));
+	const ATS_SIGNED_IN: ApplyTraceEvent = { type: "policy.decision", at: new Date(T0).toISOString(), detail: { tool: "agent_sign_in", class: "session", decision: "signed_in", basis: "model_observed" } };
+	const RESET_MAIL = { id: "reset-1", date: new Date(T0 + 40_000).toUTCString(), subject: "Reset your password", text: '<a href="https://www.ats-fixture.test/account/reset?token=abcdef0123456789abcdef">Reset</a> <a href="https://www.ats-fixture.test/help">Help</a> <a href="https://tracker.other.test/reset?token=zzzzzzzzzzzzzzzzzzzz">x</a>' };
+	const LINK = "https://www.ats-fixture.test/account/reset?token=abcdef0123456789abcdef";
+
+	it("no saved login and the run is authorized: the broker answers at once with the Profile address and no password", async () => {
+		insertRun(RUN, ATS_PAUSE, AUTH);
+		const f = fakes();
+		expect((await advance(T0, none, f)).outcome).toBe("provisioned");
+		expect(f.sent).toEqual([{ path: "/local-apply/sign-in-secrets", body: { runId: RUN, secrets: { PAGS_LOGIN_USERNAME: JOB_MAILBOX } } }]);
+		expect((await run()).trace[0].detail).toMatchObject({ decision: "provisioned", reason: "PAGS_LOGIN_USERNAME", basis: "account_operations" });
+		expect(await agentSignInWillTry(env(), UID, await run(), { signInEmail: null }, f.deps)).toBe(true);
+	});
+
+	it("authorization is the run's frozen policy: a run without it, or with email off or no identity, is left to the owner", async () => {
+		insertRun(RUN, ATS_PAUSE);
+		const f = fakes();
+		expect((await advance(T0, none, f)).outcome).toBe("not_applicable");
+		insertRun("run-2", ATS_PAUSE, AUTH);
+		emailPermission = false;
+		expect((await advance(T0, none, f).then(() => run("run-2")).then((r) => advanceAgentSignIn(env(), UID, r, { signInEmail: null }, none, T0, f.deps))).outcome).toBe("not_applicable");
+		expect(f.sent).toEqual([]);
+		// Even if a runner claims the agent asked, an unauthorized run issues no password and reads no link.
+		emailPermission = true;
+		insertRun("run-3", ATS_PAUSE);
+		await store();
+		const g = fakes({ mail: [RESET_MAIL] });
+		await advanceAgentSignIn(env(), UID, await run("run-3"), { signInEmail: null }, none, T0, g.deps);
+		d1.exec("UPDATE local_apply_runs SET status = 'running', pause = NULL WHERE id = 'run-3'");
+		await advanceAgentSignIn(env(), UID, await run("run-3"), { signInEmail: null }, ask({ newPasswordRequested: true, linkRequested: true }), T0 + 30_000, g.deps);
+		expect(g.sent).toHaveLength(0);
+	});
+
+	it("registration: a generated password is held pending (never used to sign in), issued once, and confirmed into the vault when the agent reports signed in", async () => {
+		insertRun(RUN, ATS_PAUSE, AUTH);
+		const f = fakes();
+		await advance(T0, none, f);
+		setRunning();
+		expect((await advance(T0 + 10_000, ask({ newPasswordRequested: true }), f)).outcome).toBe("waiting");
+		const issued = (f.sent[1].body.secrets as Record<string, string>).PAGS_NEW_PASSWORD;
+		expect(issued).toHaveLength(24);
+		expect(await findCredentialForHost(env(), INSTANCE, UID, ATS_PAUSE.domain)).toBeNull();
+		const [pending] = await listCredentials(env(), INSTANCE, UID);
+		expect(pending).toMatchObject({ domain: "careers.ats-fixture.test", username: JOB_MAILBOX });
+		expect(await row()).toMatchObject({ pending_credential_id: pending.id, replaces_credential_id: null });
+		// Asked again: no second password, no second account row.
+		await advance(T0 + 20_000, ask({ newPasswordRequested: true }), f);
+		expect(f.sent).toHaveLength(2);
+		expect(await listCredentials(env(), INSTANCE, UID)).toHaveLength(1);
+
+		const done = await advance(T0 + 60_000, { signIn: null, events: [ATS_SIGNED_IN] }, f);
+		expect(done.outcome).toBe("signed_in");
+		expect(await findCredentialForHost(env(), INSTANCE, UID, ATS_PAUSE.domain)).toMatchObject({ username: JOB_MAILBOX, password: issued });
+		const trace = (await run()).trace;
+		expect(trace.map((e) => e.detail?.decision)).toEqual(["provisioned", "new_password_issued", "signed_in", "credential_saved"]);
+		expect(JSON.stringify(trace) + dumpD1()).not.toContain(issued);
+	});
+
+	it("reset: the new password replaces the saved one on the same credential, keeping one row, only after the agent reports signed in", async () => {
+		insertRun(RUN, ATS_PAUSE, AUTH);
+		const old = await createCredential(env(), INSTANCE, UID, { domain: "ats-fixture.test", username: "me@example.test", password: "stale-password-1!" } as Parameters<typeof createCredential>[3]);
+		const f = fakes();
+		await advance(T0, none, f);
+		expect(f.sent[0].body.secrets).toEqual({ PAGS_LOGIN_USERNAME: "me@example.test", PAGS_LOGIN_PASSWORD: "stale-password-1!" });
+		setRunning();
+		await advance(T0 + 10_000, ask({ newPasswordRequested: true }), f);
+		const issued = (f.sent[1].body.secrets as Record<string, string>).PAGS_NEW_PASSWORD;
+		expect(await row()).toMatchObject({ replaces_credential_id: old });
+		// Not yet confirmed: the old password is still what signs in.
+		expect((await findCredentialForHost(env(), INSTANCE, UID, ATS_PAUSE.domain))?.password).toBe("stale-password-1!");
+		await advance(T0 + 60_000, { signIn: null, events: [ATS_SIGNED_IN] }, f);
+		const rows = await listCredentials(env(), INSTANCE, UID);
+		expect(rows.map((r) => r.id)).toEqual([old]);
+		expect(await findCredentialForHost(env(), INSTANCE, UID, ATS_PAUSE.domain)).toMatchObject({ id: old, username: "me@example.test", password: issued });
+		expect((await run()).trace.at(-1)?.detail).toMatchObject({ decision: "credential_saved", basis: "password_reset" });
+	});
+
+	it("a pending password left by an unfinished attempt is overwritten, not duplicated, and never signed in with", async () => {
+		const left = await createCredential(env(), INSTANCE, UID, { domain: "ats-fixture.test", username: JOB_MAILBOX, password: "left-over-1!", provisional: true } as Parameters<typeof createCredential>[3]);
+		insertRun(RUN, ATS_PAUSE, AUTH);
+		const f = fakes();
+		await advance(T0, none, f);
+		setRunning();
+		await advance(T0 + 10_000, ask({ newPasswordRequested: true }), f);
+		expect((await listCredentials(env(), INSTANCE, UID)).map((r) => r.id)).toEqual([left]);
+		expect(await row()).toMatchObject({ pending_credential_id: left, replaces_credential_id: null });
+	});
+
+	it("the reset link: the fresh same-site purpose link is sent to the runner once and never recorded; stale mail, other sites and plain links are ignored", async () => {
+		insertRun(RUN, ATS_PAUSE, AUTH);
+		const f = fakes({ mail: [RESET_MAIL, { ...CODE_MAIL, id: "old", date: new Date(T0 - 3_600_000).toUTCString(), text: "https://www.ats-fixture.test/reset?token=oldoldoldoldoldoldold" }] });
+		await advance(T0, none, f);
+		setRunning();
+		expect((await advance(T0 + 30_000, ask({ linkRequested: true }), f)).outcome).toBe("waiting");
+		expect(f.sent[1]).toEqual({ path: "/local-apply/sign-in-secrets", body: { runId: RUN, link: LINK } });
+		expect(await row()).toMatchObject({ link_requested_at: T0 + 30_000, link_message_id: "reset-1" });
+		await advance(T0 + 60_000, ask({ linkRequested: true }), f);
+		expect(f.sent).toHaveLength(2);
+		const trace = (await run()).trace;
+		expect(trace.map((e) => e.detail?.decision)).toEqual(["provisioned", "link_requested", "link_read"]);
+		expect(JSON.stringify(trace) + dumpD1()).not.toContain("abcdef0123456789");
+		expect(mailLinkIn(RESET_MAIL.text, ATS_PAUSE.domain)).toBe(LINK);
+		expect(mailLinkIn('<a href="https://www.ats-fixture.test/about">About</a>', ATS_PAUSE.domain)).toBeNull();
+	});
+
+	it("no link within five minutes fails with its reason", async () => {
+		insertRun(RUN, ATS_PAUSE, AUTH);
+		const f = fakes({ mail: [] });
+		await advance(T0, none, f);
+		setRunning();
+		await advance(T0 + 30_000, ask({ linkRequested: true }), f);
+		expect((await advance(T0 + 30_000 + 5 * 60_000 + 1, ask({ linkRequested: true }), f)).outcome).toBe("failed");
+		expect(await row()).toMatchObject({ state: "failed", failure: "link_not_received" });
 	});
 });

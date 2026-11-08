@@ -51,7 +51,7 @@ import { DocumentPreflightRefusal, prepareApplySources } from "./preflight.js";
 import { resumeDomainGrants } from "./resume-domains.js";
 import { parseBrowserWebsiteAccess, websiteDecision, websiteResumePolicy, websiteAccessBlock, type BrowserWebsiteAccess } from "../browser-website-access.js";
 import { claimApplyStart, rememberApplyStart } from "./start-claim.js";
-import type { SiteSessionLedger } from "./site-session.js";
+import { siteKeyOf, type SiteSessionLedger } from "./site-session.js";
 import { APPLY_SHOT_CAP, ShotRecorder, type ReplayShotsPage } from "../local-browser/replay.js";
 import { confirmationSignals } from "./confirmation.js";
 import { listingUnavailableReason } from "./unavailable.js";
@@ -133,6 +133,8 @@ const MAX_ACTIVE = 1;
 /** Ordinary immediate questions park; only the final-review answer handoff retains a bounded live session. */
 const PARKABLE_PAUSES: ReadonlySet<LocalApplyPause["reason"]> = new Set(["missing_answer", "screening_ambiguity"]);
 /** How a pause ends: the owner resumed, the run stopped, or the cloud provisioned sign-in secrets (#1412). */
+/** What the agent can ask the cloud broker to provision mid sign-in (#1412 the emailed code; #1619 a generated new password and a mailbox link). */
+type SignInRequest = "code" | "newPassword" | "link";
 export type PauseOutcome = "resumed" | "stopped" | "sign_in";
 /** How long the CLI's `request_sign_in_code` waits for the cloud to read the mailbox — the cloud's own code wait. */
 const SIGN_IN_CODE_WAIT_MS = 5 * 60_000;
@@ -157,7 +159,7 @@ interface Run {
 	grounding: SourceBlock[];
 	secrets: string[];
 	/** The agent-driven sign-in in progress (#1412): the NAMES provisioned, never a value. */
-	signIn?: { origin: string; names: LocalApplySignInSecretName[]; codeRequested: boolean; codeWaiters: Array<(ok: boolean) => void> };
+	signIn?: { origin: string; names: LocalApplySignInSecretName[]; requested: Set<SignInRequest>; link?: string; linkDelivered: boolean; waiters: Array<{ kind: SignInRequest; done: (ok: boolean) => void }> };
 	activeSince: number;
 	activeMs: number;
 	waiters: Array<(outcome: PauseOutcome) => void>;
@@ -263,7 +265,7 @@ export function parseApplyEnvelope(raw: unknown): LocalApplyTaskEnvelope {
 		sources,
 		artifacts,
 		...(o.cloudDocuments !== undefined ? { cloudDocuments: parseCloudDocuments(o.cloudDocuments, artifacts) } : {}),
-		policy: { ...parseToolAccess(p, o.instanceId as string), ...(p.browserCommandTimeoutSeconds !== undefined ? { browserCommandTimeoutSeconds: p.browserCommandTimeoutSeconds as number } : {}), mode: p.mode as LocalApplyTaskEnvelope["policy"]["mode"], escalationLevel: parseEscalationLevel(p.escalationLevel), allowDomains, ...(browserWebsiteAccess ? { browserWebsiteAccess } : {}), ...(p.mode === "auto_submit" && gateId ? { submitGate: { gateId } } : {}), ...(p.screenshots === false ? { screenshots: false as const } : {}), blurFormFields: p.blurFormFields !== false },
+		policy: { ...parseToolAccess(p, o.instanceId as string), ...(p.accountOperations === true ? { accountOperations: true } : {}), ...(p.browserCommandTimeoutSeconds !== undefined ? { browserCommandTimeoutSeconds: p.browserCommandTimeoutSeconds as number } : {}), mode: p.mode as LocalApplyTaskEnvelope["policy"]["mode"], escalationLevel: parseEscalationLevel(p.escalationLevel), allowDomains, ...(browserWebsiteAccess ? { browserWebsiteAccess } : {}), ...(p.mode === "auto_submit" && gateId ? { submitGate: { gateId } } : {}), ...(p.screenshots === false ? { screenshots: false as const } : {}), blurFormFields: p.blurFormFields !== false },
 		limits,
 		...(ownerAnswers.length ? { ownerAnswers } : {}),
 		...(o.ownerFacts !== undefined ? { ownerFacts: parseOwnerFacts(o.ownerFacts, { instanceId: o.instanceId as string, applicationId: o.applicationId as string, runId: o.runId as string }) } : {}),
@@ -520,7 +522,10 @@ export class LocalApplyRuntime {
 			gateId: e.policy.submitGate?.gateId,
 			sessions: run.browser.sessions,
 			signInSecrets: () => [...(run.signIn?.names ?? [])],
-			requestSignInCode: () => this.requestSignInCode(run),
+			requestSignInCode: () => this.awaitSignIn(run, "code"),
+			accountOperations: e.policy.accountOperations === true,
+			requestNewPassword: () => this.awaitSignIn(run, "newPassword"),
+			openSignInLink: () => this.openSignInLink(run),
 			signInDone: () => this.signInDone(run),
 			page: () => run.browser?.handoffPage?.() ?? null,
 			redact: (value) => redactReplayText(value, run.secrets),
@@ -780,44 +785,78 @@ export class LocalApplyRuntime {
 			const v = given[name];
 			if (typeof v === "string" && v.length > 0 && v.length <= 512) map[name] = v;
 		}
-		if (!Object.keys(map).length) throw new RunnerInputError(`secrets must carry at least one of ${LOCAL_APPLY_SIGN_IN_SECRET_NAMES.join(", ")}`);
+		if (!Object.keys(map).length && o.link === undefined) throw new RunnerInputError(`secrets must carry at least one of ${LOCAL_APPLY_SIGN_IN_SECRET_NAMES.join(", ")}`);
 		const paused = run.state === "paused" && run.pause?.reason === "login_required";
 		if (!paused && !(run.state === "running" && run.signIn)) throw new RunnerInputError("The run is not paused for a sign-in", 409, "sign_in_not_at_wall");
 		if (!run.browser?.secrets) throw new RunnerInputError("This run's browser cannot take secret placeholders", 409, "sign_in_secrets_unavailable");
-		run.browser.secrets.provideSecrets(map);
+		// #1619: a mailbox link is for the page already signing in, and only on that sign-in's own site.
+		let link: string | undefined;
+		if (o.link !== undefined) {
+			const host = run.signIn?.origin ?? "";
+			try {
+				const u = new URL(String(o.link));
+				if (!run.signIn || !host || (u.protocol !== "https:" && u.protocol !== "http:") || siteKeyOf(u.hostname) !== siteKeyOf(host) || String(o.link).length > 4096) throw new Error("link");
+				link = u.href;
+			} catch {
+				throw new RunnerInputError("link must be an http(s) URL on the sign-in site", 400);
+			}
+		}
+		if (Object.keys(map).length) run.browser.secrets.provideSecrets(map);
 		// The values, so a result that somehow quotes one is scrubbed (`end()`); the names are what the trace sees.
-		run.secrets.push(...Object.values(map));
+		run.secrets.push(...Object.values(map), ...(link ? [link] : []));
 		const names = Object.keys(map) as LocalApplySignInSecretName[];
 		if (paused) {
-			run.signIn = { origin: run.pause?.domain ?? "", names, codeRequested: false, codeWaiters: [] };
+			run.signIn = { origin: run.pause?.domain ?? "", names, requested: new Set(), linkDelivered: false, waiters: [] };
 			this.emit(run, { type: "policy.decision", domain: run.signIn.origin || undefined, detail: { tool: "agent_sign_in", class: "session", source: "platform", decision: "started", reason: names.join(",") } });
 			this.release(run, "sign_in");
 		} else if (run.signIn) {
 			for (const n of names) if (!run.signIn.names.includes(n)) run.signIn.names.push(n);
-			this.emit(run, { type: "policy.decision", domain: run.signIn.origin || undefined, detail: { tool: "agent_sign_in", class: "session", source: "platform", decision: "provisioned", reason: names.join(",") } });
-			if (map.PAGS_LOGIN_CODE) for (const w of run.signIn.codeWaiters.splice(0)) w(true);
+			if (link) run.signIn.link = link;
+			this.emit(run, { type: "policy.decision", domain: run.signIn.origin || undefined, detail: { tool: "agent_sign_in", class: "session", source: "platform", decision: "provisioned", reason: [...names, ...(link ? ["link"] : [])].join(",") } });
+			const wake = (kind: SignInRequest) => { for (const w of run.signIn!.waiters.filter((x) => x.kind === kind)) w.done(true); run.signIn!.waiters = run.signIn!.waiters.filter((x) => x.kind !== kind); };
+			if (map.PAGS_LOGIN_CODE) wake("code");
+			if (map.PAGS_NEW_PASSWORD) wake("newPassword");
+			if (link) wake("link");
 		}
 		return this.status({ runId: run.envelope.runId, afterSeq: run.seq });
 	}
 
-	/** The CLI asked for the emailed code: wait for the cloud to provision `PAGS_LOGIN_CODE`, bounded. */
-	private requestSignInCode(run: Run): Promise<boolean> {
-		if (!run.signIn) return Promise.resolve(false);
-		if (run.signIn.names.includes("PAGS_LOGIN_CODE")) return Promise.resolve(true);
-		run.signIn.codeRequested = true;
+	/** The CLI asked the cloud for something mid sign-in: wait for it to be provisioned, bounded. */
+	private awaitSignIn(run: Run, kind: SignInRequest): Promise<boolean> {
+		const s = run.signIn;
+		if (!s) return Promise.resolve(false);
+		if (kind === "code" && s.names.includes("PAGS_LOGIN_CODE") || kind === "newPassword" && s.names.includes("PAGS_NEW_PASSWORD") || kind === "link" && s.link) return Promise.resolve(true);
+		// One mailbox link per run: a second request would be a blind retry of a reset or verification.
+		if (kind === "link" && s.linkDelivered) return Promise.resolve(false);
+		s.requested.add(kind);
 		return new Promise((done) => {
 			const timer = setTimeout(() => done(false), SIGN_IN_CODE_WAIT_MS);
 			timer.unref?.();
-			run.signIn?.codeWaiters.push((ok) => {
-				clearTimeout(timer);
-				done(ok);
-			});
+			s.waiters.push({ kind, done: (ok) => { clearTimeout(timer); done(ok); } });
 		});
+	}
+
+	/** #1619: wait for the mailbox link, then open it in the run's own page. The URL is never returned or traced. */
+	private async openSignInLink(run: Run): Promise<boolean> {
+		if (!(await this.awaitSignIn(run, "link"))) return false;
+		const link = run.signIn?.link;
+		const page = run.browser?.handoffPage?.();
+		if (!link || !page || page.isClosed()) return false;
+		run.signIn!.link = undefined;
+		run.signIn!.linkDelivered = true;
+		run.signIn!.requested.delete("link");
+		try {
+			await page.goto(link, { waitUntil: "domcontentloaded", timeout: 30_000 });
+		} catch {
+			return false;
+		}
+		this.emit(run, { type: "policy.decision", domain: run.signIn?.origin || undefined, detail: { tool: "agent_sign_in", class: "session", source: "platform", decision: "link_opened" } });
+		return true;
 	}
 
 	/** The sign-in ended either way: the secrets are wiped and the run is an ordinary running run again. */
 	private signInDone(run: Run): void {
-		for (const w of run.signIn?.codeWaiters.splice(0) ?? []) w(false);
+		for (const w of run.signIn?.waiters.splice(0) ?? []) w.done(false);
 		run.signIn = undefined;
 		run.browser?.secrets?.clearSecrets();
 	}
@@ -935,7 +974,7 @@ export class LocalApplyRuntime {
 			runId: run.envelope.runId,
 			state: run.state,
 			...(run.pause ? { pause: run.pause } : {}),
-			...(run.signIn && run.state === "running" ? { signIn: { state: "signing_in" as const, origin: run.signIn.origin, secrets: [...run.signIn.names], codeRequested: run.signIn.codeRequested } } : {}),
+			...(run.signIn && run.state === "running" ? { signIn: { state: "signing_in" as const, origin: run.signIn.origin, secrets: [...run.signIn.names], codeRequested: run.signIn.requested.has("code"), newPasswordRequested: run.signIn.requested.has("newPassword"), linkRequested: run.signIn.requested.has("link") } } : {}),
 			events: page,
 			lastSeq: page.length < pending.length ? page[page.length - 1].seq : run.seq,
 			...(run.result ? { result: run.result } : {}),
