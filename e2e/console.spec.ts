@@ -1369,7 +1369,7 @@ test.describe("ProAgentStore Console smoke", () => {
 			await page.goto(GENERAL);
 			await expect(voice(page)).toContainText("Voice: follows your account (");
 			await expect(voice(page)).toContainText("Change in Preferences");
-			await expect(translation(page)).toHaveText(/Translation: follows your account \(English\)/);
+			await expect(translation(page)).toHaveText(/Translation: follows your account \(off\)/);
 			await expect(page.getByRole("button", { name: "Override for this agent" })).toHaveCount(2);
 			await expect(page.getByRole("radio")).toHaveCount(0);
 			await expect(page.locator("#voice-stt-mode")).toHaveCount(0);
