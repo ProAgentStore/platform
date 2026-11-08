@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { policyRows, rulesFromChoices, SOURCE_LABEL } from "./notificationPolicy";
+import { hiddenRowRules, mergeSavedPolicy, partitionRows, policyRows, rulesFromChoices, SOURCE_LABEL, turnEverythingOff } from "./notificationPolicy";
 import type { InstanceNotificationPolicy, NotificationVocabulary } from "./types";
 
 /**
@@ -119,5 +119,68 @@ describe("what a save sends", () => {
 		for (const r of rules) expect(r).toMatchObject({ inapp: false, push: false });
 		const restored = allOff.map((r) => ({ ...r, inapp: { ...r.inapp, choice: "inherit" as const }, push: { ...r.push, choice: "inherit" as const } }));
 		expect(rulesFromChoices(restored)).toEqual([]);
+	});
+});
+
+describe("rows an agent cannot raise (#1595)", () => {
+	const rows = () => policyRows(vocab, policy());
+	const hidden = ["type:deploy:update", "event:approval_required"];
+
+	it("shows only the rows it can raise and counts the rest as following the account", () => {
+		const { shown, hiddenRows, followCount } = partitionRows(rows(), hidden);
+		expect(shown.map((r) => r.key)).toEqual(["type:apply:update", "type:apply:alert"]);
+		expect(hiddenRows.map((r) => r.key)).toEqual(["event:approval_required", "type:deploy:update"]);
+		expect(followCount).toBe(2);
+	});
+
+	it("no applicability, or none hidden, shows every row and counts none", () => {
+		expect(partitionRows(rows(), undefined)).toMatchObject({ followCount: 0 });
+		expect(partitionRows(rows(), []).shown).toHaveLength(4);
+	});
+
+	it("a hidden row with an instance rule is shown, and is not counted as following the account", () => {
+		const decided = policy({
+			rules: [{ type: "deploy", severity: "update", push: false }],
+			effective: [
+				{ type: "apply", severity: "update", inapp: { allowed: true, source: "default" }, push: on },
+				{ type: "apply", severity: "alert", inapp: { allowed: true, source: "default" }, push: on },
+				{ type: "deploy", severity: "update", inapp: { allowed: true, source: "default" }, push: { allowed: false, source: "instance" } },
+				{ type: "", severity: "alert", event: "approval_required", inapp: { allowed: true, source: "default" }, push: on },
+			],
+		});
+		const { shown, followCount } = partitionRows(policyRows(vocab, decided), hidden);
+		expect(shown.map((r) => r.key)).toContain("type:deploy:update");
+		expect(shown.find((r) => r.key === "type:deploy:update")?.push.choice).toBe("off");
+		expect(followCount).toBe(1);
+	});
+
+	it("rulesFromChoices carries the rules it is handed for hidden rows through unchanged", () => {
+		const carried = [{ type: "spend", severity: "update" as const, push: false }];
+		const { shown } = partitionRows(rows(), hidden);
+		const rules = rulesFromChoices(shown.map((r) => (r.key === "type:apply:update" ? { ...r, push: { ...r.push, choice: "off" as const } } : r)), carried);
+		expect(rules).toEqual([...carried, { type: "apply", severity: "update", push: false }]);
+	});
+
+	it("hiddenRowRules picks the stored rules whose selector is a hidden row's", () => {
+		const { hiddenRows } = partitionRows(rows(), hidden);
+		const stored = [{ type: "deploy", severity: "update" as const, push: false }, { type: "apply", severity: "update" as const, push: false }];
+		expect(hiddenRowRules(stored, hiddenRows)).toEqual([stored[0]]);
+	});
+
+	it("turnEverythingOff turns off the rows shown and keeps hidden-row rules", () => {
+		const { shown } = partitionRows(rows(), hidden);
+		const carried = [{ type: "deploy", severity: "update" as const, push: true }];
+		const rules = turnEverythingOff(shown, carried);
+		expect(rules).toEqual([carried[0], { type: "apply", severity: "update", inapp: false, push: false }, { type: "apply", severity: "alert", inapp: false, push: false }]);
+	});
+
+	it("mergeSavedPolicy keeps the baseline and the applicability a PUT or DELETE does not repeat", () => {
+		const prev = policy({ inherited: { rules: [], legacy: [], muted: ["deploy"], instances: [] }, applicability: { hidden } });
+		const next = { instanceId: "i1", rules: [{ type: "apply", push: false }], effective: [] } as InstanceNotificationPolicy;
+		const merged = mergeSavedPolicy(prev, next);
+		expect(merged?.applicability).toEqual({ hidden });
+		expect(merged?.inherited?.muted).toEqual(["deploy"]);
+		expect(merged?.rules).toEqual(next.rules);
+		expect(mergeSavedPolicy(null, next)).toBeNull();
 	});
 });

@@ -54,7 +54,16 @@ export interface NotificationTypeSpec {
 	description: string;
 	/** True when this type can also raise an `alert`, i.e. a mute here is partial by design. */
 	alerts: boolean;
+	/** What an instance needs for this type to be able to fire (#1595). Absent = `always`. See `notification-applicability.ts`. */
+	gate?: NotificationGate;
 }
+
+/**
+ * What an instance must have for a notification row to apply to it: `always`, `account` (not instance-scoped, so never),
+ * `surface:<id>`, `runtime:any` (the agent has a runtime), `runtime:<value>` or `tool:<name>`. An entry with no gate is
+ * `always`, so a new type is never silently hidden.
+ */
+export type NotificationGate = "always" | "account" | `surface:${string}` | `runtime:${string}` | `tool:${string}`;
 
 /**
  * Every type `notifyUser` is called with, as data.
@@ -69,18 +78,21 @@ export const NOTIFICATION_TYPES: NotificationTypeSpec[] = [
 		label: "Job applications",
 		description: "Progress on an application run, and your résumé being parsed.",
 		alerts: true,
+		gate: "surface:apply",
 	},
 	{
 		id: "coding",
 		label: "Coder",
 		description: "A coding session finishing or stopping.",
 		alerts: true,
+		gate: "surface:coding",
 	},
 	{
 		id: "deploy",
 		label: "Deploys",
 		description: "A deploy of one of your repos going out, or failing.",
 		alerts: false,
+		gate: "surface:coding",
 	},
 	{
 		// Live since the CI-health sweep shipped (`lib/repo-ci-health.ts:353` calls notifyUser with
@@ -92,6 +104,7 @@ export const NOTIFICATION_TYPES: NotificationTypeSpec[] = [
 		label: "Build checks",
 		description: "A repo's checks going red or recovering, separately from a deploy.",
 		alerts: false,
+		gate: "surface:coding",
 	},
 	{
 		id: "loop",
@@ -116,30 +129,35 @@ export const NOTIFICATION_TYPES: NotificationTypeSpec[] = [
 		label: "Browser research",
 		description: "A research run pausing for you — a new site to allow, a captcha, or a sign-in (#946).",
 		alerts: true,
+		gate: "runtime:local_browser",
 	},
 	{
 		id: "coder_question",
 		label: "Coder questions",
 		description: "A coder brain decision, escalation or unresolved question on a stuck coding run (#1025). The question itself arrives as a Coder alert.",
 		alerts: true,
+		gate: "surface:coding",
 	},
 	{
 		id: "po_triage_digest",
 		label: "Product-owner triage",
 		description: "A short digest after a coder's scheduled issue triage — what was queued, what waits on you, what needs detail (#1027). Sent only when something changed.",
 		alerts: false,
+		gate: "surface:coding",
 	},
 	{
 		id: "remote-auth",
 		label: "Remote sign-in requests",
 		description: "One of your machines asking you to approve a ProAppStore MCP sign-in (#1005). The link opens that exact request; you sign in at ProAppStore.",
 		alerts: true,
+		gate: "account",
 	},
 	{
 		id: "spend",
 		label: "Spend alerts",
 		description: "Your agents' charged AI spend over the last 24 hours reaching the alert you set on the Usage page (#1040). At most once a day.",
 		alerts: false,
+		gate: "account",
 	},
 	{
 		// #1162: a runner machine that stopped reporting — once per silence, with its last report and the fix.
@@ -149,6 +167,7 @@ export const NOTIFICATION_TYPES: NotificationTypeSpec[] = [
 		label: "Machines",
 		description: "A machine running `pags up` going silent (including mid-update) and coming back, a runner crash-looping or rolling back a release, its sign-in about to expire, or CPU, memory or disk running out. Once per episode, not per check.",
 		alerts: false,
+		gate: "runtime:any",
 	},
 	{
 		// #1268: a configuration change held until the owner approves it from their phone.
@@ -156,12 +175,14 @@ export const NOTIFICATION_TYPES: NotificationTypeSpec[] = [
 		label: "Approval gate",
 		description: "A configuration change on your account waiting for your approval (#1268). Muting this means held changes sit until you open Preferences — they never apply on their own.",
 		alerts: true,
+		gate: "account",
 	},
 	{
 		id: "subscribe",
 		label: "New subscribers",
 		description: "Someone subscribing to an agent you publish.",
 		alerts: false,
+		gate: "account",
 	},
 ];
 

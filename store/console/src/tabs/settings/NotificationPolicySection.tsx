@@ -3,7 +3,8 @@ import { api } from "@proagentstore/sdk/client";
 import Button from "../../components/Button";
 import Card from "../../components/Card";
 import LoadFailed from "../../components/LoadFailed";
-import { CHANNEL_HELP, type PolicyChoice, type PolicyRow, policyRows, rulesFromChoices, SOURCE_LABEL } from "../../lib/notificationPolicy";
+import { Link } from "react-router-dom";
+import { CHANNEL_HELP, hiddenRowRules, mergeSavedPolicy, partitionRows, type PolicyChoice, type PolicyRow, policyRows, rulesFromChoices, SOURCE_LABEL, turnEverythingOff } from "../../lib/notificationPolicy";
 import type { InstanceNotificationPolicy, NotificationPolicyRule, NotificationVocabulary } from "../../lib/types";
 
 /**
@@ -67,11 +68,10 @@ export default function NotificationPolicySection({ instanceId, account }: { ins
 	}, [load]);
 
 	const save = useCallback(
-		async (rows: PolicyRow[]) => {
+		async (rules: NotificationPolicyRule[]) => {
 			setSaving(true);
 			setMsg("");
 			try {
-				const rules = rulesFromChoices(rows);
 				// An empty list IS "restore inherited", and the route it goes to says so: DELETE
 				// removes the override, where a stored `[]` would look like a policy that decides
 				// nothing. Same call the MCP tool makes.
@@ -79,7 +79,7 @@ export default function NotificationPolicySection({ instanceId, account }: { ins
 					const next = rules.length
 						? await api<InstanceNotificationPolicy>(`/v1/instances/${instanceId}/notifications`, { method: "PUT", body: JSON.stringify({ rules }) })
 						: await api<InstanceNotificationPolicy>(`/v1/instances/${instanceId}/notifications`, { method: "DELETE" });
-					setPolicy((prev) => (prev ? { ...prev, ...next, inherited: prev.inherited } : prev));
+					setPolicy((prev) => mergeSavedPolicy(prev, next));
 					setMsg("Saved.");
 				} else if (account) {
 					// One writer for the whole section: the store applies this change to the CURRENT mutes and scope, writes all
@@ -106,11 +106,14 @@ export default function NotificationPolicySection({ instanceId, account }: { ins
 	if (error) return <LoadFailed what="notification settings" detail={error} onRetry={() => void load()} />;
 	if (!vocab || !shown) return null;
 
-	const rows = policyRows(vocab, shown);
+	const allRows = policyRows(vocab, shown);
+	// Instance level only: Preferences keeps the full vocabulary. A row this agent cannot raise is listed in the summary line.
+	const { shown: rows, hiddenRows, followCount } = instanceId ? partitionRows(allRows, shown.applicability?.hidden) : { shown: allRows, hiddenRows: [], followCount: 0 };
+	const carried = hiddenRowRules(shown.rules ?? [], hiddenRows);
 	const overridden = (shown.rules ?? []).length > 0;
 
 	const setChoice = (row: PolicyRow, channel: "inapp" | "push", choice: PolicyChoice) => {
-		void save(rows.map((r) => (r.key === row.key ? { ...r, [channel]: { ...r[channel], choice } } : r)));
+		void save(rulesFromChoices(rows.map((r) => (r.key === row.key ? { ...r, [channel]: { ...r[channel], choice } } : r)), carried));
 	};
 
 	return (
@@ -127,12 +130,12 @@ export default function NotificationPolicySection({ instanceId, account }: { ins
 				<Button
 					variant="secondary"
 					disabled={saving}
-					onClick={() => void save(rows.map((r) => ({ ...r, inapp: { ...r.inapp, choice: "off" }, push: { ...r.push, choice: "off" } })))}
+					onClick={() => void save(turnEverythingOff(rows, carried))}
 				>
 					Turn everything off
 				</Button>
 				<Button variant="secondary" disabled={saving || !overridden} onClick={() => void save([])}>
-					{instanceId ? "Restore inherited" : "Clear all rules"}
+					{instanceId ? "Restore inherited (all of this agent's rules)" : "Clear all rules"}
 				</Button>
 			</div>
 
@@ -169,6 +172,15 @@ export default function NotificationPolicySection({ instanceId, account }: { ins
 					</div>
 				</div>
 			))}
+
+			{followCount > 0 && (
+				<p className="text-xs text-muted pt-2.5 border-t border-line" data-testid="notification-rows-follow-account">
+					{followCount} more follow your account ·{" "}
+					<Link to="/preferences" className="text-accent font-semibold hover:underline">
+						Open Preferences
+					</Link>
+				</p>
+			)}
 
 			{msg && <p className="text-xs text-muted mt-2">{msg}</p>}
 		</Card>

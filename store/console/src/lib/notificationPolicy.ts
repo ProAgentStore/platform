@@ -102,6 +102,39 @@ export function policyRows(vocab: NotificationVocabulary, policy: InstanceNotifi
 	return rows;
 }
 
+const hasInstanceRule = (row: PolicyRow) => row.inapp.choice !== "inherit" || row.push.choice !== "inherit";
+
+/**
+ * Split the editor's rows for an instance (#1595): `shown` are the rows this agent can raise plus any row it cannot but that
+ * carries an instance rule (so the owner can see and clear it); `hiddenRows` are the rest, and `followCount` is how many of
+ * those follow the account (every one of them, since a hidden row with a rule is shown instead).
+ */
+export function partitionRows(rows: PolicyRow[], hidden: readonly string[] | undefined): { shown: PolicyRow[]; hiddenRows: PolicyRow[]; followCount: number } {
+	const gated = new Set(hidden ?? []);
+	const shown = rows.filter((r) => !gated.has(r.key) || hasInstanceRule(r));
+	const hiddenRows = rows.filter((r) => gated.has(r.key) && !hasInstanceRule(r));
+	return { shown, hiddenRows, followCount: hiddenRows.length };
+}
+
+/** The stored rules that belong to hidden rows (same selector), which a save must send back unchanged. */
+export function hiddenRowRules(rules: readonly NotificationPolicyRule[], hiddenRows: readonly PolicyRow[]): NotificationPolicyRule[] {
+	const same = (a: NotificationPolicyRule, b: NotificationPolicyRule) => a.type === b.type && a.event === b.event && a.severity === b.severity;
+	return rules.filter((rule) => hiddenRows.some((row) => same(rule, row.selector)));
+}
+
+/** "Turn everything off" acts on the rows shown ("everything this agent can raise"); hidden rows' rules ride along unchanged. */
+export function turnEverythingOff(rows: PolicyRow[], hiddenRules: NotificationPolicyRule[] = []): NotificationPolicyRule[] {
+	return rulesFromChoices(
+		rows.map((r) => ({ ...r, inapp: { ...r.inapp, choice: "off" as const }, push: { ...r.push, choice: "off" as const } })),
+		hiddenRules,
+	);
+}
+
+/** After a PUT or DELETE: take what the server returned, but keep what it does not repeat (the account baseline and the applicability). */
+export function mergeSavedPolicy(prev: InstanceNotificationPolicy | null, next: InstanceNotificationPolicy): InstanceNotificationPolicy | null {
+	return prev ? { ...prev, ...next, inherited: prev.inherited, applicability: next.applicability ?? prev.applicability } : prev;
+}
+
 /**
  * The rule list a save sends: one rule per row that decides something, carrying only the channels
  * that row actually chose.
@@ -111,8 +144,8 @@ export function policyRows(vocab: NotificationVocabulary, policy: InstanceNotifi
  * the API would refuse (and should: a stored rule that changes no outcome is a control the owner
  * believes they set).
  */
-export function rulesFromChoices(rows: PolicyRow[]): NotificationPolicyRule[] {
-	const rules: NotificationPolicyRule[] = [];
+export function rulesFromChoices(rows: PolicyRow[], carried: NotificationPolicyRule[] = []): NotificationPolicyRule[] {
+	const rules: NotificationPolicyRule[] = [...carried];
 	for (const row of rows) {
 		const rule: NotificationPolicyRule = { ...row.selector };
 		if (row.inapp.choice !== "inherit") rule.inapp = row.inapp.choice === "on";

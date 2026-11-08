@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
+import { notificationsResponse, NOTIFICATION_VOCABULARY } from "./notification-fixtures";
 
 const API = "https://api.proagentstore.online";
 const TEST_TOKEN = "test-pags-token";
@@ -903,6 +904,13 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 		// fixed-width slots and a bar — had never been measured at 320px by anything.
 		if (path === "/v1/usage") return json(options.usage ?? DEFAULT_USAGE);
 		if (path === "/v1/budget/limits") return json(options.budget ?? DEFAULT_BUDGET);
+
+		// The instance Notifications card (#1595): the full vocabulary, and the rows THIS instance can raise.
+		if (path === "/v1/instances/notification-vocabulary") return json(NOTIFICATION_VOCABULARY);
+		if (path === "/v1/instances/inst-1/notifications" && method === "GET") {
+			const first = (options.instances?.[0] ?? {}) as { capabilities?: { surfaces?: string[]; runtime?: string | null } };
+			return json(notificationsResponse("inst-1", { surfaces: first.capabilities?.surfaces ?? [], runtime: first.capabilities?.runtime ?? null } as never));
+		}
 
 		return json({ error: `Unhandled mock route ${method} ${path}` }, 500);
 	});

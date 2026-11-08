@@ -1296,6 +1296,14 @@ components:
           type: array
           description: Only what the owner set here. Empty means it inherits the account.
           items: { $ref: "#/components/schemas/NotificationPolicyRule" }
+        applicability:
+          type: object
+          description: Present on GET only (#1595). Which rows this agent can raise, so the console lists just those.
+          properties:
+            hidden:
+              type: array
+              description: Row keys (`event:<id>`, `type:<id>:<severity>`) this agent cannot raise, from the `gate` each type and event declares. A row with an instance rule stays in force whether listed here or not.
+              items: { type: string }
         inherited:
           type: object
           properties:

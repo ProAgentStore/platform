@@ -41,7 +41,7 @@
  * exists to avoid — the owner is not told, and the system says they were.
  */
 import { type DeepLink, deepLinkFor, type NotificationSubject } from "./console-links.js";
-import { type NotificationPreferences, notificationDedupeKey } from "./notifications.js";
+import { type NotificationGate, type NotificationPreferences, notificationDedupeKey } from "./notifications.js";
 
 /** The kinds of attention an agent can ask for. DATA — the console renders its controls from this. */
 export interface OwnerAttentionEventSpec {
@@ -62,6 +62,8 @@ export interface OwnerAttentionEventSpec {
 	 * routine news that would be noise as a buzz. Absent: the account baseline decides, as before.
 	 */
 	pushDefault?: false;
+	/** What an instance needs for this event to apply to it (#1595). Absent = `always`. */
+	gate?: NotificationGate;
 }
 
 export const OWNER_ATTENTION_EVENTS: OwnerAttentionEventSpec[] = [
@@ -99,6 +101,7 @@ export const OWNER_ATTENTION_EVENTS: OwnerAttentionEventSpec[] = [
 		description: "A browser verification ended without a result — the site could not be checked, or the attempt was stopped.",
 		kind: "alert",
 		pushOptional: true,
+		gate: "runtime:local_browser",
 	},
 	{
 		id: "browser_verification_completed",
@@ -106,6 +109,7 @@ export const OWNER_ATTENTION_EVENTS: OwnerAttentionEventSpec[] = [
 		description: "A browser verification finished with a result.",
 		kind: "update",
 		pushOptional: true,
+		gate: "runtime:local_browser",
 	},
 	{
 		id: "decision_required",

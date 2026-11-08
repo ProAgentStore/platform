@@ -229,6 +229,8 @@ export interface NotificationChannelDecision {
 export interface InstanceNotificationPolicy {
 	instanceId: string;
 	rules: NotificationPolicyRule[];
+	/** Row keys (`event:<id>`, `type:<id>:<severity>`) this agent cannot raise. PUT and DELETE do not repeat it (#1595). */
+	applicability?: { hidden: string[] };
 	inherited?: { rules: NotificationPolicyRule[]; legacy: NotificationPolicyRule[]; muted: string[]; instances: string[] };
 	effective: Array<{
 		type: string;

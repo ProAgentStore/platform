@@ -14,6 +14,8 @@
  */
 import type { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
+import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
+import { gatedOutRowKeys } from "../lib/notification-applicability.js";
 import { patchInstanceConfig, removeInstanceConfigKey } from "../lib/instance-config.js";
 import {
 	type NotificationRule,
@@ -93,8 +95,12 @@ export function registerInstanceNotificationRoutes(router: Hono<{ Bindings: Env 
 		await requireOwnedInstance(c.env, instanceId, session.uid);
 		const account = await accountNotifications(c.env, session.uid);
 		const instance = await readInstanceNotificationPolicy(c.env, instanceId, session.uid);
+		const caps = await capabilitiesForInstance(c.env, instanceId, session.uid);
+		const hidden = caps ? gatedOutRowKeys(caps) : [];
 		return c.json({
 			instanceId,
+			/** Rows this agent cannot raise (#1595). The console still shows one that has an instance rule. PUT and DELETE do not repeat it. */
+			applicability: { hidden },
 			/** Only what the owner set here. Empty means "inherits the account" — a real state. */
 			rules: instance?.rules ?? [],
 			inherited: {

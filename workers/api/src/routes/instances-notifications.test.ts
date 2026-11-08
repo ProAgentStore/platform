@@ -178,3 +178,56 @@ describe("tenant isolation", () => {
 		for (const row of other.body.effective) expect(row.push.allowed, row.event ?? row.type).toBe(!offByDefault(row));
 	});
 });
+
+describe("which rows apply to this instance (#1595)", () => {
+	const GMAIL_HIDDEN = [
+		"type:apply:update", "type:apply:alert", "type:coding:update", "type:coding:alert", "type:deploy:update", "type:ci:update",
+		"type:coder_question:update", "type:coder_question:alert", "type:po_triage_digest:update", "type:remote-auth:update", "type:remote-auth:alert",
+		"type:spend:update", "type:account_approval:update", "type:account_approval:alert", "type:subscribe:update",
+	];
+	const hiddenFor = async (agentId: string) => {
+		d1.exec(`INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES ('i-${agentId}', '${agentId}', 'u1', 'active', '{}')`);
+		const r = await call("GET", `/i-${agentId}/notifications`);
+		return r.body.applicability.hidden as string[];
+	};
+	const agent = (id: string, caps: unknown) =>
+		d1.exec(`INSERT INTO agents (id, owner_id, slug, name, config) VALUES ('${id}', 'u1', 's-${id}', '${id}', '${JSON.stringify({ capabilities: caps })}')`);
+
+	it("a Gmail Scout (local_browser, no apply or coding) hides exactly the 15 rows it cannot raise", async () => {
+		agent("scout", { surfaces: [], runtime: "local_browser" });
+		expect((await hiddenFor("scout")).sort()).toEqual([...GMAIL_HIDDEN].sort());
+	});
+
+	it("a non-Gmail local_browser agent still shows the browser verification events", async () => {
+		agent("research", { surfaces: [], runtime: "local_browser" });
+		const hidden = await hiddenFor("research");
+		expect(hidden).not.toContain("event:browser_verification_failed");
+		expect(hidden).not.toContain("event:browser_verification_completed");
+	});
+
+	it("a coding agent shows the coding rows and Machines, and hides browser research and applications", async () => {
+		agent("coder", { surfaces: ["coding"], runtime: "coding" });
+		const hidden = await hiddenFor("coder");
+		for (const k of ["type:coding:update", "type:deploy:update", "type:ci:update", "type:coder_question:alert", "type:po_triage_digest:update", "type:machine:update"]) {
+			expect(hidden).not.toContain(k);
+		}
+		expect(hidden).toEqual(expect.arrayContaining(["type:local-browser:update", "type:apply:update", "type:spend:update", "event:browser_verification_failed"]));
+	});
+
+	it("a cloud-only chat agent has no runtime, so Machines and browser rows are hidden too", async () => {
+		agent("chat", { surfaces: [], runtime: null });
+		const hidden = await hiddenFor("chat");
+		expect(hidden).toEqual(expect.arrayContaining(["type:machine:update", "type:local-browser:update", "type:local-browser:alert", "event:browser_verification_completed"]));
+		expect(hidden).not.toContain("event:approval_required");
+		expect(hidden).not.toContain("type:loop:update");
+	});
+
+	it("a rule on a hidden row still decides the effective state, and the row stays listed as hidden for the console to reveal", async () => {
+		agent("scout2", { surfaces: [], runtime: "local_browser" });
+		d1.exec(`INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES ('i-s2', 'scout2', 'u1', 'active', '{"notifications":{"rules":[{"type":"spend","severity":"update","push":false}]}}')`);
+		const r = await call("GET", "/i-s2/notifications");
+		const spend = r.body.effective.find((e: { type: string; severity: string }) => e.type === "spend" && e.severity === "update");
+		expect(spend.push).toMatchObject({ allowed: false, source: "instance" });
+		expect(r.body.applicability.hidden).toContain("type:spend:update");
+	});
+});
