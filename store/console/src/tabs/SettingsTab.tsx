@@ -73,6 +73,9 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 	const [voiceSettings, setVoiceSettings] = useState<Record<string, unknown> | null>(null);
 	const [voiceOverride, setVoiceOverride] = useState(false);
 	const [trOverride, setTrOverride] = useState(false);
+	// Local "Override for this agent" reveal, separate from the server's hasOverride: nothing is written until the first field change (#1599).
+	const [voiceRevealed, setVoiceRevealed] = useState(false);
+	const [trRevealed, setTrRevealed] = useState(false);
 	const [trLoaded, setTrLoaded] = useState(false);
 	const [hasOpenAiKey, setHasOpenAiKey] = useState<boolean | null>(null);
 	const [instName, setInstName] = useState("");
@@ -197,6 +200,7 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 	const clearVoiceOverride = async () => {
 		const d = await api<{ voiceSettings?: Record<string, unknown> }>(`/v1/instances/${instanceId}/voice-settings`, { method: "DELETE" });
 		setVoiceOverride(false);
+		setVoiceRevealed(false);
 		if (d?.voiceSettings) setVoiceSettings(d.voiceSettings);
 		invalidateVoiceConfig();
 	};
@@ -217,6 +221,7 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 			{ method: "DELETE" },
 		);
 		setTrOverride(false);
+		setTrRevealed(false);
 		if (d?.translation) {
 			setTrEnabled(d.translation.enabled === true);
 			setTrTarget(d.translation.target || "English");
@@ -351,10 +356,13 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 					<Section id="voice-translation">
 						<VoiceTranslationSection
 							voiceSettings={voiceSettings}
+							voiceLoad={voiceSettings !== null ? "loaded" : loadFailures.includes("voice settings") ? "failed" : "loading"}
 							voiceOverride={voiceOverride}
+							voiceRevealed={voiceRevealed}
 							hasOpenAiKey={hasOpenAiKey}
-							trLoaded={trLoaded}
+							trLoad={trLoaded ? "loaded" : loadFailures.includes("translation settings") ? "failed" : "loading"}
 							trOverride={trOverride}
+							trRevealed={trRevealed}
 							trEnabled={trEnabled}
 							trTarget={trTarget}
 							trTranslit={trTranslit}
@@ -365,8 +373,8 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 							onClearVoiceOverride={clearVoiceOverride}
 							onSaveTranslationOverride={saveTranslationOverride}
 							onClearTrOverride={clearTrOverride}
-							onSetVoiceOverride={setVoiceOverride}
-							onSetTrOverride={setTrOverride}
+							onSetVoiceRevealed={setVoiceRevealed}
+							onSetTrRevealed={setTrRevealed}
 						/>
 					</Section>
 				</MiscellaneousSection>

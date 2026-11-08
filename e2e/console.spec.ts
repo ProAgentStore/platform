@@ -52,6 +52,9 @@ interface OpsMockOptions {
 	 * request it is breaking and cannot silently break its neighbours as the fixture grows.
 	 */
 	failPaths?: string[];
+	/** Instance voice / translation already overridden on the server (#1599). */
+	voiceOverride?: boolean;
+	trOverride?: boolean;
 	/** `GET /v1/feedback` — the owner's recorded complaints (#514). */
 	feedback?: Array<Record<string, unknown>>;
 	/** `GET /v1/errors/summary` — the grouped failure signatures behind Diagnostics (#823). */
@@ -241,6 +244,10 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 	const persistedMessages: Array<Record<string, unknown>> = [];
 	let loopPolls = 0;
 	let voiceOverrideCleared = false;
+	let voiceHasOverride = options.voiceOverride === true;
+	let trHasOverride = options.trOverride === true;
+	/** Every PUT/DELETE the instance voice and translation overrides received (#1599). */
+	const overrideWrites: string[] = [];
 	const builderPlans: unknown[] = [];
 	const builderExecutes: unknown[] = [];
 	const feedbackPosts: unknown[] = [];
@@ -865,10 +872,15 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 		}
 		if (path === "/v1/profile") return json(options.profile ?? { fields: [], profile: {} });
 		if (path === "/v1/instances/inst-1/voice-settings") {
-			if (method === "DELETE") { voiceOverrideCleared = true; return json({ voiceSettings: { speed: 130, sttMode: "openai" }, hasOverride: false }); }
-			return json({ voiceSettings: { speed: 130, sttMode: "openai" }, hasOverride: false });
+			if (method === "DELETE") { voiceOverrideCleared = true; voiceHasOverride = false; overrideWrites.push("voice DELETE"); return json({ voiceSettings: { speed: 130, sttMode: "openai" }, hasOverride: false }); }
+			if (method === "PUT") { voiceHasOverride = true; overrideWrites.push("voice PUT"); return json({ voiceSettings: JSON.parse(route.request().postData() || "{}"), hasOverride: true }); }
+			return json({ voiceSettings: { speed: 130, sttMode: "openai" }, hasOverride: voiceHasOverride });
 		}
-		if (path === "/v1/instances/inst-1/translation") return json({ translation: { enabled: false, target: "English" }, languages: [], hasOverride: false });
+		if (path === "/v1/instances/inst-1/translation") {
+			if (method === "DELETE") { trHasOverride = false; overrideWrites.push("translation DELETE"); return json({ translation: { enabled: false, target: "English" }, hasOverride: false }); }
+			if (method === "PUT") { trHasOverride = true; overrideWrites.push("translation PUT"); return json({ translation: JSON.parse(route.request().postData() || "{}"), hasOverride: true }); }
+			return json({ translation: { enabled: false, target: "English" }, languages: [{ name: "English", tag: "en-US" }, { name: "Chinese", tag: "zh-CN" }], hasOverride: trHasOverride });
+		}
 		// In-session feedback (#514). POST is the capture path the console must reach with NO
 		// model involved; the recorded bodies are what a spec asserts the anchors on.
 		// Grouped failure signatures (#823). Only the SUMMARY is mocked: the flat `/v1/errors` feed
@@ -951,6 +963,9 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 		},
 		get savedPreferences() {
 			return savedPreferences;
+		},
+		get overrideWrites() {
+			return overrideWrites;
 		},
 		get voiceOverrideCleared() {
 			return voiceOverrideCleared;
@@ -1344,59 +1359,96 @@ test.describe("ProAgentStore Console smoke", () => {
 		});
 	});
 
-	test("an agent shows 'Using your defaults' until you customise it", async ({ page }) => {
-		// The override control is ONE per section, deliberately not one per field — a per-field
-		// toggle would rebuild the per-agent sprawl this change exists to remove.
-		await mockSignedInConsole(page);
-		await page.goto("/console/instances/inst-1/settings?subtab=general");
-		// Wait for the control to EXIST — it renders "Loading your voice settings…" until the GET
-		// lands, because clicking before then let the response overwrite the choice.
-		const usingDefaults = page.getByRole("radio", { name: /Using your defaults/ }).first();
-		await expect(usingDefaults).toBeChecked();
-		// The fields stay hidden while the agent follows the account.
-		await expect(page.locator("#voice-stt-mode")).toHaveCount(0);
-		// pageerror only — the settings page also fetches connector endpoints this mock doesn't
-		// cover, and those 500s are pre-existing noise, not a signal about this control.
-		const crashes: string[] = [];
-		page.on("pageerror", (e) => crashes.push(String(e)));
-		const customise = page.getByRole("radio", { name: /Customise for this agent/ }).first();
-		// click(), not check(): check() asserts the input reflects the new state SYNCHRONOUSLY, which
-		// a controlled React radio never does — it flips only after the state round-trip. The
-		// toBeChecked below is the assertion, and it auto-retries.
-		await customise.click();
-		await expect(customise).toBeChecked();
-		await expect(page.locator("#voice-stt-mode")).toBeVisible();
-		expect(crashes).toEqual([]);
-	});
+	test.describe("Settings → General: voice and translation are one line each (#1599)", () => {
+		const GENERAL = "/console/instances/inst-1/settings?subtab=general";
+		const voice = (page: Page) => page.getByTestId("voice-override");
+		const translation = (page: Page) => page.getByTestId("translation-override");
 
-	test("a slow settings load cannot silently revert your choice", async ({ page }) => {
-		// The real bug behind a "flaky" test: the initial GET /voice-settings resolves AFTER the
-		// user clicks, then calls setVoiceOverride(hasOverride) and springs the radio back. On CI
-		// the delay was enough to hit it every other run; for a user on a slow connection it is a
-		// setting that refuses to change and never says why. The control is now inert until the
-		// current value is known.
-		await mockSignedInConsole(page);
-		// Delay ONLY the voice-settings read, so the page renders while it is still in flight.
-		await page.route("**/v1/instances/inst-1/voice-settings", async (route) => {
-			await new Promise((r) => setTimeout(r, 1200));
-			await route.fulfill({
-				status: 200,
-				contentType: "application/json",
-				body: JSON.stringify({ voiceSettings: { speed: 130, sttMode: "openai" }, hasOverride: false }),
-			});
+		test("no override: two single lines, no forms and no radios", async ({ page }) => {
+			await mockSignedInConsole(page);
+			await page.goto(GENERAL);
+			await expect(voice(page)).toContainText("Voice: follows your account (");
+			await expect(voice(page)).toContainText("Change in Preferences");
+			await expect(translation(page)).toHaveText(/Translation: follows your account \(English\)/);
+			await expect(page.getByRole("button", { name: "Override for this agent" })).toHaveCount(2);
+			await expect(page.getByRole("radio")).toHaveCount(0);
+			await expect(page.locator("#voice-stt-mode")).toHaveCount(0);
 		});
-		await page.goto("/console/instances/inst-1/settings?subtab=general");
-		// While in flight the radios do not exist, so there is nothing to click too early.
-		await expect(page.getByRole("radio", { name: /Customise for this agent/ }).first()).toHaveCount(0);
-		await expect(page.getByText(/Loading your voice settings/)).toBeVisible();
-		// Once loaded, the choice sticks — the late response has already landed.
-		const customise = page.getByRole("radio", { name: /Customise for this agent/ }).first();
-		await expect(customise).toBeVisible({ timeout: 5000 });
-		await customise.click();
-		await expect(customise).toBeChecked();
-		// Give any straggling response the chance to clobber it; it must not.
-		await page.waitForTimeout(500);
-		await expect(customise).toBeChecked();
+
+		test("override then Cancel makes no request; the first field change writes and swaps Cancel for Use account default; clearing returns to the line", async ({ page }) => {
+			const mock = await mockSignedInConsole(page);
+			await page.goto(GENERAL);
+			await expect(voice(page)).toContainText("follows your account");
+			await voice(page).getByRole("button", { name: "Override for this agent" }).click();
+			await expect(page.locator("#voice-stt-mode")).toBeVisible();
+			await expect(voice(page).getByRole("button", { name: "Cancel" })).toBeVisible();
+			await voice(page).getByRole("button", { name: "Cancel" }).click();
+			await expect(voice(page)).toContainText("follows your account");
+			await expect(page.locator("#voice-stt-mode")).toHaveCount(0);
+			expect(mock.overrideWrites).toEqual([]);
+
+			await voice(page).getByRole("button", { name: "Override for this agent" }).click();
+			expect(mock.overrideWrites).toEqual([]);
+			await page.locator("#voice-stt-mode").selectOption("browser");
+			await expect.poll(() => mock.overrideWrites).toEqual(["voice PUT"]);
+			await expect(voice(page).getByRole("button", { name: "Use account default" })).toBeVisible();
+			await expect(voice(page).getByRole("button", { name: "Cancel" })).toHaveCount(0);
+
+			await voice(page).getByRole("button", { name: "Use account default" }).click();
+			await expect.poll(() => mock.overrideWrites).toEqual(["voice PUT", "voice DELETE"]);
+			await expect(voice(page)).toContainText("Voice: follows your account");
+			await expect(page.locator("#voice-stt-mode")).toHaveCount(0);
+		});
+
+		test("translation: Cancel writes nothing", async ({ page }) => {
+			const mock = await mockSignedInConsole(page);
+			await page.goto(GENERAL);
+			await translation(page).getByRole("button", { name: "Override for this agent" }).click();
+			await translation(page).getByRole("button", { name: "Cancel" }).click();
+			await expect(translation(page)).toContainText("follows your account");
+			expect(mock.overrideWrites).toEqual([]);
+		});
+
+		test("translation: a server-side override shows its form on first render and clearing returns to the line", async ({ page }) => {
+			const mock2 = await mockSignedInConsole(page, { trOverride: true });
+			await page.goto(GENERAL);
+			await expect(translation(page).getByRole("button", { name: "Use account default" })).toBeVisible();
+			await expect(translation(page).getByRole("button", { name: "Cancel" })).toHaveCount(0);
+			await translation(page).getByRole("button", { name: "Use account default" }).click();
+			await expect.poll(() => mock2.overrideWrites).toEqual(["translation DELETE"]);
+			await expect(translation(page)).toContainText("Translation: follows your account");
+		});
+
+		test("a reload after revealing without a change shows the line", async ({ page }) => {
+			const mock = await mockSignedInConsole(page);
+			await page.goto(GENERAL);
+			await voice(page).getByRole("button", { name: "Override for this agent" }).click();
+			await expect(page.locator("#voice-stt-mode")).toBeVisible();
+			await page.reload();
+			await expect(voice(page)).toContainText("Voice: follows your account");
+			await expect(page.locator("#voice-stt-mode")).toHaveCount(0);
+			expect(mock.overrideWrites).toEqual([]);
+		});
+
+		test("loading reads Checking…, a failed fetch reads Couldn't check with no action, never 'follows your account'", async ({ page }) => {
+			await mockSignedInConsole(page, { failPaths: ["/v1/instances/inst-1/voice-settings", "/v1/instances/inst-1/translation"] });
+			await page.goto(GENERAL);
+			await expect(voice(page)).toHaveText("Voice: Couldn't check");
+			await expect(translation(page)).toHaveText("Translation: Couldn't check");
+			await expect(page.getByText("follows your account")).toHaveCount(0);
+			await expect(page.getByTestId("settings-load-failed")).toBeVisible();
+		});
+
+		test("while the fetch is in flight the lines read Checking…", async ({ page }) => {
+			await mockSignedInConsole(page);
+			await page.route("**/v1/instances/inst-1/voice-settings", async (route) => {
+				await new Promise((r) => setTimeout(r, 1200));
+				await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ voiceSettings: { speed: 130 }, hasOverride: false }) });
+			});
+			await page.goto(GENERAL);
+			await expect(voice(page)).toHaveText("Voice: Checking…");
+			await expect(voice(page)).toContainText("follows your account", { timeout: 5000 });
+		});
 	});
 
 	test("a Loop announces that it started, and says where the work happens", async ({ page }) => {
@@ -3470,7 +3522,7 @@ async function measureOverflow(page: Page) {
  * Scout (`local_browser`, `sourceMode: gmail`) and a coding agent fill the Agent, Browser and Automation sub-tabs with the
  * content they exist for, which the default fixture never renders.
  */
-const SETTINGS_SWEEP_FIXTURES = [
+const SETTINGS_SWEEP_FIXTURES: Array<{ name: string; instances: Array<Record<string, unknown>>; subtabs: string[]; mock?: OpsMockOptions }> = [
 	{
 		name: "Gmail Scout",
 		instances: [{ id: "inst-1", agent_id: "agent-1", name: "Gmail Job Search Scout", status: "active", slug: "job-search-scout", category: "productivity", icon_bg: "#7c3aed", sourceMode: "gmail", capabilities: { surfaces: ["chat", "settings"], runtime: "local_browser" } }],
@@ -3480,6 +3532,13 @@ const SETTINGS_SWEEP_FIXTURES = [
 		name: "coding agent",
 		instances: [{ id: "inst-1", agent_id: "a-coder", name: "pags platform", agentName: "Repo Coder", status: "active", slug: "coder", category: "developer", icon_bg: "#0f766e", capabilities: { surfaces: ["coding"], runtime: "coding" } }],
 		subtabs: ["agent", "automation", "notifications", "instructions", "general"],
+	},
+	// Voice and translation overridden on the server: General shows both forms (#1599). The other fixtures show the lines.
+	{
+		name: "voice and translation overridden",
+		instances: [{ id: "inst-1", agent_id: "agent-1", name: "Job Assistant", status: "active", slug: "job-assistant", category: "productivity", icon_bg: "#7c3aed", capabilities: { surfaces: ["apply"], runtime: "browser", workflow: "apply" } }],
+		subtabs: ["general"],
+		mock: { voiceOverride: true, trOverride: true },
 	},
 ];
 
@@ -3538,7 +3597,7 @@ test.describe("mobile — no horizontal overflow (regression guard for the missi
 			for (const subtab of fixture.subtabs) {
 				test(`no horizontal scroll at ${width}px — Settings ${subtab} (${fixture.name})`, async ({ page }) => {
 					await page.setViewportSize({ width, height: 812 });
-					await mockSignedInConsole(page, { instances: fixture.instances });
+					await mockSignedInConsole(page, { instances: fixture.instances, ...fixture.mock });
 					await page.goto(`/console/instances/inst-1/settings?subtab=${subtab}`);
 					await page.waitForLoadState("networkidle");
 					await page.locator("main").waitFor();
@@ -4602,7 +4661,7 @@ test.describe("mobile — every control clears the 24px minimum target (#389)", 
 		for (const subtab of fixture.subtabs) {
 			test(`no target under ${MIN_TARGET}px on Settings ${subtab} (${fixture.name})`, async ({ page }) => {
 				await page.setViewportSize({ width: 390, height: 812 });
-				await mockSignedInConsole(page, { instances: fixture.instances });
+				await mockSignedInConsole(page, { instances: fixture.instances, ...fixture.mock });
 				await page.goto(`/console/instances/inst-1/settings?subtab=${subtab}`);
 				await page.waitForLoadState("networkidle");
 				await page.locator("main").waitFor();
