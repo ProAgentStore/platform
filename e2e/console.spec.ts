@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import { notificationsResponse, NOTIFICATION_VOCABULARY } from "./notification-fixtures";
+import { installHistoryRoutes, LOCAL_BROWSER_INSTANCE } from "./activity-history-mock";
 
 const API = "https://api.proagentstore.online";
 const TEST_TOKEN = "test-pags-token";
@@ -2299,13 +2300,17 @@ test.describe("ProAgentStore Console smoke", () => {
 
 		// The wired predicate is on the row, not buried in a config blob.
 		await expect(page.getByText('only when suburb eq "Sydney" and rating gte 4')).toBeVisible();
-		await expect(page.getByText("1 undelivered")).toBeVisible();
 		await expect(page.getByText("nothing has matched this filter yet")).toBeVisible();
 
-		// The account-wide headline says something is stuck before you open anything.
-		await expect(page.getByText("1 event never arrived")).toBeVisible();
+		// Settings keeps one line saying something is stuck; the log itself is in Activity → History (#1590).
+		const line = page.getByTestId("deliveries-line");
+		await expect(line).toContainText("1 undelivered");
+		await expect(page.getByRole("button", { name: /delivery log/ })).toHaveCount(0);
+		await line.getByRole("link", { name: "View in Activity" }).click();
+		await expect(page).toHaveURL(/activity\?view=history&panel=deliveries/);
 
-		await page.getByRole("button", { name: /Show delivery log/ }).click();
+		// The headline says something is stuck, and the log is already open because something is.
+		await expect(page.getByText("1 event never arrived")).toBeVisible();
 		await expect(page.getByText("gave up after 5 attempts", { exact: false })).toBeVisible();
 		await expect(page.getByText("builder MCP unreachable")).toBeVisible();
 
@@ -3478,6 +3483,22 @@ const SETTINGS_SWEEP_FIXTURES = [
 	},
 ];
 
+/**
+ * Activity with History open and every panel seeded (#1590): a `local_browser` fixture, so the takeovers and the last
+ * launch show too, and `installHistoryRoutes`'s rows in loop runs and queue, takeovers (one live site-consent), launch,
+ * secure inputs and deliveries. The default instance is a browser agent that never visits `/activity`.
+ */
+async function openSeededHistory(page: Page) {
+	await mockSignedInConsole(page, { instances: [LOCAL_BROWSER_INSTANCE] });
+	await installHistoryRoutes(page);
+	await page.goto("/console/instances/inst-1/activity?view=history");
+	for (const id of ["history-loop-runs", "bv-takeovers", "browser-launch-receipt", "secure-input-history", "history-deliveries"]) {
+		await expect(page.getByTestId(id), `${id} did not render`).toBeVisible();
+	}
+	await page.waitForLoadState("networkidle");
+	await page.waitForTimeout(300);
+}
+
 test.describe("mobile — no horizontal overflow (regression guard for the missing-w-full bug)", () => {
 	// Phones. The bug (page container sizing to max-content instead of the viewport)
 	// only shows below the sm: breakpoint (640px) and needs real content to trigger.
@@ -3529,6 +3550,18 @@ test.describe("mobile — no horizontal overflow (regression guard for the missi
 				});
 			}
 		}
+		test(`no horizontal scroll at ${width}px — Activity History, every panel seeded`, async ({ page }) => {
+			await page.setViewportSize({ width, height: 812 });
+			await openSeededHistory(page);
+			const { mainOv, docOv, wide, escapes } = await measureOverflow(page);
+			expect(mainOv, `<main> overflows by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+			// `dt`/`dd` pairs wrapped in `display: contents` (the launch receipt's grid) have no box of their own, so
+			// they always read as escaping; every other box must stay inside its container.
+			const real = escapes.filter((e) => !/^(dt|dd)\b.* escapes div\.contents /.test(e));
+			expect(real, `a box past its own container at ${width}w: ${real.join(", ")}`).toEqual([]);
+		});
 		for (const route of routes) {
 			test(`no horizontal scroll at ${width}px — ${route}`, async ({ page }) => {
 				await page.setViewportSize({ width, height: 812 });
@@ -4579,6 +4612,13 @@ test.describe("mobile — every control clears the 24px minimum target (#389)", 
 			});
 		}
 	}
+
+	test(`no target under ${MIN_TARGET}px on Activity History, every panel seeded`, async ({ page }) => {
+		await page.setViewportSize({ width: 390, height: 812 });
+		await openSeededHistory(page);
+		const findings = await measureTargets(page, MIN_TARGET);
+		expect(findings, `targets under ${MIN_TARGET}px: ${findings.join(" · ")}`).toEqual([]);
+	});
 
 	for (const route of routes) {
 		test(`no target under ${MIN_TARGET}px on ${route}`, async ({ page }) => {
@@ -6711,7 +6751,8 @@ test.describe("mobile — pausing a teamwork edge (#667)", () => {
 		// Three states on one row: paused (the owner's choice), a server warning, and a dead letter.
 		const paused = await colourOf("disabled — it routes nothing");
 		const warned = await colourOf("the target agent has no pipeline named site-builder");
-		const stuck = await colourOf("1 event never arrived");
+		// The dead letter reads "1 undelivered" in danger tone on Settings' one line (the log itself is in Activity, #1590).
+		const stuck = await page.getByTestId("deliveries-line").getByText("1 undelivered").evaluate((el) => getComputedStyle(el).color);
 		expect(new Set([paused, warned, stuck]).size).toBe(3);
 		expect(await colourOf("Paused — it delegates nothing")).toBe(paused);
 

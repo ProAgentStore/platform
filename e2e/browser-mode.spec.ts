@@ -125,10 +125,9 @@ test("mobile — browser and profile persist independently at 375px while actual
 	await profile.selectOption("ephemeral");
 	await expect(card.getByTestId("browser-effective-profile")).toContainText("Ephemeral");
 	expect(instancePuts).toEqual([{ engine: "firefox" }, { profile: "ephemeral" }]);
-	const receipt = page.getByTestId("browser-launch-receipt");
-	await expect(receipt).toContainText("Installed Google Chrome (142.0.0)");
-	await expect(receipt).toContainText("Headless browser");
-	await expect(receipt).not.toContainText("Playwright Firefox");
+	// The last reported launch is history (Activity → History, #1590); Browser keeps one line saying the saved engine differs from it.
+	await expect(page.getByTestId("browser-launch-line")).toContainText("Differs from last launch");
+	await expect(page.getByTestId("browser-launch-receipt")).toHaveCount(0);
 	await page.reload();
 	await expect(engine).toHaveValue("firefox");
 	await expect(profile).toHaveValue("ephemeral");
@@ -138,12 +137,18 @@ test("mobile — browser and profile persist independently at 375px while actual
 	await profile.selectOption("");
 	await expect(card.getByTestId("browser-effective-profile")).toContainText("Workflow default (chosen by workflow)");
 	expect(instancePuts).toEqual([{ engine: "firefox" }, { profile: "ephemeral" }, { engine: null }, { profile: null }]);
-	for (const panel of [card, receipt]) {
-		await panel.scrollIntoViewIfNeeded();
-		const box = await panel.boundingBox();
-		expect(box && box.x >= 0 && box.x + box.width <= 375).toBe(true);
-		expect(await panel.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
-	}
+	await card.scrollIntoViewIfNeeded();
+	const cardBox = await card.boundingBox();
+	expect(cardBox && cardBox.x >= 0 && cardBox.x + cardBox.width <= 375).toBe(true);
+	expect(await card.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+	await page.goto("/console/instances/inst-1/activity?view=history&panel=browser-launch");
+	const receipt = page.getByTestId("browser-launch-receipt");
+	await expect(receipt).toContainText("Installed Google Chrome (142.0.0)");
+	await expect(receipt).toContainText("Headless browser");
+	await expect(receipt).not.toContainText("Playwright Firefox");
+	const box = await receipt.boundingBox();
+	expect(box && box.x >= 0 && box.x + box.width <= 375).toBe(true);
+	expect(await receipt.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
 });
 
 test("template browser and profile save only their own capability fields", async ({ page }) => {

@@ -94,8 +94,9 @@ test("an old /settings?focus=permissions link still lands on Permissions", async
 	await expect(page).toHaveURL(/\/instances\/inst-1\/permissions\?focus=permissions/);
 });
 
-test("a bare ?takeover= opens Browser", async ({ page }) => {
+test("an old /settings?takeover= link opens Activity's History on that takeover (#1590)", async ({ page }) => {
 	await mock(page);
 	await page.goto("/console/instances/inst-1/settings?takeover=t1");
-	await expect(page.getByTestId("settings-subtab-browser")).toHaveAttribute("aria-current", "true");
+	await expect(page).toHaveURL(/\/instances\/inst-1\/activity\?view=history&takeover=t1/);
+	await expect(page.getByTestId("settings-subtab-agent")).toHaveCount(0);
 });

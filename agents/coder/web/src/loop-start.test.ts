@@ -23,7 +23,7 @@ describe("what a loop start answered (#929 findings 9 and 10)", () => {
 	});
 
 	it("says a queued objective is queued, and a duplicate that nothing was added", () => {
-		expect(loopQueuedNotice({ kind: "queued", entryId: "q", duplicate: false })).toMatch(/^Queued — .*Settings → Autonomous runs/);
+		expect(loopQueuedNotice({ kind: "queued", entryId: "q", duplicate: false })).toMatch(/^Queued — .*Activity → History/);
 		expect(loopQueuedNotice({ kind: "queued", entryId: "q", duplicate: true })).toMatch(/already queued.*nothing new was added/);
 	});
 

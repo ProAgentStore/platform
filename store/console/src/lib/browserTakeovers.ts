@@ -61,6 +61,23 @@ export function takeoverLine(t: BrowserTakeover, now = Date.now()): { text: stri
 	return { text: `${STATE_WORDS[t.state]}${how}.`, tone: t.state === "resumed" ? "ok" : "muted" };
 }
 
+const CONSENT_PREFIX = "site-consent:";
+
+/**
+ * The host of a live site-consent request (#1590): a `manual` takeover whose subject is `site-consent:<host>`
+ * (`consentSubject` in `workers/api/src/lib/job-lead-browser-verification.ts`). Null for any other takeover.
+ */
+export function siteConsentHost(t: Pick<BrowserTakeover, "subjectKind" | "subjectId" | "state">): string | null {
+	if (t.subjectKind !== "manual" || !t.subjectId.startsWith(CONSENT_PREFIX) || !(t.state === "requested" || t.state === "active")) return null;
+	return t.subjectId.slice(CONSENT_PREFIX.length) || null;
+}
+
+/** One takeover as History lists it: a live site-consent request names its host and offers Allow; the rest read as `takeoverLine`. */
+export function takeoverRow(t: BrowserTakeover, now = Date.now()): { text: string; tone: "warn" | "ok" | "muted"; consentHost: string | null } {
+	const consentHost = siteConsentHost(t);
+	return consentHost ? { text: `${consentHost} wants to be opened`, tone: "warn", consentHost } : { ...takeoverLine(t, now), consentHost: null };
+}
+
 /** May the remote view be opened from here? The server refuses too; this says why before trying. */
 export function remoteViewBlocked(t: BrowserTakeover, device: "mobile" | "desktop"): string | null {
 	if (!isLive(t)) return "This takeover is closed.";

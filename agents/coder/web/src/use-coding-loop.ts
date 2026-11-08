@@ -321,7 +321,7 @@ export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direc
 		runIdRef.current = null;
 		setProposedIssue(null);
 		activeIssueRef.current = null;
-		emitSystem("You switched sessions — the loop keeps running on the server. Stop it from Settings → Loop runs.");
+		emitSystem("You switched sessions — the loop keeps running on the server. Stop it from Activity → History.");
 	}, [sessionId]);
 
 	return {

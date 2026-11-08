@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FALLBACK_TAB, parseInstanceSplat, resolveInstanceRoute } from "./instanceRoute";
+import { FALLBACK_TAB, legacyTabRedirect, parseInstanceSplat, resolveInstanceRoute } from "./instanceRoute";
 import { checkConsoleLink, INSTANCE_TABS } from "./routes";
 
 /** A coding agent: every built-in tab is reachable. */
@@ -99,5 +99,26 @@ describe("checkConsoleLink agrees with the parser it describes", () => {
 			expect(checkConsoleLink(link(tab)).ok, tab).toBe(true);
 			expect(resolveInstanceRoute(tab, ALL_TABS).tab, tab).toBe(tab);
 		}
+	});
+});
+
+describe("legacyTabRedirect (#1590)", () => {
+	it("an already-delivered /settings?takeover=<id> opens Activity's History on that takeover", () => {
+		expect(legacyTabRedirect("settings", "?takeover=t1")).toBe("activity?view=history&takeover=t1");
+		expect(legacyTabRedirect("settings", "?takeover=a%2Fb")).toBe("activity?view=history&takeover=a%2Fb");
+	});
+	it("the redirect target is a link the checker allows", () => {
+		expect(checkConsoleLink("/console/instances/i1/activity?view=history&takeover=t1").ok).toBe(true);
+		expect(resolveInstanceRoute("activity", ALL_TABS).tab).toBe("activity");
+	});
+	it("focus=permissions still goes to Permissions, query kept, and wins over a takeover", () => {
+		expect(legacyTabRedirect("settings", "?focus=permissions&permission_request=pr_1")).toBe("permissions?focus=permissions&permission_request=pr_1");
+		expect(legacyTabRedirect("settings", "?focus=permissions&takeover=t1")).toMatch(/^permissions\?/);
+	});
+	it("nothing else is redirected", () => {
+		expect(legacyTabRedirect("settings", "")).toBeNull();
+		expect(legacyTabRedirect("settings", "?subtab=browser")).toBeNull();
+		expect(legacyTabRedirect("settings", "?takeover=")).toBeNull();
+		expect(legacyTabRedirect("research", "?takeover=t1")).toBeNull();
 	});
 });

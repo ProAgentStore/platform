@@ -72,10 +72,19 @@ export function resolveInstanceRoute(splat: string | undefined, allowedTabs: Ite
 }
 
 /**
- * Where an old Permissions link now lives (#1060). Permissions & Connections moved from the Settings
- * tab to its own; a push already delivered still carries `/settings?focus=permissions&…`, so that
- * link is redirected (query kept) rather than opening a Settings page without the card it names.
+ * Where an old Settings link now lives: the path under `/instances/:id/`, query included.
+ *
+ * - Permissions (#1060): Permissions & Connections moved from Settings to its own tab; a push already
+ *   delivered still carries `/settings?focus=permissions&…`, so it is redirected, query kept, rather than
+ *   opening a Settings page without the card it names.
+ * - Takeovers (#1590): "Recent takeovers" moved from Settings to Activity → History; a site-consent push
+ *   already delivered carries `/settings?takeover=<id>`, so it opens History with that row. An id that
+ *   has ended or is no longer listed still lands there, on the takeovers panel, with a notice.
  */
 export function legacyTabRedirect(requestedTab: string, search: string): string | null {
-	return requestedTab === "settings" && new URLSearchParams(search).get("focus") === "permissions" ? "permissions" : null;
+	if (requestedTab !== "settings") return null;
+	const params = new URLSearchParams(search);
+	if (params.get("focus") === "permissions") return `permissions${search}`;
+	const takeover = params.get("takeover");
+	return takeover ? `activity?view=history&takeover=${encodeURIComponent(takeover)}` : null;
 }

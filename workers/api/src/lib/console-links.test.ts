@@ -113,6 +113,24 @@ describe("deepLinkFor — every notification subject opens a real page (#894)", 
 	});
 });
 
+describe("browserTakeoverLink, per subject kind (#1590)", () => {
+	const id = (subjectKind: string) => ({ id: "t1", subjectKind, subjectId: "s1" });
+	it("a manual (site-consent) takeover is a row in Activity's History", () => {
+		const url = links.browserTakeoverLink("i1", id("manual"));
+		expect(url).toBe("/console/instances/i1/activity?view=history&takeover=t1");
+		expect(checkConsoleLink(url)).toMatchObject({ ok: true });
+	});
+	it("a research run and a runner task still open their own page", () => {
+		expect(links.browserTakeoverLink("i1", id("local_browser_run"))).toBe("/console/instances/i1/research/s1?takeover=t1");
+		expect(links.browserTakeoverLink("i1", id("runtime_task"))).toBe("/console/instances/i1/tasks/s1?takeover=t1");
+	});
+	it("instanceActivityHistoryLink names one panel only when asked", () => {
+		expect(links.instanceActivityHistoryLink("i1")).toBe("/console/instances/i1/activity?view=history");
+		expect(links.instanceActivityHistoryLink("i1", "loop-runs")).toBe("/console/instances/i1/activity?view=history&panel=loop-runs");
+		expect(checkConsoleLink(links.instanceActivityHistoryLink("i1", "takeovers"))).toMatchObject({ ok: true });
+	});
+});
+
 describe("no producer escapes the check", () => {
 	it("is the only place under workers/api/src that builds a /console path", () => {
 		const offenders: string[] = [];

@@ -291,7 +291,7 @@ export const SURFACES: SurfaceDef[] = [
 		// Distinct from Board (runtime task jobs) and Data (end-result records).
 		show: () => true,
 		scroll: true,
-		render: ({ instanceId }) => <ActivityTab instanceId={instanceId} />,
+		render: ({ instanceId, caps }) => <ActivityTab instanceId={instanceId} caps={caps} />,
 	},
 	{
 		id: "stats",

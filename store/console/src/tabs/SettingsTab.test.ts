@@ -45,7 +45,6 @@ const SECTIONS: Record<SettingsSubtab, string[]> = {
 		"settings-board-maintenance",
 		"settings-where-things-live",
 		"voice-translation",
-		"secure-input-history",
 		"settings-home-screen-shortcut",
 		"settings-maintenance",
 		"settings-pause",
@@ -84,9 +83,9 @@ describe("the default sub-tab", () => {
 });
 
 describe("General keeps its cards in the order the issue gives", () => {
-	it("Instance info, Board maintenance, Where things live, Voice, Secure inputs, Shortcut, Maintenance, Pause, Danger zone", () => {
+	it("Instance info, Board maintenance, Where things live, Voice, Shortcut, Maintenance, Pause, Danger zone", () => {
 		const html = render("general");
-		const at = SECTIONS.general.map((id) => html.indexOf(id === "instance-info" || id.startsWith("voice") || id.startsWith("secure") ? `settings-section-${id}` : id));
+		const at = SECTIONS.general.map((id) => html.indexOf(id === "instance-info" || id.startsWith("voice") ? `settings-section-${id}` : id));
 		expect(at.every((n) => n >= 0)).toBe(true);
 		expect(at).toEqual([...at].sort((a, b) => a - b));
 	});

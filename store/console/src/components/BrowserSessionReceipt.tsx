@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { browserSettingLabel, type BrowserEngine, type BrowserMode, type BrowserProfilePolicy } from "../lib/browserSettings";
-import Card from "./Card";
-import Button from "./Button";
 
 export interface BrowserLaunchReceipt {
 	engine: BrowserEngine;
@@ -44,7 +42,8 @@ export function BrowserLaunchDetails({ launch }: { launch: BrowserLaunchReceipt 
 	</dl>;
 }
 
-export default function BrowserSessionReceipt({ instanceId }: { instanceId: string }) {
+/** `GET …/browser-settings/session`: what the runner last reported launching. One reader for History's panel and Browser's one-liner. */
+export function useBrowserSession(instanceId: string) {
 	const [data, setData] = useState<BrowserSessionView | null>(null);
 	const [error, setError] = useState("");
 	const [loading, setLoading] = useState(true);
@@ -60,12 +59,5 @@ export default function BrowserSessionReceipt({ instanceId }: { instanceId: stri
 		}
 	}, [instanceId]);
 	useEffect(() => { void load(); }, [load]);
-	return <Card className="mb-3 sm:mb-4" data-testid="browser-launch-receipt">
-		<div className="flex flex-wrap gap-2 items-center justify-between mb-2">
-			<h3 className="text-base font-bold">Last reported browser launch</h3>
-			<Button onClick={() => void load()} disabled={loading}>Refresh</Button>
-		</div>
-		<p className="text-xs text-muted mb-2">Reported by the runner after a successful launch. It can differ from newly saved settings until the next launch.</p>
-		{loading ? <p className="text-sm text-muted">Checking runner…</p> : error ? <p role="status" className="text-sm text-muted">Could not read the actual browser launch: {error}</p> : data?.status !== "connected" ? <p role="status" className="text-sm text-muted">Browser launch evidence is {data?.status ?? "unavailable"}. {data?.detail}</p> : <BrowserLaunchDetails launch={data.launch} />}
-	</Card>;
+	return { data, error, loading, load };
 }

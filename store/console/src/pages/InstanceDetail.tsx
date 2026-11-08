@@ -144,10 +144,10 @@ function InstancePage() {
 	const setTab = useCallback((t: Tab) => {
 		navigate(`/instances/${id}/${t}`, { replace: true });
 	}, [id, navigate]);
-	// An old Permissions push link (`/settings?focus=permissions&…`, #1060) moves to the Permissions tab, query kept.
+	// An old Settings push link moves to where its subject now lives: Permissions (#1060) or Activity → History (#1590).
 	const legacyTab = legacyTabRedirect(parseInstanceSplat(splat).requestedTab, window.location.search);
 	useEffect(() => {
-		if (legacyTab) navigate(`/instances/${id}/${legacyTab}${window.location.search}`, { replace: true });
+		if (legacyTab) navigate(`/instances/${id}/${legacyTab}`, { replace: true });
 	}, [legacyTab, id, navigate]);
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [hasMore, setHasMore] = useState(false);

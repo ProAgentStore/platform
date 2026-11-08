@@ -96,7 +96,7 @@ describe("buildConsoleLink", () => {
 		expect(ok({ kind: "run", runId: "r1", sessionId: "sess_9" }).path).toBe("/console/instances/inst_1/coding/sess_9");
 		const chat = ok({ kind: "run", runId: "r1", sessionId: null });
 		expect(chat.path).toBe("/console/instances/inst_1");
-		expect(chat.lands).toMatch(/Autonomous runs/);
+		expect(chat.lands).toMatch(/Activity → History/);
 	});
 
 	it("links a task to its record page and a secret request to its entry page", () => {

@@ -42,18 +42,12 @@ describe("settingsSubtabFromSearch", () => {
 		expect(settingsSubtabFromSearch(q("subtab=Browser"), GMAIL_SCOUT)).toBe("agent");
 		expect(settingsSubtabFromSearch(q("subtab=browser"), CODING)).toBe("agent");
 	});
-	it("a bare ?takeover= opens Browser, but an explicit subtab wins and an instance without Browser opens Agent", () => {
-		expect(settingsSubtabFromSearch(q("takeover=t1"), GMAIL_SCOUT)).toBe("browser");
-		expect(settingsSubtabFromSearch(q("takeover=t1&subtab=general"), GMAIL_SCOUT)).toBe("general");
-		expect(settingsSubtabFromSearch(q("takeover=t1"), CODING)).toBe("agent");
-	});
 });
 
 describe("searchWithSettingsSubtab", () => {
-	it("keeps focus= and takeover= while setting the sub-tab", () => {
-		const next = searchWithSettingsSubtab(q("focus=permissions&takeover=t1&subtab=agent"), "general");
+	it("keeps focus= while setting the sub-tab", () => {
+		const next = searchWithSettingsSubtab(q("focus=permissions&subtab=agent"), "general");
 		expect(next.get("subtab")).toBe("general");
 		expect(next.get("focus")).toBe("permissions");
-		expect(next.get("takeover")).toBe("t1");
 	});
 });

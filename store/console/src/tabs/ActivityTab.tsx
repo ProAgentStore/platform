@@ -1,9 +1,12 @@
 import { useState, useCallback, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import { formatTime } from "@proagentstore/sdk/ui";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import Button from "../components/Button";
 import { activityBusy } from "../lib/pollBusy";
+import { activityViewFromSearch, type HistoryCaps } from "../lib/activityView";
+import HistoryArea from "./activity/HistoryArea";
 
 // The agent's activity log as a readable, live timeline — everything it DID (tool
 // calls, record writes, cron/webhook fires, summaries, errors), newest first. This is
@@ -48,7 +51,9 @@ const META: Record<string, { icon: string; label: (d: Record<string, unknown>) =
 	error: { icon: "⚠️", label: (d) => `Error: ${s(d.message).slice(0, 140)}` },
 };
 
-export default function ActivityTab({ instanceId }: { instanceId: string }) {
+export default function ActivityTab({ instanceId, caps }: { instanceId: string; caps: HistoryCaps }) {
+	const [searchParams] = useSearchParams();
+	const view = activityViewFromSearch(searchParams);
 	const [events, setEvents] = useState<ActivityEvent[]>([]);
 	const [error, setError] = useState<string | null>(null);
 	const [expanded, setExpanded] = useState<string | null>(null);
@@ -74,6 +79,8 @@ export default function ActivityTab({ instanceId }: { instanceId: string }) {
 
 	return (
 		<div>
+			{/* What is waiting for the owner, and what already happened (#1590), above the timeline on every visit. */}
+			<HistoryArea instanceId={instanceId} caps={caps} view={view} />
 			<div className="flex items-center justify-between gap-3 mb-3">
 				<div>
 					<h3 className="text-base font-bold mb-0.5">Activity</h3>

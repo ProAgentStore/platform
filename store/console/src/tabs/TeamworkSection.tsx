@@ -1,16 +1,14 @@
-import { plainMarkdown } from "../lib/agentText";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
-import { formatTime } from "@proagentstore/sdk/ui";
 import Button from "../components/Button";
 import Card from "../components/Card";
+import HistoryLine from "../components/HistoryLine";
+import { deliveriesLine, type HistoryLineState } from "../lib/historyLine";
 import {
 	buildConnectionConfig,
 	canDelegate,
 	connectionHealth,
 	deliveryCounts,
-	deliveryHeadline,
-	describeDelivery,
 	describeFilter,
 	directionState,
 	pauseControl,
@@ -40,9 +38,9 @@ import {
  * Until this existed, both were reachable only by curl or MCP — so assembling a multi-agent
  * system, the whole point of the supervision work, was not something you could do with a mouse.
  *
- * The third block, Deliveries, is the outbox made visible. Everything the reliability work
- * buys — retry with backoff, dead-lettering, replay, trace correlation — is worthless if the
- * only way to see a stalled chain is a curl against a status filter you had to know existed.
+ * Deliveries, the outbox, are history, not settings: the log (retry, dead-lettering, Replay, trace
+ * correlation) lives in Activity → History (`tabs/activity/DeliveriesPanel.tsx`, #1590). This card keeps
+ * one line saying how many never arrived, and the per-connection health the same rows feed.
  * The rules that turn a row into a sentence are pure and tested in ../lib/teamwork.ts.
  */
 
@@ -55,19 +53,8 @@ type SupervisionLink = {
 	/** The standing direction for THIS edge (#330) — what that agent is for, durable. */
 	direction?: Direction | null;
 };
-type TraceEvent = { id?: string; ts?: string; event?: string; message?: string; source?: string; level?: string };
 
 const ACTIONS = ["run_pipeline", "insert_record", "create_task", "add_knowledge"] as const;
-
-/** Status filters over the delivery log. "Undelivered" leads because it is the only one that
- *  needs a human — everything else is the system doing its job. */
-const DELIVERY_VIEWS = [
-	{ id: "dead", label: "Undelivered" },
-	{ id: "pending", label: "Retrying" },
-	{ id: "delivered", label: "Delivered" },
-	{ id: "all", label: "All" },
-] as const;
-type DeliveryView = (typeof DELIVERY_VIEWS)[number]["id"];
 
 const EMPTY_CLAUSE: ClauseDraft = { field: "", op: "eq", value: "" };
 
@@ -76,6 +63,8 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 	const [links, setLinks] = useState<SupervisionLink[]>([]);
 	const [connections, setConnections] = useState<Connection[]>([]);
 	const [deliveries, setDeliveries] = useState<Delivery[]>([]);
+	// Its own load: the log moved to Activity, and a failed read here must say so rather than read as "nothing undelivered".
+	const [deliveriesStatus, setDeliveriesStatus] = useState<"loading" | "ready" | "failed">("loading");
 	// #354: whether this agent can delegate at all. Supervision is offered only if it can;
 	// Connections and Deliveries stay ungated, because any agent can emit a fact and any agent
 	// can be a target. Starts true so an existing link never blinks out while the answer loads.
@@ -96,10 +85,6 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 	// feature was built for.
 	const [clauses, setClauses] = useState<ClauseDraft[]>([{ ...EMPTY_CLAUSE }]);
 	const [anyClause, setAnyClause] = useState(false);
-	const [view, setView] = useState<DeliveryView>("dead");
-	const [showLog, setShowLog] = useState(false);
-	const [openTrace, setOpenTrace] = useState<string | null>(null);
-	const [trace, setTrace] = useState<TraceEvent[] | null>(null);
 
 	const nameOf = useCallback(
 		(id: string) => {
@@ -111,7 +96,7 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 
 	const load = useCallback(async () => {
 		try {
-			const [mine, sup, conns, dels, tools] = await Promise.all([
+			const [mine, sup, conns, tools] = await Promise.all([
 				// `{instances}`, not a bare array — every other caller in the console reads it that
 				// way. Reading it as an array made `Array.isArray` permanently false, so the list
 				// was always empty and BOTH pickers below could never be set: supervision and
@@ -119,10 +104,6 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 				api<{ instances: Instance[] }>("/v1/instances/my/instances").catch(() => ({ instances: [] })),
 				api<{ supervision: SupervisionLink[] }>(`/v1/instances/${instanceId}/supervision`).catch(() => ({ supervision: [] })),
 				api<{ connections: Connection[] }>(`/v1/instances/${instanceId}/connections`).catch(() => ({ connections: [] })),
-				// EVERY status, not just dead: the health of a connection is a statement about
-				// what it HAS carried, so filtering server-side would make "nothing has ever
-				// matched" indistinguishable from "nothing has died".
-				api<{ deliveries: Delivery[] }>(`/v1/instances/${instanceId}/connections/deliveries?limit=200`).catch(() => ({ deliveries: [] })),
 				// The tool listing, for the one fact the supervision editor needs: does this agent
 				// declare a supervision tool. It carries each tool's registry `connector`, so this
 				// asks the same source the route rejects against instead of a second copy of it.
@@ -131,7 +112,6 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 			setInstances(mine.instances ?? []);
 			setLinks(sup.supervision ?? []);
 			setConnections(conns.connections ?? []);
-			setDeliveries(dels.deliveries ?? []);
 			// An unreadable listing must not hide an editor the route would accept — only a
 			// listing that came back and said no does that.
 			setDelegates(tools.tools?.length ? canDelegate(tools.tools) : true);
@@ -140,14 +120,27 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 		}
 	}, [instanceId]);
 
+	const loadDeliveries = useCallback(async () => {
+		try {
+			// EVERY status, not just dead: the health of a connection is a statement about
+			// what it HAS carried, so filtering server-side would make "nothing has ever
+			// matched" indistinguishable from "nothing has died".
+			const d = await api<{ deliveries: Delivery[] }>(`/v1/instances/${instanceId}/connections/deliveries?limit=200`);
+			setDeliveries(d.deliveries ?? []);
+			setDeliveriesStatus("ready");
+		} catch {
+			setDeliveriesStatus("failed");
+		}
+	}, [instanceId]);
+
 	useEffect(() => {
 		void load();
-	}, [load]);
+		void loadDeliveries();
+	}, [load, loadDeliveries]);
 
 	const others = instances.filter((i) => i.id !== instanceId);
 	const counts = useMemo(() => deliveryCounts(deliveries), [deliveries]);
-	const headline = deliveryHeadline(counts);
-	const shown = useMemo(() => (view === "all" ? deliveries : deliveries.filter((d) => d.status === view)), [deliveries, view]);
+	const undelivered: HistoryLineState = deliveriesStatus === "ready" ? deliveriesLine(counts.dead) : { status: deliveriesStatus };
 
 	const addSupervision = async () => {
 		if (!subordinate) return;
@@ -296,41 +289,6 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 		setBusy(false);
 	};
 
-	const replay = async (id: string) => {
-		setBusy(true);
-		setMsg("");
-		try {
-			await api(`/v1/instances/${instanceId}/connections/deliveries/${id}/replay`, { method: "POST" });
-			await load();
-		} catch (e) {
-			setMsg(e instanceof Error ? e.message : String(e));
-		}
-		setBusy(false);
-	};
-
-	/**
-	 * Follow one delivery's correlation id into the run it started. The emitting run's id rides
-	 * on the delivery and into the child run, and `chain.link` is logged under the PARENT trace
-	 * — so this trace read is what joins two agents' runs into one story.
-	 */
-	const toggleTrace = async (d: Delivery) => {
-		if (openTrace === d.id) {
-			setOpenTrace(null);
-			return;
-		}
-		setOpenTrace(d.id);
-		setTrace(null);
-		if (!d.traceId) return;
-		try {
-			const r = await api<{ events: TraceEvent[] }>(
-				`/v1/instances/${d.sourceInstanceId || instanceId}/trace?trace_id=${encodeURIComponent(d.traceId)}&limit=50`,
-			);
-			setTrace(r.events ?? []);
-		} catch {
-			setTrace([]);
-		}
-	};
-
 	const setClause = (i: number, patch: Partial<ClauseDraft>) =>
 		setClauses((cs) => cs.map((c, n) => (n === i ? { ...c, ...patch } : c)));
 
@@ -424,7 +382,8 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 				<div className="text-sm font-semibold mb-2">Events this one sends</div>
 				{connections.length === 0 && <div className="text-xs text-muted mb-2">None yet.</div>}
 				{connections.map((cn) => {
-					const health = connectionHealth(cn, deliveries);
+					// Only once the deliveries it is judged by have loaded: before that "nothing has matched" would be a claim, not a report.
+					const health = deliveriesStatus === "ready" ? connectionHealth(cn, deliveries) : null;
 					const filter = describeFilter(cn.config);
 					return (
 						<div key={cn.id} className="flex items-start justify-between gap-2 text-sm border border-line rounded-lg px-3 py-2 mb-1">
@@ -435,7 +394,7 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 								</div>
 								{/* A predicate that is not on screen is indistinguishable from a broken chain. */}
 								{filter && <div className="text-2xs text-muted-soft break-words">only when {filter}</div>}
-								<div className={`text-2xs ${toneClass(health.tone)}`}>{health.text}</div>
+								{health && <div className={`text-2xs ${toneClass(health.tone)}`}>{health.text}</div>}
 								{/* #363: rows written before the create-time check existed may already name a
 								    pipeline the target does not have. Surfaced, not removed — "Remove" is right
 								    there, and a connection the user wrote is theirs to delete. */}
@@ -524,89 +483,8 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 				</div>
 			</div>
 
-			{/* ── Deliveries (the outbox) ─────────────────────────────── */}
-			<div>
-				<div className="flex items-center flex-wrap gap-2 mb-2">
-					<button type="button" onClick={() => setShowLog((v) => !v)} className="text-sm font-semibold underline decoration-dotted">
-						{showLog ? "Hide" : "Show"} delivery log
-					</button>
-					<span className={`text-xs ${toneClass(headline.tone)}`}>{headline.text}</span>
-				</div>
-				{showLog && (
-					<div>
-						<div className="flex flex-wrap gap-1 mb-2">
-							{DELIVERY_VIEWS.map((v) => {
-								const n = v.id === "all" ? counts.total : counts[v.id];
-								return (
-									<button
-										key={v.id}
-										type="button"
-										onClick={() => setView(v.id)}
-										className={`text-xs px-2 py-1 rounded-lg border ${view === v.id ? "border-accent text-accent" : "border-line text-muted"}`}
-									>
-										{v.label} {n}
-									</button>
-								);
-							})}
-						</div>
-						{shown.length === 0 && (
-							<div className="text-xs text-muted">
-								{view === "dead" ? "Nothing stuck — every event reached its agent." : "Nothing here."}
-							</div>
-						)}
-						{shown.map((d) => {
-							const state = describeDelivery(d);
-							return (
-								<div key={d.id} className="text-sm border border-line rounded-lg px-3 py-2 mb-1">
-									<div className="flex items-start justify-between gap-2">
-										<div className="min-w-0">
-											<div className="truncate">
-												<code className="text-xs">{d.eventType || "event"}</code>
-												<span className="text-muted text-xs">
-													{" "}
-													{nameOf(d.sourceInstanceId || instanceId)} → {nameOf(d.targetInstanceId || "")}
-													{d.action ? ` · ${d.action}` : ""}
-													{/* The outbox is shared with triggers (#17): a stuck trigger and a stuck
-													    connection are the same mechanism but not the same problem. */}
-													{d.source === "trigger" ? " · via trigger" : ""}
-												</span>
-											</div>
-											<div className={`text-2xs ${toneClass(state.tone)}`}>
-												{state.text}
-												{d.createdAt ? ` · ${formatTime(d.createdAt)}` : ""}
-											</div>
-											{d.lastError && <div className="text-2xs text-danger break-words">{d.lastError}</div>}
-										</div>
-										<div className="flex flex-col gap-1 shrink-0">
-											{/* Retries wait out someone else's outage; when it is over, replay is the fix. */}
-											{d.status === "dead" && (
-												<Button size="sm" className="shrink-0" disabled={busy} onClick={() => replay(d.id)}>Replay</Button>
-											)}
-											{d.traceId && (
-												<Button size="sm" className="shrink-0" onClick={() => toggleTrace(d)}>
-													{openTrace === d.id ? "Hide run" : "Run"}
-												</Button>
-											)}
-										</div>
-									</div>
-									{openTrace === d.id && (
-										<div className="mt-2 border-t border-line pt-2">
-											<div className="text-2xs text-muted-soft break-all mb-1">trace {d.traceId}</div>
-											{trace === null && <div className="text-2xs text-muted">Loading…</div>}
-											{trace?.length === 0 && <div className="text-2xs text-muted">No events recorded for this run.</div>}
-											{trace?.map((e, i) => (
-												<div key={e.id || `${e.ts}-${i}`} className={`text-2xs ${e.level === "error" ? "text-danger" : "text-muted"} break-words`}>
-													<code>{e.event}</code> {plainMarkdown(e.message ?? "")}
-												</div>
-											))}
-										</div>
-									)}
-								</div>
-							);
-						})}
-					</div>
-				)}
-			</div>
+			{/* ── Deliveries (the outbox): the log is in Activity → History ─ */}
+			<HistoryLine instanceId={instanceId} panel="deliveries" state={undelivered} testId="deliveries-line" />
 
 			{msg && <div className="text-xs text-danger mt-3">{msg}</div>}
 		</Card>

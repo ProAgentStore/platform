@@ -146,12 +146,11 @@ export function localBrowserRunLink(instanceId: string, runId?: string): string 
  * takeover's state. Ids only: never the page a run is on, a session or a token.
  */
 export function browserTakeoverLink(instanceId: string, takeover: { id: string; subjectKind: string; subjectId: string }): string {
-	const page =
-		takeover.subjectKind === "local_browser_run"
-			? localBrowserRunLink(instanceId, takeover.subjectId)
-			: takeover.subjectKind === "runtime_task"
-				? instanceRunLink(instanceId, takeover.subjectId)
-				: instanceSettingsLink(instanceId);
+	// A manual takeover (a site-consent request) has no page of its own: it is a row in Activity's History (#1590).
+	if (takeover.subjectKind !== "local_browser_run" && takeover.subjectKind !== "runtime_task") {
+		return `${instanceActivityHistoryLink(instanceId)}&takeover=${encodeURIComponent(takeover.id)}`;
+	}
+	const page = takeover.subjectKind === "local_browser_run" ? localBrowserRunLink(instanceId, takeover.subjectId) : instanceRunLink(instanceId, takeover.subjectId);
 	return `${page}?takeover=${encodeURIComponent(takeover.id)}`;
 }
 
@@ -243,6 +242,15 @@ export function secureInputLink(instanceId: string, requestId: string): string {
  */
 export function secureInputNotificationLink(instanceId: string, requestId: string): string {
 	return `${BASE}${secureInputLink(instanceId, requestId)}`;
+}
+
+/**
+ * Activity's History area (#1590): what needs the owner and what already happened, above the timeline.
+ * `panel` focuses one panel; query state like `?subtab=`, because the splat is read as `<tab>/<sessionId>`.
+ * Panel ids are `HISTORY_PANELS` in the console's `lib/activityView.ts`.
+ */
+export function instanceActivityHistoryLink(instanceId: string, panel?: "loop-runs" | "takeovers" | "browser-launch" | "secure-inputs" | "deliveries"): string {
+	return `${instanceLink(instanceId)}/activity?view=history${panel ? `&panel=${panel}` : ""}`;
 }
 
 /** An instance's Settings tab — where its triggers, runner and brain are configured. */

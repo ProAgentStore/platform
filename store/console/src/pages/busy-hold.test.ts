@@ -29,7 +29,7 @@ describe("BusyHoldNotice (#931)", () => {
 	it("links to the blocking run's session on proagentstore.online/console", () => {
 		const html = render("/console");
 		expect(html).toContain('href="/console/instances/inst-1/coding/csess_abc"');
-		expect(html).toContain('href="/console/instances/inst-1/settings"');
+		expect(html).toContain('href="/console/instances/inst-1/activity?view=history&amp;panel=loop-runs"');
 		expect(html).toContain("Open the running loop");
 		expect(html).toContain('data-testid="busy-hold-stop"');
 	});
@@ -37,14 +37,14 @@ describe("BusyHoldNotice (#931)", () => {
 	it("links to the same pages on console.proagentstore.online, where the app is mounted at /", () => {
 		const html = render("/");
 		expect(html).toContain('href="/instances/inst-1/coding/csess_abc"');
-		expect(html).toContain('href="/instances/inst-1/settings"');
+		expect(html).toContain('href="/instances/inst-1/activity?view=history&amp;panel=loop-runs"');
 	});
 
 	it("offers no run link when the run has no session — Stop and the runs list remain", () => {
 		const html = render("/console", { ...hold, run: { ...hold.run!, sessionId: null } });
 		expect(html).not.toContain("Open the running loop");
 		expect(html).toContain('data-testid="busy-hold-stop"'); // the run can still be stopped
-		expect(html).toContain('href="/console/instances/inst-1/settings"');
+		expect(html).toContain('href="/console/instances/inst-1/activity?view=history&amp;panel=loop-runs"');
 	});
 
 	it("offers no Stop for a start that is still being set up — there is no run yet", () => {

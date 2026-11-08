@@ -47,8 +47,8 @@ async function mockBoard(page: Page, opts: { refuse?: number } = {}) {
 			return json({ scope: "pending", entries: marked().map((c, i) => ({ id: c.jobKey.replace("objective:", ""), objective: c.title, jobKey: c.jobKey, next: i === 0 })), activeRun: null, inFlightStarts: [], handoff: null });
 		}
 		if (path === "/v1/instances/inst-1/loop") return json({ runs: [] });
-		// The Settings page's other sections read these in their real shape: `{}` crashes the page
-		// into its error boundary (the trigger form reads `preview.issues.length`).
+		// Other pages read these in their real shape: `{}` crashes the page into its error boundary
+		// (the Settings trigger form reads `preview.issues.length`).
 		if (path === "/v1/triggers/preview") return json({ issues: [] });
 		return json({});
 	});
@@ -104,9 +104,9 @@ test.describe("board order is run order in the console (#1099)", () => {
 		await expect.poll(() => titles(page)).toEqual(["Fix the login", "Ship the docs", "URGENT: leads dropped"]);
 	});
 
-	test("Run next moves a queued objective to the top of the queue it shows", async ({ page }) => {
+	test("Run next moves a queued objective to the top of the queue it shows (Activity → History, #1590)", async ({ page }) => {
 		const mock = await mockBoard(page);
-		await page.goto("/console/instances/inst-1/settings?subtab=automation");
+		await page.goto("/console/instances/inst-1/activity?view=history");
 		const queue = page.getByTestId("loop-queue");
 		await expect(queue.getByTestId("loop-queue-entry").first()).toContainText("Fix the login");
 		await queue.getByTestId("loop-queue-entry").filter({ hasText: "URGENT: leads dropped" }).getByRole("button", { name: "Run next" }).click();

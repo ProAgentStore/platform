@@ -103,12 +103,11 @@ describe("permission links land on the Permissions tab", () => {
 		const old = "/console/instances/i1/settings?focus=permissions&permission_request=pr_1";
 		expect(checkConsoleLink(old)).toMatchObject({ ok: true });
 		const [path, search] = old.split("?");
-		expect(legacyTabRedirect(parseInstanceSplat(path.split("/instances/i1/")[1]).requestedTab, `?${search}`)).toBe("permissions");
+		expect(legacyTabRedirect(parseInstanceSplat(path.split("/instances/i1/")[1]).requestedTab, `?${search}`)).toBe(`permissions?${search}`);
 	});
 
 	it("an ordinary Settings link is not redirected", () => {
 		expect(legacyTabRedirect("settings", "")).toBeNull();
-		expect(legacyTabRedirect("settings", "?takeover=t1")).toBeNull();
 		expect(legacyTabRedirect("knowledge", "?focus=permissions")).toBeNull();
 	});
 });

@@ -66,8 +66,9 @@ describe("loopStopControl", () => {
  */
 describe("the surfaces that render a live run actually read the flag", () => {
 	const CONSOLE_SRC = resolve(__dirname, "..");
-	// The two places a running loop offers a Stop: the Settings-tab run list, and the chat header.
-	const SURFACES = ["tabs/LoopRunsSection.tsx", "pages/InstanceDetail.tsx"];
+	// The chat header. The other place a running loop offers a Stop, the History run list (#1590), is held to the
+	// resolver behaviourally: e2e/activity-history.spec.ts asserts a cancel-requested run reads "Stopping…" with Stop disabled.
+	const SURFACES = ["pages/InstanceDetail.tsx"];
 
 	for (const rel of SURFACES) {
 		it(`${rel} decides via loopStopControl, not on status alone`, () => {

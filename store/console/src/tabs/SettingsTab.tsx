@@ -6,10 +6,9 @@ import PilotModelCard from "../components/PilotModelCard";
 import CodingEngineCard from "../components/CodingEngineCard";
 import RunnerPanel from "../components/RunnerPanel";
 import ActionsRunnerCard from "../components/ActionsRunnerCard";
-import SecureInputHistory from "../components/SecureInputHistory";
 import TeamworkSection from "./TeamworkSection";
 import LoopPresetsSection from "./LoopPresetsSection";
-import LoopRunsSection from "./LoopRunsSection";
+import LoopRunsLine from "./settings/LoopRunsLine";
 import TriggersSection, { type ConnectorGrant } from "./TriggersSection";
 import { api } from "@proagentstore/sdk/client";
 import { invalidateVoiceConfig } from "@proagentstore/sdk/hooks";
@@ -304,7 +303,7 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 				{isCoding && <Section id="actions-runner"><ActionsRunnerCard instanceId={instanceId} /></Section>}
 				<Section id="teamwork"><TeamworkSection instanceId={instanceId} /></Section>
 				<Section id="loop-presets"><LoopPresetsSection instanceId={instanceId} /></Section>
-				<Section id="loop-runs"><LoopRunsSection instanceId={instanceId} /></Section>
+				<Section id="loop-runs"><LoopRunsLine instanceId={instanceId} /></Section>
 				<Section id="triggers"><TriggersSection instanceId={instanceId} driveGrants={driveGrants} workdriveGrants={workdriveGrants} /></Section>
 			</>
 		),
@@ -370,7 +369,6 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 							onSetTrOverride={setTrOverride}
 						/>
 					</Section>
-					<Section id="secure-input-history"><SecureInputHistory instanceId={instanceId} /></Section>
 				</MiscellaneousSection>
 			</>
 		),

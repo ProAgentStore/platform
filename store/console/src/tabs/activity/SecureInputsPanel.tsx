@@ -1,20 +1,24 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
-import Button from "./Button";
-import Card from "./Card";
-import type { ListSecureInputsResponse, SecureInputView } from "../lib/types";
-import { secureInputStatusLine } from "../lib/secureInput";
+import Button from "../../components/Button";
+import Card from "../../components/Card";
+import LoadFailed from "../../components/LoadFailed";
+import type { ListSecureInputsResponse, SecureInputView } from "../../lib/types";
+import { secureInputStatusLine } from "../../lib/secureInput";
+import { type PanelProps, useReport } from "./useReport";
 
 /**
  * Every secure input this agent has asked for or moved, newest first (#929 finding 8).
  *
  * The chat tab lists only what is still open, so once a handoff completed its "Moved from X to Y"
  * was reachable by deep link alone. This is that history — metadata only, as everywhere: the value
- * never reaches the console. Renders nothing for an agent that has never used one.
+ * never reaches the console. Renders nothing for an agent that has never used one. It moved here from
+ * Settings → General in #1590.
  */
-export default function SecureInputHistory({ instanceId }: { instanceId: string }) {
+export default function SecureInputsPanel({ instanceId, onReport }: PanelProps) {
 	const [rows, setRows] = useState<SecureInputView[]>([]);
+	const [loaded, setLoaded] = useState(false);
 	const [total, setTotal] = useState(0);
 	const [next, setNext] = useState<number | null>(null);
 	const [error, setError] = useState("");
@@ -27,6 +31,7 @@ export default function SecureInputHistory({ instanceId }: { instanceId: string 
 				setTotal(res.total ?? 0);
 				setNext(res.nextOffset ?? null);
 				setError("");
+				setLoaded(true);
 			} catch (e) {
 				setError(e instanceof Error ? e.message : "Could not load the history");
 			}
@@ -38,7 +43,10 @@ export default function SecureInputHistory({ instanceId }: { instanceId: string 
 		void load(0);
 	}, [load]);
 
-	if (!rows.length && !error) return null;
+	useReport("secure-inputs", onReport, loaded ? "ready" : error ? "failed" : "loading", rows.length, false);
+
+	if (!loaded && error) return <LoadFailed what="secure inputs" detail={error} onRetry={() => void load(0)} testId="history-failed-secure-inputs" compact />;
+	if (!rows.length) return null;
 	return (
 		<Card className="mb-3 sm:mb-4" data-testid="secure-input-history">
 			<h3 className="text-base font-bold mb-1">Secure inputs</h3>

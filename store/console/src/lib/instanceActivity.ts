@@ -72,7 +72,7 @@ export const HEALTH_LABEL: Record<InstanceHealth, string> = {
 /**
  * The dot's colour, and whether it pulses.
  *
- * `waiting` is muted, NOT a warning — the same judgement `LoopRunsSection.tsx`'s `HEALTH_TONE`
+ * `waiting` is muted, NOT a warning — the same judgement `LoopRunsPanel.tsx`'s `HEALTH_TONE`
  * records. A park is correct and self-resolving; painting it amber is the same over-claim as
  * calling it working, facing the other way. Only `stalled` asks for a human, so only `stalled`
  * gets the danger token.

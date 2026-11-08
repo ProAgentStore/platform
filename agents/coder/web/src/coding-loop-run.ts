@@ -241,9 +241,9 @@ export function busyHoldLink(instanceId: string, hold: BusyHold): string | null 
 	return sid ? `/instances/${encodeURIComponent(instanceId)}/coding/${encodeURIComponent(sid)}` : null;
 }
 
-/** Where every open run of this agent is listed: Settings → Autonomous runs. */
+/** Where every open run of this agent is listed: Activity → History, Autonomous runs. */
 export function busyHoldRunsLink(instanceId: string): string {
-	return `/instances/${encodeURIComponent(instanceId)}/settings`;
+	return `/instances/${encodeURIComponent(instanceId)}/activity?view=history&panel=loop-runs`;
 }
 
 /** The API call that stops the blocking run — the same cooperative cancel the Stop buttons use. */
@@ -299,12 +299,12 @@ export function readLoopStart(body: unknown): LoopStartAnswer {
 export function loopQueuedNotice(a: Extract<LoopStartAnswer, { kind: "queued" }>): string {
 	return a.duplicate
 		? "That objective is already queued for this repo — nothing new was added."
-		: "Queued — it starts on its own when the run holding this repo ends. It is listed under Settings → Autonomous runs, where you can cancel it.";
+		: "Queued — it starts on its own when the run holding this repo ends. It is listed under Activity → History, where you can cancel it.";
 }
 
 /** The line for a start the platform has not confirmed yet (a 202 with a receipt, #886). */
 export const LOOP_START_PENDING =
-	"The start reached the platform but isn't confirmed yet. It will appear under Settings → Autonomous runs; if no run appears, start it again with the same objective — the same start is picked up, never doubled.";
+	"The start reached the platform but isn't confirmed yet. It will appear under Activity → History; if no run appears, start it again with the same objective — the same start is picked up, never doubled.";
 
 /**
  * The request key for a start (#929 finding 10): REUSED only while the last start with exactly these

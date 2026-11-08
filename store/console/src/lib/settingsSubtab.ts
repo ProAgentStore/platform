@@ -43,19 +43,14 @@ export function visibleSettingsSubtabs(caps: SettingsSubtabCaps): SettingsSubtab
 	return SETTINGS_SUBTABS.filter((id) => showsSettingsSubtab(caps, id));
 }
 
-/**
- * The sub-tab a URL opens. No param, an unknown value, or one not shown for this instance opens
- * Agent; except that a bare `?takeover=<id>` (an already-delivered push) opens Browser, where
- * "Recent takeovers" lives until #1590 gives it a History redirect.
- */
+/** The sub-tab a URL opens. No param, an unknown value, or one not shown for this instance opens Agent. */
 export function settingsSubtabFromSearch(search: URLSearchParams, caps: SettingsSubtabCaps): SettingsSubtab {
 	const value = search.get("subtab");
-	if (value === null && search.has("takeover") && showsSettingsSubtab(caps, "browser")) return "browser";
 	const match = SETTINGS_SUBTABS.find((id) => id === value);
 	return match && showsSettingsSubtab(caps, match) ? match : DEFAULT_SETTINGS_SUBTAB;
 }
 
-/** Keep unrelated query state (`focus=`, `takeover=`) while changing only the selected sub-tab. */
+/** Keep unrelated query state (`focus=`) while changing only the selected sub-tab. */
 export function searchWithSettingsSubtab(search: URLSearchParams, subtab: SettingsSubtab): URLSearchParams {
 	const next = new URLSearchParams(search);
 	next.set("subtab", subtab);

@@ -80,7 +80,7 @@ const HAS_WIDTH = /(?:^|:)(?:w-|max-w-|basis-|flex-1$)/;
  * sites, and three of them are correct code:
  *
  *     store/console/src/components/FileConnectorPanel.tsx:71   parent `flex items-center …`
- *     store/console/src/tabs/LoopRunsSection.tsx:128           parent `flex items-start …`
+ *     store/console/src/tabs/activity/LoopRunsPanel.tsx:128           parent `flex items-start …`
  *     store/console/src/tabs/TmuxTab.tsx:342                   parent `flex …`
  *     store/console/src/pages/Terminals.tsx:121                parent `flex … FLEX-WRAP`
  *

@@ -1,17 +1,21 @@
-import { plainMarkdown } from "../lib/agentText";
-import { type ParkedWork, parkedLine } from "../lib/parkedWork";
-import MarkdownText from "../components/MarkdownText";
+import { plainMarkdown } from "../../lib/agentText";
+import { type ParkedWork, parkedLine } from "../../lib/parkedWork";
+import MarkdownText from "../../components/MarkdownText";
 import { useCallback, useEffect, useState } from "react";
-import { objectiveCardKey, postBoardOrder } from "../lib/boardOrder";
+import { objectiveCardKey, postBoardOrder } from "../../lib/boardOrder";
 import { api } from "@proagentstore/sdk/client";
-import { loopStopControl, type LoopPhase } from "../lib/loopStopState";
-import { canContinueRun, continueBody, endingLabel, previewLines, type ContinuePreview } from "../lib/loopContinue";
-import { activityLabel, isOpen, runActivity, type RunHealth } from "../lib/workInFlight";
-import Button from "../components/Button";
-import Card from "../components/Card";
+import { loopStopControl, type LoopPhase } from "../../lib/loopStopState";
+import { canContinueRun, continueBody, endingLabel, previewLines, type ContinuePreview } from "../../lib/loopContinue";
+import { activityLabel, isOpen, runActivity, type RunHealth } from "../../lib/workInFlight";
+import { needingFirst, runNeedsOwner } from "../../lib/activityView";
+import Button from "../../components/Button";
+import Card from "../../components/Card";
+import LoadFailed from "../../components/LoadFailed";
+import { type PanelProps, useReport } from "./useReport";
 
 /**
- * Autonomous runs — the history of objectives this agent worked on by itself (#158/#182).
+ * Activity → History → Autonomous runs — the objectives this agent worked on by itself (#158/#182).
+ * It was a Settings card until #1590: a run waiting for the owner for 29 days sat at the bottom of one.
  *
  * Since the loop moved to the server it survives the tab closing, which is the point — but it
  * also means a run you started yesterday, or one a SUPERVISOR started on your behalf, has no
@@ -99,8 +103,10 @@ interface QueuedObjective {
 }
 type LoopQueueResponse = { entries?: QueuedObjective[] };
 
-export default function LoopRunsSection({ instanceId }: { instanceId: string }) {
+export default function LoopRunsPanel({ instanceId, onReport }: PanelProps) {
 	const [runs, setRuns] = useState<LoopRun[]>([]);
+	const [loaded, setLoaded] = useState(false);
+	const [failed, setFailed] = useState(false);
 	// What waits behind the current run (#929 finding 9) — visible and cancellable here, where it used
 	// to be a bare "+N queued" chip on the dashboard.
 	const [queued, setQueued] = useState<QueuedObjective[]>([]);
@@ -115,9 +121,12 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 			]);
 			setRuns(r.runs ?? []);
 			if (q) setQueued(q.entries ?? []);
+			setLoaded(true);
+			setFailed(false);
 		} catch {
 			// Never blank the list on a transient read — a run in flight is unaffected by our
-			// ability to see it.
+			// ability to see it. Only a list that never loaded says so (`LoadFailed` below).
+			setFailed(true);
 		}
 	}, [instanceId]);
 
@@ -233,10 +242,15 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 		await load();
 	};
 
+	const needsOwner = runs.some(runNeedsOwner);
+	const status = loaded ? "ready" : failed ? "failed" : "loading";
+	useReport("loop-runs", onReport, status, runs.length + queued.length, needsOwner);
+
+	if (!loaded) return failed ? <LoadFailed what="autonomous runs" onRetry={() => void load()} testId="history-failed-loop-runs" compact /> : null;
 	if (runs.length === 0 && queued.length === 0) return null;
 
 	return (
-		<Card className="mb-3 sm:mb-4">
+		<Card className="mb-3 sm:mb-4" data-testid="history-loop-runs">
 			<h3 className="text-base font-bold mb-1">Autonomous runs</h3>
 			<p className="text-sm text-muted mb-3">
 				Objectives this agent worked on by itself. These run on the server, so they keep going
@@ -257,7 +271,7 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 					))}
 				</div>
 			)}
-			{runs.slice(0, 10).map((r) => {
+			{needingFirst(runs, runNeedsOwner).slice(0, 10).map((r) => {
 				const ctl = loopStopControl(r);
 				return (
 					<div key={r.runId} className="border border-line rounded-lg px-3 py-2 mb-1.5">
@@ -274,7 +288,7 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 									{ctl.actionLabel}
 								</Button>
 							) : (
-								<span className="flex items-center gap-2 whitespace-nowrap">
+								<span className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 min-w-0 max-w-[70%]">
 									<span className={`text-xs font-semibold ${TONE[r.status] ?? "text-muted"}`}>
 										{endingLabel(r)}
 									</span>

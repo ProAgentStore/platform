@@ -55,7 +55,7 @@ describe("the link to the blocking run", () => {
 
 	it("is null when the run has no session to open — the notice then offers only the runs list", () => {
 		expect(busyHoldLink("inst-1", busyHoldFrom(refusal({ activeRun: { ...RUN, sessionId: null } }))!)).toBeNull();
-		expect(busyHoldRunsLink("inst-1")).toBe("/instances/inst-1/settings");
+		expect(busyHoldRunsLink("inst-1")).toBe("/instances/inst-1/activity?view=history&panel=loop-runs");
 	});
 });
 

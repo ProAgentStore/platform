@@ -140,7 +140,7 @@ export function buildConsoleLink(instanceId: string, target: ConsoleTarget, caps
 		case "run":
 			return target.sessionId
 				? make(codingSessionLink(instanceId, target.sessionId), "the coding session this run drives — its Co-pilot and terminal")
-				: make(instanceLink(instanceId), "the Assistant tab, where this chat-driven run reports its steps (Settings → Autonomous runs lists it with Stop)");
+				: make(instanceLink(instanceId), "the Assistant tab, where this chat-driven run reports its steps (Activity → History lists it with Stop)");
 		case "local_browser_run":
 			return make(localBrowserRunLink(instanceId, target.runId), "this research run — its steps, any pause waiting on you, and its findings to save or skip");
 		case "task":

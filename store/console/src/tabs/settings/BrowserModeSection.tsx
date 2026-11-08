@@ -4,7 +4,10 @@ import Card from "../../components/Card";
 import LoadFailed from "../../components/LoadFailed";
 import BrowserSettingsFields, { BrowserSettingsHelp } from "../../components/BrowserSettingsFields";
 import WebsiteGrants from "../../components/WebsiteGrants";
-import BrowserSessionReceipt from "../../components/BrowserSessionReceipt";
+import { useBrowserSession } from "../../components/BrowserSessionReceipt";
+import HistoryLine from "../../components/HistoryLine";
+import { launchDiffersFromSettings } from "../../lib/browserLaunchCompare";
+import { type HistoryLineState, launchLine } from "../../lib/historyLine";
 import type { BrowserSettings, BrowserSettingsView } from "../../lib/browserSettings";
 
 export function BrowserModeSettings({ data, saving, message, onChange, instanceId }: { instanceId?: string; data: BrowserSettingsView; saving: boolean; message: string; onChange: (patch: Partial<BrowserSettings>) => void }) {
@@ -27,6 +30,8 @@ export default function BrowserModeSection({ instanceId }: { instanceId: string 
 	const [error, setError] = useState("");
 	const [message, setMessage] = useState("");
 	const [saving, setSaving] = useState(false);
+	// What the runner last launched is history (Activity → History, #1590); here it only says when the saved setting differs.
+	const session = useBrowserSession(instanceId);
 	const load = useCallback(async () => {
 		try {
 			setData(await api<BrowserSettingsView>(`/v1/instances/${instanceId}/browser-settings`));
@@ -38,6 +43,7 @@ export default function BrowserModeSection({ instanceId }: { instanceId: string 
 	useEffect(() => { void load(); }, [load]);
 	if (error && !data) return <LoadFailed what="browser settings" detail={error} onRetry={load} />;
 	if (!data) return null;
+	const launch: HistoryLineState = session.loading && !session.data ? { status: "loading" } : session.error && !session.data ? { status: "failed" } : launchLine(session.data?.status === "connected" && launchDiffersFromSettings(data.effective, session.data.launch));
 	const save = async (patch: Partial<BrowserSettings>) => {
 		setSaving(true);
 		setMessage("");
@@ -51,6 +57,6 @@ export default function BrowserModeSection({ instanceId }: { instanceId: string 
 	};
 	return <>
 		<BrowserModeSettings instanceId={instanceId} data={data} saving={saving} message={message} onChange={(patch) => void save(patch)} />
-		<BrowserSessionReceipt instanceId={instanceId} />
+		<div className="mb-3 sm:mb-4"><HistoryLine instanceId={instanceId} panel="browser-launch" state={launch} testId="browser-launch-line" /></div>
 	</>;
 }

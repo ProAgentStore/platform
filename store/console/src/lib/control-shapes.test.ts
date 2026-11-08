@@ -55,7 +55,7 @@ function sweep(root: string, find = findHandAuthoredControls) {
 //
 // 126 → 69 at #366's third pass. 57 sites across 16 files — AccountConnections, Notifications,
 // TriggersSection, TmuxTab, StatsTab, Profile, RunDetail, LoopPresetsSection, DataTab, Dashboard,
-// Terminals, Usage, SettingsTab, ActivityTab, IndexingTab, LoopRunsSection, DeploymentCard.
+// Terminals, Usage, SettingsTab, ActivityTab, IndexingTab, LoopRunsPanel, DeploymentCard.
 //
 // ── The rule this pass followed, stated so the next one is not a coin toss
 //
