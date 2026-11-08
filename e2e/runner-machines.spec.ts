@@ -91,7 +91,7 @@ test("Check machines: one row for runtime=pinned, every machine for any_eligible
 });
 
 for (const width of [320, 390]) {
-	test(`Change machine fits at ${width}px, with every choice at least 24px tall`, async ({ page }) => {
+	test(`mobile — Change machine fits at ${width}px, with every choice at least 24px tall`, async ({ page }) => {
 		await page.setViewportSize({ width, height: 812 });
 		await mock(page);
 		await installFleetRoutes(page);
