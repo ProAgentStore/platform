@@ -98,6 +98,8 @@ export interface Instance {
 	 * its agent's `source_mode`, the same check its mailbox routes gate on (#1115). Absent otherwise.
 	 */
 	sourceMode?: "gmail";
+	/** `true` only for an Original Finder: the target of a `job.lead.original_missing` connection, by the server's rule (#1616). */
+	originalFinder?: boolean;
 	capabilities?: {
 		surfaces: string[];
 		runtime?: string;

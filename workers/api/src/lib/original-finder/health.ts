@@ -27,6 +27,12 @@ export interface FinderProblem {
 	connectionId?: string;
 }
 
+/** The instances that are an Original Finder: targets of a `job.lead.original_missing` connection, enabled or not (#1616). */
+export async function finderInstanceIds(env: Env, uid: string): Promise<Set<string>> {
+	const { results } = await env.DB.prepare("SELECT DISTINCT target_instance_id AS id FROM agent_connections WHERE user_id = ?1 AND event_type = ?2").bind(uid, JOB_LEAD_ORIGINAL_MISSING_EVENT).all<{ id: string }>();
+	return new Set((results ?? []).map((r) => r.id));
+}
+
 /** Research runs this Finder started in the last 24 hours (the budget's meter). */
 export async function runsStartedToday(env: Env, instanceId: string, userId: string, now = Date.now()): Promise<number> {
 	return (await env.DB.prepare("SELECT COUNT(*) AS n FROM local_browser_runs WHERE instance_id = ?1 AND user_id = ?2 AND created_at >= ?3").bind(instanceId, userId, now - 24 * 60 * 60_000).first<{ n: number }>())?.n ?? 0;

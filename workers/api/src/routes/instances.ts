@@ -7,6 +7,7 @@ import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
 import { GMAIL_SCOUT_SOURCE_MODE, gmailScoutSourceMode } from "../lib/gmail-scout/config.js";
+import { finderInstanceIds } from "../lib/original-finder/health.js";
 import { staleRegistration } from "../lib/runner-attach-report.js";
 import { composeInstanceActivity } from "../lib/instance-activity.js";
 import { readLatestAdmissionFailures, readLatestRuns, readQueueDepths } from "../lib/instance-activity-read.js";
@@ -417,6 +418,7 @@ instanceRoutes.get("/my/instances", async (c) => {
 	// runtime to find the owner's replacement pipeline — the Scout, Tailor and Runner are rows in
 	// this very result set, so a retired agent's way out costs no extra query (#979).
 	const resolved = (results ?? []).map((r) => ({ row: r, caps: agentCapabilities({ slug: r.slug as string, category: r.category as string, config: r.config as string }, c.env) }));
+	const finders = await finderInstanceIds(c.env, session.uid); // #1616: one query for the list
 	const roster = resolved.map((e) => ({ id: e.row.id as string, name: (instanceListView(e.row.instance_config as string | null).displayName || e.row.name) as string, runtime: e.caps.runtime }));
 	// The CLI reads `config.runnerNode` and compares it with its own hostnames (`membership.ts`), so a
 	// machine pin (#1250) travels as the hostname that machine answers to NOW — a CLI from before #1250
@@ -454,6 +456,8 @@ instanceRoutes.get("/my/instances", async (c) => {
 			// `requireGmailScoutInstance`): the instance's or its agent's `source_mode`, never its tools —
 			// the Application Runner declares the same two Gmail reads. Present only for a Scout.
 			...(gmailScoutSourceMode(instance_config as string | null) || gmailScoutSourceMode(config as string | null) ? { sourceMode: GMAIL_SCOUT_SOURCE_MODE } : {}),
+			// Present only for an Original Finder (#1616): the target of a Scout's `job.lead.original_missing` connection.
+			...(finders.has(r.id as string) ? { originalFinder: true } : {}),
 			// env carries the fail-closed custom-surface gate (#186) — this is the one response the
 			// console renders tabs from, so it is the path that must consult it.
 			capabilities: lightCaps,

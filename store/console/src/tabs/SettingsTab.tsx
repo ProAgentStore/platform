@@ -35,6 +35,7 @@ import BrowserVerificationSection from "./settings/BrowserVerificationSection";
 import BrowserScreenshotsSection from "./settings/BrowserScreenshotsSection";
 import BrowserModeSection from "./settings/BrowserModeSection";
 import GmailScoutSection from "./settings/GmailScoutSection";
+import OriginalFinderSection from "./settings/OriginalFinderSection";
 import CoderBrainSection from "./settings/CoderBrainSection";
 import AutoPickupSection from "./settings/AutoPickupSection";
 import OperatorManualCard from "../components/OperatorManualCard";
@@ -50,6 +51,8 @@ interface Props {
 	isLocalBrowser?: boolean;
 	/** Dedicated inbox Scout: its Gmail source is configured here, not through generic mail tools. */
 	isGmailScout?: boolean;
+	/** The server's Original Finder verdict (#1616): its budget and scope are set here. */
+	isOriginalFinder?: boolean;
 	/** The agent runs a browser, so the screenshot switch applies (#1064). */
 	takesScreenshots?: boolean;
 	/** What decides which sub-tabs show (`lib/settingsSubtab.ts`): the same caps surfaces.tsx derives the booleans above from. */
@@ -57,7 +60,7 @@ interface Props {
 	onUnsubscribe: () => void;
 }
 
-export default function SettingsTab({ instanceId, instanceName, isApply, isCoding, isRepo, isLocalBrowser, isGmailScout, takesScreenshots, caps, onUnsubscribe }: Props) {
+export default function SettingsTab({ instanceId, instanceName, isApply, isCoding, isRepo, isLocalBrowser, isGmailScout, isOriginalFinder, takesScreenshots, caps, onUnsubscribe }: Props) {
 	const [searchParams, setSearchParams] = useSearchParams();
 	const subtabs = visibleSettingsSubtabs(caps);
 	const active = settingsSubtabFromSearch(searchParams, caps);
@@ -279,6 +282,7 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 				{/* #1592: what this agent does comes first (its source, then its research); the generic model choice after. */}
 				{isGmailScout && <Section id="gmail-scout"><GmailScoutSection instanceId={instanceId} /></Section>}
 				{isLocalBrowser && <Section id="local-browser"><LocalBrowserSection instanceId={instanceId} /></Section>}
+				{isOriginalFinder && <Section id="original-finder"><OriginalFinderSection instanceId={instanceId} /></Section>}
 
 				{/* #1043: the Brain (advisory, may use an API key) and the Coding engine (the subscription CLI that
 				    writes code, #1042) are two different things, set in two separate sections. */}

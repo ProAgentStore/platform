@@ -133,6 +133,8 @@ export interface SurfaceCaps {
 	runtime?: string | null;
 	/** The server's source-mode verdict for this instance (`Instance.sourceMode`) — `"gmail"` for a Gmail Job Search Scout (#1115). */
 	sourceMode?: string | null;
+	/** The server's Original Finder verdict (`Instance.originalFinder`, #1616). */
+	originalFinder?: boolean;
 }
 
 /** Does a DECLARED allowlist contain any of these? Undefined (not declared) ⇒ permissive. */
@@ -375,7 +377,7 @@ export const SURFACES: SurfaceDef[] = [
 		show: () => true,
 		scroll: true,
 		render: ({ instanceId, instanceName, isApply, isCoding, isRepo, caps, onUnsubscribe }) => (
-			<SettingsTab instanceId={instanceId} instanceName={instanceName} isApply={isApply} isCoding={isCoding} isRepo={isRepo} isLocalBrowser={caps.runtime === "local_browser"} isGmailScout={isGmailScout(caps)} takesScreenshots={takesBrowserScreenshots(caps)} caps={caps} onUnsubscribe={onUnsubscribe} />
+			<SettingsTab instanceId={instanceId} instanceName={instanceName} isApply={isApply} isCoding={isCoding} isRepo={isRepo} isLocalBrowser={caps.runtime === "local_browser"} isGmailScout={isGmailScout(caps)} isOriginalFinder={caps.originalFinder === true} takesScreenshots={takesBrowserScreenshots(caps)} caps={caps} onUnsubscribe={onUnsubscribe} />
 		),
 	},
 	{

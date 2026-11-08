@@ -3,6 +3,7 @@ import type { Page } from "@playwright/test";
 import { notificationsResponse, NOTIFICATION_VOCABULARY } from "./notification-fixtures";
 import { installHistoryRoutes, LOCAL_BROWSER_INSTANCE } from "./activity-history-mock";
 import { installFleetRoutes } from "./runner-fleet-mock";
+import { FINDER_INSTANCE, installFinderRoutes } from "./original-finder-mock";
 
 const API = "https://api.proagentstore.online";
 const TEST_TOKEN = "test-pags-token";
@@ -3546,6 +3547,15 @@ const SETTINGS_SWEEP_FIXTURES: Array<{ name: string; instances: Array<Record<str
 		instances: [{ id: "inst-1", agent_id: "a-coder", name: "pags platform", agentName: "Repo Coder", status: "active", slug: "coder", category: "developer", icon_bg: "#0f766e", capabilities: { surfaces: ["coding"], runtime: "coding" } }],
 		subtabs: ["agent", "automation", "notifications", "instructions", "general"],
 	},
+	// An Original Finder (#1616): the Agent sub-tab shows its budget and scope after Research, with the scope in force under empty Roles.
+	{
+		name: "Original Finder",
+		instances: [FINDER_INSTANCE],
+		subtabs: ["agent"],
+		setup: async (page) => {
+			await installFinderRoutes(page);
+		},
+	},
 	// Five machines, one pinned: the Runner card's one machine in detail and the count line (#1594). The default fixture has one runner.
 	{
 		name: "five machines",
@@ -3601,6 +3611,17 @@ async function openSeededHistory(page: Page) {
 	for (const id of ["history-loop-runs", "bv-takeovers", "browser-launch-receipt", "secure-input-history", "history-deliveries"]) {
 		await expect(page.getByTestId(id), `${id} did not render`).toBeVisible();
 	}
+	await page.waitForLoadState("networkidle");
+	await page.waitForTimeout(300);
+}
+
+/** Activity with History open for an Original Finder (#1616): its panel seeded beside the other panels' rows. */
+async function openFinderHistory(page: Page) {
+	await mockSignedInConsole(page, { instances: [FINDER_INSTANCE] });
+	await installHistoryRoutes(page);
+	await installFinderRoutes(page);
+	await page.goto("/console/instances/inst-1/activity?view=history");
+	await expect(page.getByTestId("history-finder"), "the Finder panel did not render").toBeVisible();
 	await page.waitForLoadState("networkidle");
 	await page.waitForTimeout(300);
 }
@@ -3666,6 +3687,16 @@ test.describe("mobile — no horizontal overflow (regression guard for the missi
 			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
 			// `dt`/`dd` pairs wrapped in `display: contents` (the launch receipt's grid) have no box of their own, so
 			// they always read as escaping; every other box must stay inside its container.
+			const real = escapes.filter((e) => !/^(dt|dd)\b.* escapes div\.contents /.test(e));
+			expect(real, `a box past its own container at ${width}w: ${real.join(", ")}`).toEqual([]);
+		});
+		test(`no horizontal scroll at ${width}px — Activity History, Original Finder seeded`, async ({ page }) => {
+			await page.setViewportSize({ width, height: 812 });
+			await openFinderHistory(page);
+			const { mainOv, docOv, wide, escapes } = await measureOverflow(page);
+			expect(mainOv, `<main> overflows by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
 			const real = escapes.filter((e) => !/^(dt|dd)\b.* escapes div\.contents /.test(e));
 			expect(real, `a box past its own container at ${width}w: ${real.join(", ")}`).toEqual([]);
 		});
@@ -4724,6 +4755,13 @@ test.describe("mobile — every control clears the 24px minimum target (#389)", 
 	test(`no target under ${MIN_TARGET}px on Activity History, every panel seeded`, async ({ page }) => {
 		await page.setViewportSize({ width: 390, height: 812 });
 		await openSeededHistory(page);
+		const findings = await measureTargets(page, MIN_TARGET);
+		expect(findings, `targets under ${MIN_TARGET}px: ${findings.join(" · ")}`).toEqual([]);
+	});
+
+	test(`no target under ${MIN_TARGET}px on Activity History, Original Finder seeded`, async ({ page }) => {
+		await page.setViewportSize({ width: 390, height: 812 });
+		await openFinderHistory(page);
 		const findings = await measureTargets(page, MIN_TARGET);
 		expect(findings, `targets under ${MIN_TARGET}px: ${findings.join(" · ")}`).toEqual([]);
 	});

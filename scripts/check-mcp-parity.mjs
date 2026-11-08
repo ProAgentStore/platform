@@ -221,6 +221,11 @@ const KNOWN_GAPS = [
 		why: "The console's Data tab opens one job lead from a decision push's deep link (`?lead=<id>`) with a direct read. MCP reads records with `query_instance_records`, which filters on field values, not on the record id, so there is no read-one-by-id tool yet.",
 		match: /^GET \/v1\/instances\/\{\}\/collections\/\{\}\/records\/\{\}$/,
 	},
+	{
+		label: "Original Finder budget, scope and queue (#1616)",
+		why: "Settings -> Agent sets the Finder's daily research budget and scope, and Activity -> History lists its queue. MCP has no tool for either yet (the routes landed in #1608 REST-only); file one when an agent needs to read or change them.",
+		match: /^(GET \/v1\/instances\/\{\}\/original-finder|PUT \/v1\/instances\/\{\}\/original-finder\/settings)$/,
+	},
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────

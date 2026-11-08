@@ -11,6 +11,7 @@ import {
 } from "../../lib/activityView";
 import BrowserLaunchPanel from "./BrowserLaunchPanel";
 import DeliveriesPanel from "./DeliveriesPanel";
+import FinderPanel from "./FinderPanel";
 import LoopRunsPanel from "./LoopRunsPanel";
 import SecureInputsPanel from "./SecureInputsPanel";
 import TakeoversPanel from "./TakeoversPanel";
@@ -40,6 +41,7 @@ export default function HistoryArea({ instanceId, caps, view }: { instanceId: st
 		takeovers: () => <TakeoversPanel {...panelProps} highlightId={view.takeover} />,
 		"browser-launch": () => <BrowserLaunchPanel {...panelProps} />,
 		"secure-inputs": () => <SecureInputsPanel {...panelProps} />,
+		finder: () => <FinderPanel {...panelProps} />,
 		deliveries: () => <DeliveriesPanel {...panelProps} focused={view.panel === "deliveries"} />,
 	};
 	const shown = HISTORY_PANELS.filter((id) => renderers[id] && showsHistoryPanel(caps, id));

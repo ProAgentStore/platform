@@ -37,11 +37,14 @@ export function activityViewFromSearch(search: URLSearchParams): ActivityView {
 export interface HistoryCaps {
 	runtime?: string | null;
 	surfaces?: readonly string[];
+	/** The server's Original Finder verdict (#1616). */
+	originalFinder?: boolean;
 }
 
 /** Takeovers exist for a local browser; the launch receipt for any agent that runs a browser. The rest are for every agent. */
 export function showsHistoryPanel(caps: HistoryCaps, id: HistoryPanelId): boolean {
 	if (id === "takeovers") return caps.runtime === "local_browser";
+	if (id === "finder") return caps.originalFinder === true;
 	if (id === "browser-launch") return takesBrowserScreenshots(caps);
 	return true;
 }

@@ -83,3 +83,11 @@ describe("runNeedsOwner", () => {
 		for (const status of ["running", "completed", "failed", "cancelled"]) expect(runNeedsOwner({ status }), status).toBe(false);
 	});
 });
+
+describe("the finder panel is the server's verdict, never the runtime or a slug (#1616)", () => {
+	it("shows only when originalFinder is true", () => {
+		expect(showsHistoryPanel({ runtime: "local_browser", originalFinder: true }, "finder")).toBe(true);
+		expect(showsHistoryPanel({ runtime: "local_browser" }, "finder")).toBe(false);
+		expect(showsHistoryPanel({ runtime: "local_browser", originalFinder: false }, "finder")).toBe(false);
+	});
+});

@@ -289,3 +289,19 @@ describe("my/instances names a Gmail Scout by source_mode, never by its Gmail to
 		expect(mode("i-idle")).toBeUndefined();
 	});
 });
+
+describe("my/instances names an Original Finder by its connection, never by its agent (#1616)", () => {
+	it("originalFinder: true only for the target of a job.lead.original_missing connection", async () => {
+		d1.exec(`INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES
+			('i-scout16', 'ag', 'u1', 'active', '{}'), ('i-finder16', 'ag', 'u1', 'active', '{}'), ('i-other16', 'ag', 'u1', 'active', '{}')`);
+		d1.exec(`INSERT INTO agent_connections (id, user_id, source_instance_id, event_type, target_instance_id, action, enabled) VALUES
+			('c-fin', 'u1', 'i-scout16', 'job.lead.original_missing', 'i-finder16', 'find_original_posting', 0),
+			('c-oth', 'u1', 'i-scout16', 'lead.created', 'i-other16', 'create_task', 1)`);
+		const listed = (await call("/v1/instances/my/instances")).body.instances as Array<{ id: string; originalFinder?: boolean }>;
+		const flag = (id: string) => listed.find((i) => i.id === id)?.originalFinder;
+		expect(flag("i-finder16")).toBe(true);
+		expect(flag("i-scout16")).toBeUndefined();
+		expect(flag("i-other16")).toBeUndefined();
+		expect(listed.find((i) => i.id === "i-other16")).not.toHaveProperty("originalFinder");
+	});
+});
