@@ -317,7 +317,7 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 				<Section id="operator-manual"><OperatorManualCard instanceId={instanceId} /></Section>
 				<Section id="connection-guide">
 					<div className="mb-3 sm:mb-4">
-						<ConnectionGuide instanceId={instanceId} active />
+						<ConnectionGuide instanceId={instanceId} />
 					</div>
 				</Section>
 			</>

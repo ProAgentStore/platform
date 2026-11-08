@@ -7,12 +7,8 @@ import type { AccountOperatorManualResponse, AgentOperatorManualResponse, Operat
 
 const MAX = 16_000;
 
-/**
- * What an instance inherits, read-only, in precedence order: your ACCOUNT's manual (#1238), then the agent TEMPLATE's (#1237).
- * Empty layers are left out; nothing at all renders nothing.
- */
-export function InheritedLayers({ account, inherited }: { account: string; inherited: string }) {
-	if (!account && !inherited) return null;
+/** The read-only layers themselves, in precedence order; empty ones are left out. */
+export function InheritedLayersBody({ account, inherited }: { account: string; inherited: string }) {
 	const layer = (title: string, text: string, testId: string) => (
 		<div className="mb-3" data-testid={testId}>
 			<div className="text-2xs font-bold uppercase tracking-wide text-muted-soft mb-1">{title}</div>
@@ -20,9 +16,34 @@ export function InheritedLayers({ account, inherited }: { account: string; inher
 		</div>
 	);
 	return (
-		<>
+		<div id="operator-manual-layers">
 			{account && layer("Inherited from your account", account, "operator-manual-account")}
 			{inherited && layer("Inherited from template", inherited, "operator-manual-inherited")}
+		</div>
+	);
+}
+
+/**
+ * What an instance inherits, read-only, in precedence order: your ACCOUNT's manual (#1238), then the agent TEMPLATE's (#1237).
+ * Collapsed to one line by default (#1596) — the layers are long, account-wide and rarely what the owner came to edit — and kept
+ * above the editor so the precedence order reads the same. Nothing inherited renders nothing.
+ */
+export function InheritedLayers({ account, inherited }: { account: string; inherited: string }) {
+	const [open, setOpen] = useState(false);
+	if (!account && !inherited) return null;
+	const follows = account && inherited ? "your account manual and this agent's template manual" : account ? "your account manual" : "this agent's template manual";
+	return (
+		<>
+			<button
+				type="button"
+				onClick={() => setOpen((o) => !o)}
+				aria-expanded={open}
+				data-testid="operator-manual-inherited-toggle"
+				className="block w-full text-left text-xs text-muted-soft min-h-6 py-1 mb-2"
+			>
+				Also follows {follows} · <span className="underline">{open ? "Hide" : "Show"}</span>
+			</button>
+			{open && <InheritedLayersBody account={account} inherited={inherited} />}
 			<div className="text-2xs font-bold uppercase tracking-wide text-muted-soft mb-1">This instance — an addendum that wins where they conflict</div>
 		</>
 	);

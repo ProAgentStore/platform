@@ -47,6 +47,9 @@ test.describe("the operator manual in Settings (#1237)", () => {
 		const { puts } = await mock(page, STANDARD);
 		await page.goto("/console/instances/inst-1/settings?subtab=instructions");
 		const card = page.getByTestId("operator-manual");
+		await expect(card.getByTestId("operator-manual-inherited")).toHaveCount(0); // collapsed by default (#1596)
+		await expect(card.getByRole("button", { name: "Also follows this agent's template manual · Show" })).toHaveAttribute("aria-expanded", "false");
+		await card.getByTestId("operator-manual-inherited-toggle").click();
 		await expect(card.getByTestId("operator-manual-inherited")).toContainText("Inherited from template");
 		await expect(card.getByTestId("operator-manual-inherited")).toContainText(STANDARD);
 		await expect(card.getByTestId("operator-manual-inherited").getByRole("textbox")).toHaveCount(0);
@@ -71,6 +74,10 @@ test.describe("the account-level operator manual (#1238)", () => {
 		await mock(page, STANDARD, MACHINES);
 		await page.goto("/console/instances/inst-1/settings?subtab=instructions");
 		const card = page.getByTestId("operator-manual");
+		await expect(card.getByTestId("operator-manual-account")).toHaveCount(0);
+		await expect(card.getByTestId("operator-manual-inherited-toggle")).toHaveText("Also follows your account manual and this agent's template manual · Show");
+		await card.getByTestId("operator-manual-inherited-toggle").click();
+		await expect(card.getByTestId("operator-manual-inherited-toggle")).toHaveText("Also follows your account manual and this agent's template manual · Hide");
 		await expect(card.getByTestId("operator-manual-account")).toContainText("Inherited from your account");
 		await expect(card.getByTestId("operator-manual-account")).toContainText(MACHINES);
 		await expect(card.getByTestId("operator-manual-inherited")).toContainText(STANDARD);
@@ -78,12 +85,19 @@ test.describe("the account-level operator manual (#1238)", () => {
 		const text = (await card.innerText()).replace(/\s+/g, " ").toLowerCase();
 		expect(text.indexOf("inherited from your account")).toBeLessThan(text.indexOf("inherited from template"));
 		expect(text.indexOf("inherited from template")).toBeLessThan(text.indexOf("an addendum that wins"));
+		// Collapsing hides them again, and the line stays above the editor.
+		await card.getByTestId("operator-manual-inherited-toggle").click();
+		await expect(card.getByTestId("operator-manual-account")).toHaveCount(0);
+		const collapsed = (await card.innerText()).replace(/\s+/g, " ").toLowerCase();
+		expect(collapsed.indexOf("also follows")).toBeLessThan(collapsed.indexOf("an addendum that wins"));
 	});
 
 	test("with only an account manual there is no template section", async ({ page }) => {
 		await mock(page, "", MACHINES);
 		await page.goto("/console/instances/inst-1/settings?subtab=instructions");
 		const card = page.getByTestId("operator-manual");
+		await expect(card.getByTestId("operator-manual-inherited-toggle")).toHaveText("Also follows your account manual · Show");
+		await card.getByTestId("operator-manual-inherited-toggle").click();
 		await expect(card.getByTestId("operator-manual-account")).toContainText(MACHINES);
 		await expect(card.getByTestId("operator-manual-inherited")).toHaveCount(0);
 	});
