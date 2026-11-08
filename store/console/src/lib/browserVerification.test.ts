@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { type BrowserVerificationSettings, changedFields, machineLine } from "./browserVerification";
+import { type BrowserRuntimesView, type BrowserVerificationSettings, changedFields, machineLine, runtimeMachinesToShow } from "./browserVerification";
 
 const saved: BrowserVerificationSettings = { enabled: false, runtime: "pinned", fallback: "wait", waitLimitMinutes: 60, takeover: "prompt", allowMobile: true };
 
@@ -30,5 +30,18 @@ describe("browser verification card", () => {
 			expect(mcp).toContain(route);
 			expect(card).toContain(route);
 		}
+	});
+});
+
+describe("runtimeMachinesToShow (#1594)", () => {
+	const m = (node: string, pinned: boolean) => ({ node, pinned, heartbeat: { lastSeenAt: null, fresh: true }, attached: true, health: { state: "ok" }, runnerVersion: null, eligible: true });
+	const view = { runtime: "pinned", runnerNode: "b", machines: [m("a", false), m("b", true), m("c", false)], selected: "b" } as BrowserRuntimesView;
+
+	it("shows only the pinned machine for runtime=pinned", () => {
+		expect(runtimeMachinesToShow(view, "pinned").map((x) => x.node)).toEqual(["b"]);
+	});
+
+	it("shows every machine for any_eligible", () => {
+		expect(runtimeMachinesToShow(view, "any_eligible").map((x) => x.node)).toEqual(["a", "b", "c"]);
 	});
 });

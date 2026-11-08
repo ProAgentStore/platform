@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { agoShort, type Machine, machinesToShow, machineTile, type NodeDetail, pinnedWarning, runnerReading } from "./runnerPanel";
+import { agoShort, compactMachineStatus, type Machine, machinesToShow, machineTile, type NodeDetail, otherMachinesText, pinnedWarning, runnerCardView, runnerReading } from "./runnerPanel";
 
 const INST = "inst-1";
 
@@ -319,5 +319,54 @@ describe("pinnedWarning", () => {
 
 	it("treats an older response with no nodeOnline as offline rather than guessing", () => {
 		expect(pinnedWarning("laptop", [{ node: "laptop", connected: false }])).toBe("offline");
+	});
+});
+
+describe("runnerCardView — one machine in detail, the rest as a count (#1594)", () => {
+	const fleet: Machine[] = ["a", "b", "c", "d", "e"].map((node) => ({
+		node,
+		machineId: `id-${node}`,
+		connected: node !== "e",
+		resources: { warnings: ["Crash loop: the runner restarted 9 times"] } as unknown as Machine["resources"],
+		runnerBehind: node === "c" ? ["x"] : null,
+	}));
+
+	it("pins one machine and counts every other, online or not", () => {
+		const v = runnerCardView(fleet, "b", INST, []);
+		expect(v.pinned?.node).toBe("b");
+		expect(v.others.map((t) => t.node)).toEqual(["a", "c", "d", "e"]);
+		expect(v.all).toHaveLength(5);
+	});
+
+	it("keeps the pinned machine's own alerts and outdated flag, and carries its machineId", () => {
+		const v = runnerCardView(fleet, "c", INST, []);
+		expect(v.pinned).toMatchObject({ node: "c", machineId: "id-c", outdated: true });
+		expect(v.pinned?.alerts.length).toBeGreaterThan(0);
+	});
+
+	it("unpinned: no pinned machine, every machine is an other", () => {
+		const v = runnerCardView(fleet, "", INST, []);
+		expect(v.pinned).toBeNull();
+		expect(v.others).toHaveLength(5);
+	});
+
+	it("a pin Terminals does not list is still the pinned machine, and the rest are others", () => {
+		const v = runnerCardView(fleet.slice(0, 2), "ghost", INST, [{ node: "ghost", connected: false, nodeOnline: false }]);
+		expect(v.pinned?.node).toBe("ghost");
+		expect(v.others).toHaveLength(2);
+	});
+
+	it("a machine with no machineId has null, so the card draws plain text", () => {
+		expect(runnerCardView([{ node: "a", connected: true }], "a", INST, []).pinned?.machineId).toBeNull();
+	});
+
+	it("words the count in the singular for one", () => {
+		expect(otherMachinesText(1)).toBe("1 other machine");
+		expect(otherMachinesText(4)).toBe("4 other machines");
+	});
+
+	it("the compact status carries no health, only up/down and attachment", () => {
+		const v = runnerCardView([{ node: "a", connected: true, instances: [{ instanceId: INST, connected: true }] }, { node: "b", connected: true }, { node: "c", connected: false }], "", INST, []);
+		expect(v.all.map(compactMachineStatus)).toEqual(["Online · attached to this agent", "Online", "Offline"]);
 	});
 });

@@ -6,7 +6,7 @@ import LoadFailed from "../../components/LoadFailed";
 import HistoryLine from "../../components/HistoryLine";
 import { type BrowserTakeoverListResponse, isLive } from "../../lib/browserTakeovers";
 import { type HistoryLineState, takeoversLine } from "../../lib/historyLine";
-import { type BrowserRuntimesView, type BrowserVerificationSettings, type BrowserVerificationView, changedFields, EVENT_WORDS, machineLine } from "../../lib/browserVerification";
+import { type BrowserRuntimesView, type BrowserVerificationSettings, type BrowserVerificationView, changedFields, EVENT_WORDS, machineLine, runtimeMachinesToShow } from "../../lib/browserVerification";
 
 const input = "bg-paper border border-line rounded px-2 py-1.5 text-sm";
 
@@ -137,7 +137,7 @@ export default function BrowserVerificationSection({ instanceId }: { instanceId:
 			</div>
 			{runtimes && (
 				<ul className="mt-3 text-xs flex flex-col gap-1" data-testid="bv-machines">
-					{runtimes.machines.map((m) => {
+					{runtimeMachinesToShow(runtimes, data.settings.runtime).map((m) => {
 						const line = machineLine(m);
 						return (
 							<li key={m.node}>

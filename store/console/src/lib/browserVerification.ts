@@ -77,3 +77,11 @@ export const EVENT_WORDS: Record<string, string> = {
 	browser_verification_failed: "a verification failed",
 	browser_verification_completed: "a verification finished",
 };
+
+/**
+ * The "Check machines" rows (#1594). The saved `runtime` is what the check evaluated: "pinned" is about
+ * the one pinned machine, "any_eligible" is about the whole set, so it shows every machine.
+ */
+export function runtimeMachinesToShow(view: BrowserRuntimesView, savedRuntime: BrowserVerificationSettings["runtime"]): BrowserRuntimeMachine[] {
+	return savedRuntime === "pinned" ? view.machines.filter((m) => m.pinned) : view.machines;
+}

@@ -63,6 +63,8 @@ export interface Machine {
 	/** The owner's name for the machine (#1250); null until named. */
 	displayName?: string | null;
 	node: string;
+	/** Stable machine id; Terminals links the machine page only when it exists. */
+	machineId?: string | null;
 	/** Names this machine has also answered to, freshest first (#393). */
 	aka?: string[];
 	placement?: string;
@@ -167,6 +169,8 @@ export type TileTone = "attached" | "connected" | "online" | "offline";
 
 export interface MachineTile {
 	node: string;
+	/** The machine page is `/terminals/machines/<machineId>`; null when the node reports none. */
+	machineId: string | null;
 	/** What the tile is titled: the owner's name for the machine (#1250), else its hostname. */
 	label: string;
 	tone: TileTone;
@@ -207,6 +211,7 @@ export function machineTile(m: Machine, instanceId: string, runnerNode: string, 
 	const tone: TileTone = socket ? (routesHere ? "attached" : "connected") : m.connected ? "online" : "offline";
 	return {
 		node: m.node,
+		machineId: m.machineId ?? null,
 		label: m.displayName || m.node,
 		tone,
 		// The word says which fact it means. "Attached" is a claim about routing and is reserved for
@@ -234,6 +239,34 @@ export function machineTile(m: Machine, instanceId: string, runnerNode: string, 
 		alerts: (m.resources?.warnings ?? []).map(warningHead),
 		outdated: !!m.runnerBehind?.length,
 	};
+}
+
+/**
+ * What this instance's Runner card shows (#1594): the ONE machine it is pinned to in detail, and
+ * every other machine (online or not, no dedupe) only as a count and a compact choice. The fleet
+ * belongs on Terminals. Unpinned, there is no pinned machine and every machine is "other".
+ */
+export function runnerCardView(
+	machines: readonly Machine[],
+	runnerNode: string,
+	instanceId: string,
+	detail: readonly NodeDetail[] = [],
+	resolvedNode?: string | null,
+): { pinned: MachineTile | null; others: MachineTile[]; all: MachineTile[] } {
+	const all = machinesToShow(machines, runnerNode, instanceId, detail).map((m) => machineTile(m, instanceId, runnerNode, resolvedNode));
+	const pinned = all.find((t) => t.pinned) ?? null;
+	return { pinned, others: all.filter((t) => t !== pinned), all };
+}
+
+/** "4 other machines" / "1 other machine". */
+export function otherMachinesText(n: number): string {
+	return `${n} other machine${n === 1 ? "" : "s"}`;
+}
+
+/** The compact "Change machine" row: no alerts or health, just up/down and whether this agent is attached. */
+export function compactMachineStatus(t: MachineTile): string {
+	if (t.tone === "offline") return "Offline";
+	return t.tone === "attached" ? "Online · attached to this agent" : "Online";
 }
 
 /**

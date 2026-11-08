@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import { notificationsResponse, NOTIFICATION_VOCABULARY } from "./notification-fixtures";
 import { installHistoryRoutes, LOCAL_BROWSER_INSTANCE } from "./activity-history-mock";
+import { installFleetRoutes } from "./runner-fleet-mock";
 
 const API = "https://api.proagentstore.online";
 const TEST_TOKEN = "test-pags-token";
@@ -3522,7 +3523,7 @@ async function measureOverflow(page: Page) {
  * Scout (`local_browser`, `sourceMode: gmail`) and a coding agent fill the Agent, Browser and Automation sub-tabs with the
  * content they exist for, which the default fixture never renders.
  */
-const SETTINGS_SWEEP_FIXTURES: Array<{ name: string; instances: Array<Record<string, unknown>>; subtabs: string[]; mock?: OpsMockOptions }> = [
+const SETTINGS_SWEEP_FIXTURES: Array<{ name: string; instances: Array<Record<string, unknown>>; subtabs: string[]; mock?: OpsMockOptions; setup?: (page: Page) => Promise<void> }> = [
 	{
 		name: "Gmail Scout",
 		instances: [{ id: "inst-1", agent_id: "agent-1", name: "Gmail Job Search Scout", status: "active", slug: "job-search-scout", category: "productivity", icon_bg: "#7c3aed", sourceMode: "gmail", capabilities: { surfaces: ["chat", "settings"], runtime: "local_browser" } }],
@@ -3532,6 +3533,13 @@ const SETTINGS_SWEEP_FIXTURES: Array<{ name: string; instances: Array<Record<str
 		name: "coding agent",
 		instances: [{ id: "inst-1", agent_id: "a-coder", name: "pags platform", agentName: "Repo Coder", status: "active", slug: "coder", category: "developer", icon_bg: "#0f766e", capabilities: { surfaces: ["coding"], runtime: "coding" } }],
 		subtabs: ["agent", "automation", "notifications", "instructions", "general"],
+	},
+	// Five machines, one pinned: the Runner card's one machine in detail and the count line (#1594). The default fixture has one runner.
+	{
+		name: "five machines",
+		instances: [{ id: "inst-1", agent_id: "agent-1", name: "Job Assistant", status: "active", slug: "job-assistant", category: "productivity", icon_bg: "#7c3aed", capabilities: { surfaces: ["apply"], runtime: "browser", workflow: "apply" } }],
+		subtabs: ["automation"],
+		setup: (page) => installFleetRoutes(page),
 	},
 	// Voice and translation overridden on the server: General shows both forms (#1599). The other fixtures show the lines.
 	{
@@ -3598,6 +3606,7 @@ test.describe("mobile — no horizontal overflow (regression guard for the missi
 				test(`no horizontal scroll at ${width}px — Settings ${subtab} (${fixture.name})`, async ({ page }) => {
 					await page.setViewportSize({ width, height: 812 });
 					await mockSignedInConsole(page, { instances: fixture.instances, ...fixture.mock });
+					await fixture.setup?.(page);
 					await page.goto(`/console/instances/inst-1/settings?subtab=${subtab}`);
 					await page.waitForLoadState("networkidle");
 					await page.locator("main").waitFor();
@@ -4662,6 +4671,7 @@ test.describe("mobile — every control clears the 24px minimum target (#389)", 
 			test(`no target under ${MIN_TARGET}px on Settings ${subtab} (${fixture.name})`, async ({ page }) => {
 				await page.setViewportSize({ width: 390, height: 812 });
 				await mockSignedInConsole(page, { instances: fixture.instances, ...fixture.mock });
+				await fixture.setup?.(page);
 				await page.goto(`/console/instances/inst-1/settings?subtab=${subtab}`);
 				await page.waitForLoadState("networkidle");
 				await page.locator("main").waitFor();
@@ -6193,27 +6203,29 @@ test.describe("mobile — the Runner card separates connected from attached (#53
 	}
 
 	for (const width of [320, 390]) {
-		test(`no tile claims attachment the pin excludes at ${width}px`, async ({ page }) => {
+		test(`no machine claims attachment the pin excludes at ${width}px`, async ({ page }) => {
 			await openRunnerCard(page, width);
 
-			// NON-VACUITY. The grid has to have rendered BOTH machines, or "no tile says Attached"
+			// NON-VACUITY. The card has to have rendered BOTH machines, or "nothing says Attached"
 			// is a statement about an empty page — the hollow-fixture pass this file has been caught
-			// by before (#235, #333). Split by `aria-pressed` rather than by text, because the live
-			// machine's own label NAMES the pinned one, which is the whole point of it.
-			const tiles = page.getByTestId("runner-machine-tile");
-			await expect(tiles).toHaveCount(2);
-			const pinnedTile = tiles.and(page.locator('[aria-pressed="true"]'));
-			const liveTile = tiles.and(page.locator('[aria-pressed="false"]'));
-			await expect(pinnedTile).toHaveCount(1);
-			await expect(pinnedTile).toContainText(PIN);
-			await expect(liveTile).toHaveCount(1);
-			await expect(liveTile).toContainText(LIVE);
+			// by before (#235, #333). Since #1594 the pinned machine is the card and the other one is
+			// a choice behind "Change machine", so both are read off their own testids.
+			const pinnedMachine = page.getByTestId("runner-pinned-machine");
+			await expect(pinnedMachine).toHaveCount(1);
+			await expect(pinnedMachine).toContainText(PIN);
+			await expect(pinnedMachine).toContainText("Offline");
+			await page.getByTestId("runner-change-machine").click();
+			const choices = page.getByTestId("runner-machine-choice");
+			await expect(choices).toHaveCount(2);
+			const liveChoice = choices.and(page.locator('[aria-pressed="false"]'));
+			await expect(liveChoice).toHaveCount(1);
+			await expect(liveChoice).toContainText(LIVE);
 
 			// The status line, which was always right.
 			await expect(page.getByText("Offline", { exact: true }).first()).toBeVisible();
 
-			// The machine that holds the socket says which fact that is, and where the work went.
-			await expect(liveTile).toContainText(`Connected · this agent runs on ${PIN}`);
+			// The machine that holds the socket is not described as attached: the pin sends the work elsewhere.
+			await expect(liveChoice).not.toContainText("attached");
 			// …and nothing on the card claims attachment while the card says Offline.
 			expect(await page.evaluate(() => document.body.innerText)).not.toContain("Attached");
 

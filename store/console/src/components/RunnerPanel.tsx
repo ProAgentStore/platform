@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useId, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { isTransientStatus } from "@proagentstore/coder-web";
-import { type AttachResult, canReattach, type Machine, machinesToShow, machineTile, type MoveOutcome, type NodeDetail, type PinResponse, pinnedWarning, pinOutcome, reattachOutcome, restartOutcome, type RunnerUpdateResponse, runnerReading, statusFacts, statusViewOf } from "../lib/runnerPanel";
+import { type AttachResult, canReattach, type Machine, type MoveOutcome, type NodeDetail, type PinResponse, pinnedWarning, pinOutcome, reattachOutcome, restartOutcome, type RunnerUpdateResponse, runnerCardView, runnerReading, statusFacts, statusViewOf } from "../lib/runnerPanel";
 import { type CodingDiagnostics, consoleFix, diagnosticsHeadline, orderedIssues } from "../lib/runnerDiagnostics";
 import Button from "./Button";
 import Card from "./Card";
+import RunnerMachines from "./RunnerMachines";
 
 /**
  * The Runner card: is this agent's machine up, and which machine should it be?
@@ -164,7 +165,7 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 
 	const reading = runnerReading(runtimeInfo, nodesDetail, runnerNode);
 	const warning = pinnedWarning(runnerNode, nodesDetail, resolvedNode);
-	const tiles = machinesToShow(machines, runnerNode, instanceId, nodesDetail);
+	const { pinned, others, all: tiles } = runnerCardView(machines, runnerNode, instanceId, nodesDetail, resolvedNode);
 	// Why it isn't attached, computed server-side (#237). The panel used to show only an amber
 	// "agent not attached", which is a symptom with no cause and no remedy — the CLI knew both and
 	// printed them to a terminal nobody was watching.
@@ -253,55 +254,7 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 						No machines connected yet. Run <code className="text-accent">pags up</code> on a machine — it appears here and on the <span className="text-accent">Terminals</span> page.
 					</div>
 				) : (
-					<div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-						{tiles.map((m) => {
-							const t = machineTile(m, instanceId, runnerNode, resolvedNode);
-							return (
-								<button
-									key={t.node}
-									type="button"
-									// Named so a spec can COUNT the tiles. "no tile says Attached" over a grid
-									// that rendered nothing is the hollow-fixture pass, and this grid had never
-									// rendered a tile in an e2e run before #531.
-									data-testid="runner-machine-tile"
-									onClick={() => save(t.node)}
-									aria-pressed={t.pinned}
-									title={
-										t.pinned
-											? "This agent is bound to this machine"
-											// The one tile that needs a sentence rather than a phrase: it IS connected, and
-											// that is exactly why "nothing runs here" is surprising (#531).
-											: t.tone === "connected"
-												? `This machine holds a live runner for this agent, but the agent is bound to ${runnerNode} — its work runs there. Click to move it here.`
-												: "Bind this agent to this machine"
-									}
-									className={`text-left rounded-xl border p-3 transition-colors ${t.pinned ? "border-accent bg-accent-soft" : "border-line bg-paper hover:border-accent/60"}`}
-								>
-									<div className="flex items-center gap-2 min-w-0">
-										{/* Green is reserved for "work runs here". A machine that is up but serving this
-										    agent nothing — whether it never attached, or the pin excludes it — is amber. */}
-										<span className={`w-2.5 h-2.5 rounded-full shrink-0 ${t.tone === "attached" ? "bg-success" : t.tone === "offline" ? "bg-muted-soft" : "bg-amber-500"}`} />
-										<span className="font-semibold text-sm truncate">{t.label}</span>
-										{t.pinned && <span className="ml-auto shrink-0 text-2xs font-bold uppercase tracking-wide text-accent border border-accent/40 rounded px-1.5 py-0.5">Pinned</span>}
-									</div>
-									{/* `break-words`: this line now carries a machine NAME, and a hostname is one
-									    unbreakable token — at 320px `Sergeys-Mac-mini.local` is wider than the tile. */}
-									<div className={`text-2xs mt-1 break-words ${t.tone === "attached" ? "text-success" : t.tone === "offline" ? "text-muted-soft" : "text-amber-500"}`}>{t.statusText}</div>
-									<div className="text-2xs text-muted-soft mt-0.5">{t.meta}</div>
-									{/* The names this machine used to answer to (#393). Shown rather than swallowed:
-									    pins, relay names and session rows are all still keyed by hostname, so this
-									    is what a stranded pin literally says — and it is how the user recognises
-									    their own laptop under last week's name. */}
-									{t.alsoKnownAs && <div className="text-2xs text-muted-soft mt-0.5 truncate">{t.alsoKnownAs}</div>}
-									{/* What the machine is doing (#929): a tile about to drop its relays looked like
-									    any other. The full sentences and the update button are on Terminals. */}
-									{t.health && <div className="text-2xs text-muted-soft mt-0.5">{t.health}</div>}
-									{t.alerts.length > 0 && <div className="text-2xs text-warning mt-0.5 break-words">⚠ {t.alerts.join(" · ")}</div>}
-									{t.outdated && <div className="text-2xs text-warning mt-0.5">CLI out of date — update it from Terminals</div>}
-								</button>
-							);
-						})}
-					</div>
+					<RunnerMachines pinned={pinned} others={others} onPick={save} />
 				)}
 				{/* The pin names a hostname this machine has stopped using, and the SAME machine is
 				    here under another one — so it is already serving this agent. Say it out loud
