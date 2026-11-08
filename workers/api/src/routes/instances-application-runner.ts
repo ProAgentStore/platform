@@ -27,6 +27,7 @@ import { getOwnedApplication } from "../lib/local-artifact/store.js";
 import { applicationHandoffLink, applicationReconciliationHandoffLink } from "../lib/console-links.js";
 import type { Env } from "../types.js";
 import { auxiliaryWebsiteAccess, auxiliaryRuntimeFailure } from "../lib/website-access-auxiliary.js";
+import { clipMarked } from "../lib/clip-marked.js";
 import { callRuntime, getLiveRuntime, requireOwnedInstance, runtimeJson } from "./instances-runtime.js";
 
 type C = Context<{ Bindings: Env }>;
@@ -240,7 +241,7 @@ export function registerApplicationRunnerRoutes(router: Hono<{ Bindings: Env }>)
 		if (status.reconciliationId !== reconciliation.id || status.runId !== run.id || status.applicationId !== app.id) {
 			// The Runner's own refusal (HTTP status + its message) is the only way to tell an invalid
 			// envelope (e.g. empty allowDomains) from an old CLI without this route (#1579).
-			throw new HttpError(409, `The Runner rejected this exact read-only reconciliation binding (HTTP ${res.status}${typeof status.error === "string" && status.error ? `: ${status.error.slice(0, 200)}` : ""}).`);
+			throw new HttpError(409, `The Runner rejected this exact read-only reconciliation binding (HTTP ${res.status}${typeof status.error === "string" && status.error ? `: ${clipMarked(status.error, 200)}` : ""}).`);
 		}
 		const website = await auxiliaryWebsiteAccess(c.env, uid, instanceId, "reconciliation", reconciliation.id, status);
 		if (website) return c.json({ reconciliation, runner: { state: "ended" as const }, ...website }, 409);
