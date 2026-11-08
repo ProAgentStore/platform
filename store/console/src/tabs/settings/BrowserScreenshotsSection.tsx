@@ -44,7 +44,10 @@ export default function BrowserScreenshotsSection({ instanceId }: { instanceId: 
 	return (
 		<Card className="mb-3 sm:mb-4" data-testid="browser-screenshot-settings">
 			<h3 className="text-base font-bold mb-1">Browser screenshots</h3>
-			<p className="text-sm text-muted mb-3">{data.explained}</p>
+			<details className="text-xs text-muted mb-3">
+				<summary className="cursor-pointer font-semibold min-h-6 inline-flex items-center">How screenshots work</summary>
+				<p className="mt-1">{data.explained}</p>
+			</details>
 			<label className="flex gap-2 items-center text-sm font-semibold">
 				<input type="checkbox" checked={data.enabled} disabled={saving} onChange={(e) => void save({ enabled: e.target.checked })} data-testid="bs-enabled" />
 				Capture screenshots for run replay
@@ -54,7 +57,7 @@ export default function BrowserScreenshotsSection({ instanceId }: { instanceId: 
 				<input type="checkbox" checked={data.blurFormFields !== false} disabled={saving} onChange={(e) => void save({ blurFormFields: e.target.checked })} data-testid="bs-blur-form-fields" />
 				Blur form fields
 			</label>
-			<p className="text-xs text-muted mt-2">When blur is off, screenshots include visible form values in your owner-only replay. This applies to future runs. The site's password bullets stay as shown.</p>
+			<p className="text-xs text-muted mt-2">When blur is off, screenshots include visible form values in your owner-only replay; the site's password bullets stay as shown.</p>
 			{msg && <p role="status" className="text-xs mt-2">{msg}</p>}
 		</Card>
 	);

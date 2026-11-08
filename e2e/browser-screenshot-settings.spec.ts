@@ -60,7 +60,7 @@ test("mobile — screenshot capture and form blur save independently at 375px", 
 	await expect(blur).toBeChecked();
 	expect(puts).toEqual([{ blurFormFields: false }, { enabled: false }, { blurFormFields: true }, { enabled: true }]);
 	await expect(card).toContainText("visible form values in your owner-only replay");
-	await expect(card).toContainText("The site's password bullets stay as shown");
+	await expect(card).toContainText("the site's password bullets stay as shown");
 	await card.scrollIntoViewIfNeeded();
 	const box = await card.boundingBox();
 	expect(box && box.x >= 0 && box.x + box.width <= 375).toBe(true);

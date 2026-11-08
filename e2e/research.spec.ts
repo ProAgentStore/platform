@@ -102,17 +102,19 @@ async function mockResearchAgent(page: Page, opts: { pause?: Pause; failure?: Fa
 		if (path === `${base}/settings` && method === "PUT") {
 			const body = route.request().postDataJSON() as { access?: { allowDomains?: string[] } };
 			recorded.settingsPuts.push(body);
-			state.allowDomains = body.access?.allowDomains ?? [];
+			// A partial patch: a body without `access` leaves the lists as they were (#1593).
+			if (body.access) state.allowDomains = body.access.allowDomains ?? [];
 			return json({ settings: settings().settings, effective: null });
 		}
 		if (path === `${base}/settings`) return json(settings());
 		// #1603: the effective browser settings the own-profile warning reads.
 		if (path === "/v1/instances/inst-1/browser-settings" && opts.ownProfile === "fail") return json({ error: "boom" }, 500);
-		if (path === "/v1/instances/inst-1/browser-settings" && opts.ownProfile) {
-			const managed = opts.ownProfile !== "legacy";
-			const src = opts.ownProfile === "instance" ? "instance" : opts.ownProfile === "agent" ? "agent" : "runner";
+		if (path === "/v1/instances/inst-1/browser-settings") {
+			const own = opts.ownProfile ?? "legacy";
+			const managed = own !== "legacy";
+			const src = own === "instance" ? "instance" : own === "agent" ? "agent" : "runner";
 			const v = { mode: null, engine: managed ? "chrome" : null, profile: null, websiteAccess: null };
-			return json({ ...v, engine: opts.ownProfile === "instance" ? "chrome" : null, agentDefaults: v, effective: v, launchPath: managed ? "managed" : "legacy", sources: { mode: "runner", engine: src, profile: "runner", websiteAccess: "runner" }, requiredCli: "0.4.198", explained: "" });
+			return json({ ...v, engine: own === "instance" ? "chrome" : null, agentDefaults: v, effective: v, launchPath: managed ? "managed" : "legacy", sources: { mode: "runner", engine: src, profile: "runner", websiteAccess: "runner" }, requiredCli: "0.4.198", explained: "" });
 		}
 		if (path === `${base}/consent` && method === "PUT") {
 			recorded.consentPuts.push(route.request().postDataJSON());
@@ -193,13 +195,23 @@ test.describe("Research tab — local browser research (#946, #947)", () => {
 		await expect(page.getByRole("list", { name: "Setup checklist" })).toContainText("Task engine signed in");
 		await expect(page.getByRole("list", { name: "Setup checklist" })).toContainText("claude was signed in (subscription)");
 
-		// 2. Settings: allow one site. Research-only is the only mode there is to choose.
+		// 2. Settings: allow one site, in Browser settings (#1593). Research-only is the only mode there is to choose.
 		await page.goto("/console/instances/inst-1/settings?subtab=agent");
 		const section = page.locator("div", { has: page.getByRole("heading", { name: "Research", exact: true }) }).last();
-		await section.getByLabel(/Allowed sites/).fill("seek.com.au");
+		await expect(section.getByLabel(/Allowed sites/)).toHaveCount(0);
 		await section.getByRole("button", { name: "Save research settings" }).click();
 		await expect(section.getByText("Saved.")).toBeVisible();
-		expect(recorded.settingsPuts.at(-1)).toMatchObject({ access: { allowDomains: ["seek.com.au"], denyDomains: [] } });
+		// Saving Research never carries the site lists.
+		expect(recorded.settingsPuts.at(-1)).not.toHaveProperty("access");
+		await page.goto("/console/instances/inst-1/settings?subtab=browser");
+		const lists = page.getByTestId("legacy-website-lists");
+		await lists.getByLabel(/Allowed sites/).fill("seek.com.au");
+		await lists.getByRole("button", { name: "Save site lists" }).click();
+		await expect(lists.getByText("Saved.")).toBeVisible();
+		// Saving the lists carries the lists alone.
+		expect(recorded.settingsPuts.at(-1)).toEqual({ access: { allowDomains: ["seek.com.au"], denyDomains: [] } });
+		await page.reload();
+		await expect(page.getByTestId("legacy-website-lists").getByLabel(/Allowed sites/)).toHaveValue("seek.com.au");
 
 		// 3. Start a run.
 		await page.goto("/console/instances/inst-1/research");

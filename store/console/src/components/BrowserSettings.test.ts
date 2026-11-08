@@ -5,7 +5,8 @@ import { BrowserModeSettings } from "../tabs/settings/BrowserModeSection";
 import { browserCapabilitiesPatch, type BrowserSettingsView } from "../lib/browserSettings";
 import { BrowserLaunchDetails, type BrowserLaunchReceipt } from "./BrowserSessionReceipt";
 
-const view = (overrides: Partial<BrowserSettingsView> = {}) => renderToStaticMarkup(createElement(BrowserModeSettings, {
+const view = (overrides: Partial<BrowserSettingsView> = {}, extra: { legacyLists?: boolean } = {}) => renderToStaticMarkup(createElement(BrowserModeSettings, {
+	...extra,
 	data: { mode: null, engine: null, profile: null, agentDefaults: { mode: null, engine: null, profile: null }, effective: { mode: null, engine: null, profile: null }, launchPath: "legacy", sources: { mode: "runner", engine: "runner", profile: "runner" }, requiredCli: "0.4.196", explained: "Browser settings.", ...overrides },
 	saving: false, message: "", onChange: () => undefined,
 }));
@@ -62,5 +63,28 @@ describe("website access belongs to the agent browser settings", () => {
 		expect(html).toContain("Save website list");
 		expect(html).toContain("jobs.example.com\nlogin.example.com");
 		expect(html).toContain("separate websites");
+	});
+});
+
+describe("one Website access block, one sentence of help (#1593)", () => {
+	const set = { websiteAccess: { mode: "ask_once" as const, domains: [] }, effective: { mode: null, engine: null, profile: null, websiteAccess: { mode: "ask_once" as const, domains: [] } } };
+	const LISTS = "Used while website access is the agent/workflow default";
+	it("shows the older site lists, between the mode and Remembered websites, only for a local browser while no mode is set", () => {
+		const html = view({}, { legacyLists: true, instanceId: "inst-1" } as never);
+		expect(html).toContain(LISTS);
+		expect(html.indexOf("Website access")).toBeLessThan(html.indexOf(LISTS));
+		expect(html.indexOf(LISTS)).toBeLessThan(html.indexOf("Remembered websites"));
+	});
+	it("hides them once a mode is set, and for an agent that only takes screenshots", () => {
+		expect(view(set, { legacyLists: true, instanceId: "inst-1" } as never)).not.toContain(LISTS);
+		expect(view({}, { instanceId: "inst-1" } as never)).not.toContain(LISTS);
+		expect(view(set, { instanceId: "inst-1" } as never)).toContain("Remembered websites");
+	});
+	it("puts the long explanations behind one disclosure and no longer prints the CLI sentence unconditionally", () => {
+		const html = view({ websiteAccess: { mode: "ask_once", domains: [] } });
+		expect(html).toContain("<details");
+		expect(html).toContain("How browser settings work");
+		expect(html).not.toContain("These saved settings require PAGS runner");
+		expect(html.match(/<summary/g)).toHaveLength(1);
 	});
 });

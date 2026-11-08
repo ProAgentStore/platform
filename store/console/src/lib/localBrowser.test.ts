@@ -4,7 +4,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { authModeChoices, engineAuthLabel, formFromSettings, pageSteps, parseDomains, patchFromForm, pauseBanner, reviewLabel, runPhases, runProblem, setupChecklist } from "./localBrowser";
+import { accessPatchFromForm, authModeChoices, engineAuthLabel, formFromSettings, pageSteps, parseDomains, patchFromForm, pauseBanner, reviewLabel, runPhases, runProblem, setupChecklist } from "./localBrowser";
 import { visibleSurfaces } from "./surfaces";
 import type { LocalBrowserRunView, LocalBrowserTraceEvent } from "./types";
 
@@ -157,12 +157,15 @@ describe("settings form", () => {
 			authMode: null,
 			workspace: { kind: "path", path: "~/jobs" },
 			browserProfile: null,
-			access: { allowDomains: ["seek.com.au"], denyDomains: [] },
 			limits: { maxMinutes: null, maxPages: 10, maxActions: null, maxConcurrent: null },
 			collection: { name: "leads", keyField: "url" },
 			brief: null,
 		});
 		expect(patchFromForm({ ...form, workspace: "scratch", collection: "" })).toMatchObject({ workspace: null, collection: null });
+		// #1593: the site lists are saved from Browser settings, so saving Research never rewrites them.
+		expect(patchFromForm(form)).not.toHaveProperty("access");
+		expect(accessPatchFromForm(form)).toEqual({ access: { allowDomains: ["seek.com.au"], denyDomains: [] } });
+		expect(accessPatchFromForm({ allowDomains: "A.com, b.com\nA.com", denyDomains: "" })).toEqual({ access: { allowDomains: ["a.com", "b.com"], denyDomains: [] } });
 	});
 
 	it("carries the saved brief (#1065): stored text round-trips trimmed, an emptied box clears it", () => {

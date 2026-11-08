@@ -301,7 +301,7 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 			<>
 				{isLocalBrowser && <Section id="browser-verification"><BrowserVerificationSection instanceId={instanceId} /></Section>}
 				{takesScreenshots && <Section id="browser-screenshots"><BrowserScreenshotsSection instanceId={instanceId} /></Section>}
-				{takesScreenshots && <Section id="browser-mode"><BrowserModeSection instanceId={instanceId} /></Section>}
+				{takesScreenshots && <Section id="browser-mode"><BrowserModeSection instanceId={instanceId} legacyLists={isLocalBrowser} /></Section>}
 			</>
 		),
 		automation: (

@@ -167,3 +167,39 @@ test("template browser and profile save only their own capability fields", async
 	await expect(card.getByRole("combobox", { name: "Browser profile", exact: true })).toHaveValue("persistent");
 	await expect(card.getByRole("combobox", { name: "Browser mode", exact: true })).toHaveValue("headless");
 });
+
+test.describe("the CLI-version warning (#1593)", () => {
+	const nodes = (runnerVersion?: string) => ({ nodes: [{ node: "mac", machineId: "m-1", connected: true, runnerVersion }] });
+	const route = async (page: Page, version?: string) => {
+		await page.route(`${API}/v1/instances/inst-1/runner-node`, (r) => r.fulfill({ json: { runnerNode: "mac", nodes: ["mac"] } }));
+		await page.route(`${API}/v1/terminals/nodes`, (r) => r.fulfill({ json: nodes(version) }));
+	};
+	test("an older pinned runner shows the state and a link to its machine page; a keyboard user can follow it", async ({ page }) => {
+		await mock(page);
+		await route(page, "0.4.150");
+		await page.goto("/console/instances/inst-1/settings?subtab=browser");
+		const warning = page.getByTestId("browser-cli-warning");
+		await expect(warning).toContainText("Runner 0.4.150 is older than 0.4.198 · Update from Terminals");
+		await expect(warning.getByRole("link", { name: "Update from Terminals" })).toHaveAttribute("href", "/console/terminals/machines/m-1");
+	});
+	test("an unknown version warns, a current one does not", async ({ page }) => {
+		await mock(page);
+		await route(page);
+		await page.goto("/console/instances/inst-1/settings?subtab=browser");
+		await expect(page.getByTestId("browser-cli-warning")).toContainText("Runner version unknown · Update from Terminals");
+		await page.unroute(`${API}/v1/terminals/nodes`);
+		await page.route(`${API}/v1/terminals/nodes`, (r) => r.fulfill({ json: nodes("0.4.198") }));
+		await page.reload();
+		await expect(page.getByTestId("browser-settings-help")).toBeAttached();
+		await expect(page.getByTestId("browser-cli-warning")).toHaveCount(0);
+	});
+	test("the help disclosure opens from the keyboard", async ({ page }) => {
+		await mock(page);
+		await page.goto("/console/instances/inst-1/settings?subtab=browser");
+		const help = page.getByTestId("browser-settings-help");
+		await expect(help.getByText("Playwright WebKit is not the Safari application")).toBeHidden();
+		await help.getByText("How browser settings work").focus();
+		await page.keyboard.press("Enter");
+		await expect(help.getByText("Playwright WebKit is not the Safari application")).toBeVisible();
+	});
+});

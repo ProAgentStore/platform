@@ -3518,6 +3518,18 @@ async function measureOverflow(page: Page) {
 	});
 }
 
+/** The Browser sub-tab's reads (#1593): an effective browser view with no website access, the older site lists, and the fleet's pin (CLI 0.4.40) against a newer requiredCli. */
+async function installBrowserSubtabRoutes(page: Page) {
+	await installFleetRoutes(page);
+	const json = (data: unknown) => ({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+	const long = "a-very-long-job-board-domain.example.com.au";
+	const v = { mode: null, engine: null, profile: null, websiteAccess: null };
+	await page.route("**/v1/instances/inst-1/browser-settings", (route) => route.fulfill(json({ ...v, agentDefaults: v, effective: v, launchPath: "legacy", sources: { mode: "runner", engine: "runner", profile: "runner", websiteAccess: "runner" }, requiredCli: "0.4.230", explained: "Browser settings." })));
+	await page.route("**/v1/instances/inst-1/website-grants", (route) => route.fulfill(json({ domains: [long], decisions: [{ hostname: long, decision: "allow" }] })));
+	await page.route("**/v1/instances/inst-1/local-browser/settings", (route) => route.fulfill(json({ settings: { access: { allowDomains: [long], denyDomains: ["blocked.example.com"] } }, effective: null, problem: null, capability: { engines: ["claude"], mode: "research_only", subscriptionOnly: true, limits: { maxMinutes: 15, maxPages: 30, maxActions: 200, maxConcurrent: 1 }, allowDomains: [long], denyDomains: [] }, runnerNode: "Mac-mini.local" })));
+	await page.route("**/v1/instances/inst-1/local-browser/consent", (route) => route.fulfill(json({ consent: [{ id: "c1", scope: "navigate", domain: long, decision: "allow", decidedAt: 1, expiresAt: null }] })));
+}
+
 /**
  * Settings sub-tab URLs for the two sweeps below (#1589). The default fixture instance (runtime `browser`) shows all six; a Gmail
  * Scout (`local_browser`, `sourceMode: gmail`) and a coding agent fill the Agent, Browser and Automation sub-tabs with the
@@ -3541,6 +3553,20 @@ const SETTINGS_SWEEP_FIXTURES: Array<{ name: string; instances: Array<Record<str
 		subtabs: ["automation"],
 		setup: (page) => installFleetRoutes(page),
 	},
+	// Browser sub-tab with everything on it (#1593): site lists with a long host and a decision, remembered websites, and the CLI warning
+	// (the fleet's pinned runner is older than requiredCli). `local_browser` takes the lists; `local_apply` takes screenshots only.
+	{
+		name: "local_browser, old runner, site lists",
+		instances: [{ id: "inst-1", agent_id: "agent-1", name: "Job Search Scout", status: "active", slug: "scout", category: "productivity", icon_bg: "#7c3aed", capabilities: { surfaces: ["chat", "settings"], runtime: "local_browser" } }],
+		subtabs: ["browser"],
+		setup: (page) => installBrowserSubtabRoutes(page),
+	},
+	{
+		name: "local_apply, old runner",
+		instances: [{ id: "inst-1", agent_id: "agent-1", name: "Application Runner", status: "active", slug: "apply-runner", category: "productivity", icon_bg: "#7c3aed", capabilities: { surfaces: ["apply"], runtime: "local_apply" } }],
+		subtabs: ["browser"],
+		setup: (page) => installBrowserSubtabRoutes(page),
+	},
 	// Voice and translation overridden on the server: General shows both forms (#1599). The other fixtures show the lines.
 	{
 		name: "voice and translation overridden",
@@ -3549,6 +3575,19 @@ const SETTINGS_SWEEP_FIXTURES: Array<{ name: string; instances: Array<Record<str
 		mock: { voiceOverride: true, trOverride: true },
 	},
 ];
+
+test("the Browser sub-tab sweep fixtures really render the lists and the CLI warning, and only for local_browser (#1593)", async ({ page }) => {
+	for (const [fixture, lists] of [[SETTINGS_SWEEP_FIXTURES.find((f) => f.name.startsWith("local_browser, old"))!, true], [SETTINGS_SWEEP_FIXTURES.find((f) => f.name.startsWith("local_apply"))!, false]] as const) {
+		await mockSignedInConsole(page, { instances: fixture.instances });
+		await fixture.setup?.(page);
+		await page.goto("/console/instances/inst-1/settings?subtab=browser");
+		await expect(page.getByTestId("browser-cli-warning")).toContainText("Runner 0.4.40 is older than 0.4.230 · Update from Terminals");
+		await expect(page.getByTestId("legacy-website-lists")).toHaveCount(lists ? 1 : 0);
+		if (lists) await expect(page.getByTestId("legacy-website-lists").getByLabel(/Never visit/)).toHaveValue("blocked.example.com");
+		await expect(page.getByText("Remembered websites")).toBeVisible();
+		await page.unrouteAll();
+	}
+});
 
 /**
  * Activity with History open and every panel seeded (#1590): a `local_browser` fixture, so the takeovers and the last

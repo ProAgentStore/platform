@@ -4,7 +4,6 @@ import Button from "../../components/Button";
 import Card from "../../components/Card";
 import LoadFailed from "../../components/LoadFailed";
 import LocalBrowserProfileFields from "./LocalBrowserProfileFields";
-import LocalBrowserWebsiteFields from "./LocalBrowserWebsiteFields";
 import { type SettingsForm, authModeChoices, engineAuthLabel, formFromSettings, patchFromForm, TONE_CLASS } from "../../lib/localBrowser";
 import type { BrowserSettingsView } from "../../lib/browserSettings";
 import type { LocalBrowserConsentEntry, LocalBrowserConsentList, LocalBrowserRunList, LocalBrowserSettingsResponse, LocalBrowserSettingsSaved } from "../../lib/types";
@@ -93,7 +92,6 @@ export default function LocalBrowserSection({ instanceId }: { instanceId: string
 		}
 	};
 	const profileAllowed = consent.some((c) => c.scope === "signed_in_profile" && c.decision === "allow");
-	const sites = consent.filter((c) => c.scope === "navigate");
 	const auth = engineAuthLabel(lastAuth);
 
 	return (
@@ -169,8 +167,6 @@ export default function LocalBrowserSection({ instanceId }: { instanceId: string
 				onProfile={(browserProfile) => set({ browserProfile })}
 				onConsent={(allow) => decide({ scope: "signed_in_profile", decision: allow ? "allow" : null })}
 			/>
-
-			<LocalBrowserWebsiteFields websiteAccess={data.effective?.browserWebsiteAccess} allowDomains={cap.allowDomains} form={form} sites={sites} set={set} decide={(body) => void decide(body)} />
 
 			<fieldset className="mb-3">
 				<legend className="text-xs font-semibold mb-1">Limits <span className="font-normal text-muted">Empty = the agent's default; never above its ceiling.</span></legend>

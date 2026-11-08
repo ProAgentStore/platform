@@ -283,8 +283,13 @@ export function formFromSettings(s: LocalBrowserSettingsValues): SettingsForm {
 	};
 }
 
+/** The site lists alone, saved from Browser settings (#1593). The endpoint takes a partial patch. */
+export function accessPatchFromForm(f: Pick<SettingsForm, "allowDomains" | "denyDomains">): { access: { allowDomains: string[]; denyDomains: string[] } } {
+	return { access: { allowDomains: parseDomains(f.allowDomains), denyDomains: parseDomains(f.denyDomains) } };
+}
+
 /**
- * The PATCH the form describes. An empty field is sent as `null` — back to the agent's default —
+ * The PATCH the research form describes. An empty field is sent as `null` — back to the agent's default —
  * so a cleared box means "use the default", never an empty value the server would refuse.
  */
 export function patchFromForm(f: SettingsForm): Record<string, unknown> {
@@ -294,7 +299,6 @@ export function patchFromForm(f: SettingsForm): Record<string, unknown> {
 		authMode: f.authMode || null,
 		workspace: f.workspace === "path" ? { kind: "path", path: f.workspacePath.trim() } : null,
 		browserProfile: f.browserProfile === "default" ? "default" : null,
-		access: { allowDomains: parseDomains(f.allowDomains), denyDomains: parseDomains(f.denyDomains) },
 		limits: { maxMinutes: num(f.maxMinutes), maxPages: num(f.maxPages), maxActions: num(f.maxActions), maxConcurrent: num(f.maxConcurrent) },
 		collection: f.collection.trim() ? { name: f.collection.trim(), ...(f.keyField.trim() ? { keyField: f.keyField.trim() } : {}) } : null,
 		brief: f.brief.trim() || null,
