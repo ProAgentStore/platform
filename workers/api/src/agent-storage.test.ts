@@ -392,7 +392,7 @@ describe("AgentStorageEngine", () => {
 });
 
 describe("job lead work key re-derivation (#1606)", () => {
-	const fields = [{ name: "url", type: "string" as const }, { name: "work_key", type: "string" as const }];
+	const fields = [{ name: "url", type: "string" as const }, { name: "work_key", type: "string" as const }, { name: "status", type: "string" as const }];
 	it("moves a key the current rules no longer derive, to exactly the current value, and refuses any other change", async () => {
 		const engine = new AgentStorageEngine(mockDoStorage(), null, null, null, "agent-1", null);
 		await engine.collectionCreate("job_leads", fields);
@@ -403,5 +403,20 @@ describe("job lead work key re-derivation (#1606)", () => {
 		expect(fixed?.data.work_key).toBe("pageup:careers.x.example:123456");
 		// Now current: it can no longer be moved.
 		await expect(engine.recordUpdate("job_leads", lead.id, { work_key: "url:https://elsewhere.example/a" })).rejects.toThrow(/immutable/);
+	});
+
+	it("lets a stale-keyed lead take an unrelated patch and keeps its stored key (#1617)", async () => {
+		const engine = new AgentStorageEngine(mockDoStorage(), null, null, null, "agent-1", null);
+		await engine.collectionCreate("job_leads", fields);
+		const url = "http://careers.x.example/job/Dev/123456?eid=1";
+		const lead = await engine.recordInsert("job_leads", { url, work_key: `url:${url}` });
+		const updated = await engine.recordUpdate("job_leads", lead.id, { status: "archived" });
+		expect(updated?.data.status).toBe("archived");
+		expect(updated?.data.work_key).toBe(`url:${url}`);
+		// A url change to a different job is still refused.
+		await expect(engine.recordUpdate("job_leads", lead.id, { url: "https://other.example/a/b" })).rejects.toThrow(/immutable/);
+		// And the explicit re-key still works afterwards.
+		const fixed = await engine.recordUpdate("job_leads", lead.id, { work_key: "pageup:careers.x.example:123456" });
+		expect(fixed?.data.work_key).toBe("pageup:careers.x.example:123456");
 	});
 });

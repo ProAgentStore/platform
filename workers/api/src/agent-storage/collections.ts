@@ -256,9 +256,10 @@ export function withCollections<TBase extends AgentStorageBaseCtor & GConstructo
 				const heldKey = typeof existing.data.work_key === "string" ? existing.data.work_key : workKeyForLead(existing.data);
 				const nextKey = workKeyForLead(merged);
 				// #1606 repair: a key the CURRENT identity rules no longer derive from the stored lead may be
-				// re-derived (explicitly, to exactly the current value). Any other change stays refused.
+				// re-derived (explicitly, to exactly the current value). A patch that changes the lead's identity stays
+				// refused; a stale stored key alone does not block unrelated updates (#1617).
 				const rekey = !!heldKey && !!nextKey && heldKey !== nextKey && data.work_key === nextKey && workKeyForLead(existing.data) !== heldKey;
-				if (!rekey && heldKey && nextKey && heldKey !== nextKey) throw new Error("A job lead's work_key is immutable; create a distinct lead instead.");
+				if (!rekey && nextKey && workKeyForLead(existing.data) !== nextKey) throw new Error("A job lead's work_key is immutable; create a distinct lead instead.");
 				if (!rekey && heldKey && data.work_key !== undefined && data.work_key !== heldKey) throw new Error("A job lead's work_key is immutable.");
 				if (heldKey && !rekey) merged.work_key = heldKey;
 				if (rekey && nextKey) {
