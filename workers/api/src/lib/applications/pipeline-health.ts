@@ -138,7 +138,7 @@ export function pipelineHealthFrom(input: { pipeline: { scouts: string[]; tailor
 		problems.push({ code: "jobs_not_connected", instanceId: j.instanceId, message: `${j.role} ${j.instanceId} has a Jobs grant but cannot reach the Jobs app (${j.reason.replace(/_/g, " ")}), so nothing is sent to it. Connect jobs.proappstore.online in Permissions & Connections → MCP connections.` });
 	}
 	for (const q of input.engineQuota ?? []) {
-		problems.push({ code: "engine_quota_exhausted", instanceId: q.instanceId, message: `Scout ${q.instanceId}: ${q.waiting} lead${q.waiting === 1 ? " waits" : "s wait"} for browser verification because its engine is out of quota. ${q.detail ?? "Switch the engine in Settings → Local browser research, or wait for the reset."}` });
+		problems.push({ code: "engine_quota_exhausted", instanceId: q.instanceId, message: `Scout ${q.instanceId}: ${q.waiting} lead${q.waiting === 1 ? " waits" : "s wait"} for browser verification because its engine is out of quota. ${q.detail ?? "Switch the engine in Settings → Agent (Research), or wait for the reset."}` });
 	}
 	const sources: SourceHealth[] = input.sources.map((s) => {
 		const g = s.gmail;

@@ -597,7 +597,7 @@ describe("a lead closed only for site consent is recovered once the site is allo
 	it("before the site is allowed, Verify now says what to do and changes nothing", async () => {
 		await closeForConsent();
 		const out = await verifyLeadNow(env, "s1", "u1", "lead-1", 2_000 + 20 * 60_000);
-		expect(out).toEqual({ error: expect.stringMatching(/www\.seek\.com\.au is not allowed yet — allow it in Settings → Local browser research \(or set_local_browser_consent\)/), status: 409 });
+		expect(out).toEqual({ error: expect.stringMatching(/www\.seek\.com\.au is not allowed yet — allow it in Settings → Agent \(Research\) \(or set_local_browser_consent\)/), status: 409 });
 		expect(row()).toMatchObject({ state: "unverifiable", closed_reason: "consent_expired" });
 		expect(lead().status).toBe("unverifiable");
 	});
@@ -1061,7 +1061,7 @@ describe("an engine usage limit or an overloaded runner is not a verification at
 		expect(await raw()).toMatchObject({ state: "awaiting", attempts: 0, last_outcome: "engine_quota", next_attempt_at: RESET });
 		expect(lead().status).toBe("awaiting_browser_verification");
 		expect(pushes).toHaveLength(1);
-		expect(pushes[0].body).toMatch(/codex engine hit its usage limit.*2026-11-11T17:38:00.000Z.*switch the engine in Local browser research settings/i);
+		expect(pushes[0].body).toMatch(/codex engine hit its usage limit.*2026-11-11T17:38:00.000Z.*switch the engine in Settings → Agent \(Research\)/i);
 		// Nothing is due before the reset; at the reset the same lead is dispatched again, as a new run.
 		expect((await runLeadBrowserVerification(env, RESET - 1)).dispatched).toBe(0);
 		expect((await runLeadBrowserVerification(env, RESET)).dispatched).toBe(2);

@@ -179,7 +179,7 @@ export default function ResearchRunView({ instanceId, runId }: { instanceId: str
 				<Card>
 					<h3 className="text-base font-bold mb-1">Findings</h3>
 					<p className="text-xs text-muted mb-3">
-						Nothing is stored until you save it{run.policy.collection ? ` — saved findings go to “${run.policy.collection.name}”` : ". Set a results collection in Settings to save findings"}.
+						Nothing is stored until you save it{run.policy.collection ? ` — saved findings go to “${run.policy.collection.name}”` : ". Set a results collection in Settings → Agent (Research) to save findings"}.
 					</p>
 					{run.result?.summary && <MarkdownText text={run.result.summary} className="text-sm mb-3" />}
 					{findings.length === 0 && <p className="text-sm text-muted">No findings.</p>}

@@ -16,7 +16,7 @@ describe("own-profile choice on the managed launch path (#1603)", () => {
 		const html = render(instanceSet);
 		expect(html).toContain("Your own profile is not used while a browser or profile is set in Browser settings");
 		expect(html).toContain("Open Browser settings");
-		expect(html).toContain('href="/instances/inst-1/settings"');
+		expect(html).toContain('href="/instances/inst-1/settings?subtab=browser"');
 		expect(html).not.toContain(CHECKBOX);
 	});
 	it("uses the agent-default wording when only the agent's defaults make it managed", () => {

@@ -117,6 +117,62 @@ describe("Brain and Coding stay two sections, and the engine card is not inside 
 	});
 });
 
+/** The Agent sub-tab for one fixture's gating booleans (#1592). */
+function renderAgent(gates: { isCoding?: boolean; isLocalBrowser?: boolean; isGmailScout?: boolean; withFields?: boolean }) {
+	return renderToStaticMarkup(
+		createElement(
+			MemoryRouter,
+			{ initialEntries: ["/?subtab=agent"] },
+			createElement(SettingsTab, {
+				instanceId: "inst-1",
+				instanceName: "Agent",
+				isApply: false,
+				isCoding: gates.isCoding ?? false,
+				isRepo: gates.isCoding ?? false,
+				isLocalBrowser: gates.isLocalBrowser ?? false,
+				isGmailScout: gates.isGmailScout ?? false,
+				takesScreenshots: false,
+				caps: gates.isCoding ? { runtime: "coding", surfaces: ["coding"] } : { runtime: "local_browser", surfaces: ["chat", "settings"] },
+				onUnsubscribe: () => undefined,
+			}),
+		),
+	);
+}
+
+/** Where each marker first appears in the markup, in the order given; fails if any is missing. */
+function orderOf(html: string, ids: string[]) {
+	const at = ids.map((id) => html.indexOf(`data-testid="${id}"`));
+	expect(at.every((n) => n >= 0), `missing in ${ids.join(", ")}: ${at.join(",")}`).toBe(true);
+	return at;
+}
+
+describe("the Agent sub-tab puts what the agent does first (#1592)", () => {
+	it("Gmail Scout: Gmail source, Research, then Brain; no Pilot and no Coding", () => {
+		const html = renderAgent({ isGmailScout: true, isLocalBrowser: true });
+		const at = orderOf(html, ["settings-section-gmail-scout", "settings-section-local-browser", "settings-brain-section"]);
+		expect(at).toEqual([...at].sort((a, b) => a - b));
+		expect(html).not.toContain('data-testid="settings-coding-section"');
+		expect(html).not.toContain('data-testid="settings-section-pilot-model"');
+	});
+
+	it("Coding agent: Brain, then the Pilot, then a separate Coding section; no Research or Gmail source", () => {
+		const html = renderAgent({ isCoding: true });
+		const at = orderOf(html, ["settings-brain-section", "settings-section-pilot-model", "settings-coding-section"]);
+		expect(at).toEqual([...at].sort((a, b) => a - b));
+		expect(html).toContain("Coding — edits, tests and deploys");
+		expect(html).not.toContain('data-testid="settings-section-local-browser"');
+		expect(html).not.toContain('data-testid="settings-section-gmail-scout"');
+	});
+
+	it("shows no Agent settings heading when the agent declares no fields", () => {
+		expect(renderAgent({ isGmailScout: true, isLocalBrowser: true })).not.toContain("Agent settings");
+	});
+
+	it("keeps the repo connection in General, not Agent", () => {
+		expect(renderAgent({ isCoding: true })).not.toContain("Instance ID");
+	});
+});
+
 describe("the tab bar", () => {
 	it("is plain buttons, marks the selected one, and is not a nav", () => {
 		const html = render("browser");

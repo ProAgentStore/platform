@@ -195,7 +195,7 @@ test.describe("Research tab — local browser research (#946, #947)", () => {
 
 		// 2. Settings: allow one site. Research-only is the only mode there is to choose.
 		await page.goto("/console/instances/inst-1/settings?subtab=agent");
-		const section = page.locator("div", { has: page.getByRole("heading", { name: "Local browser research" }) }).last();
+		const section = page.locator("div", { has: page.getByRole("heading", { name: "Research", exact: true }) }).last();
 		await section.getByLabel(/Allowed sites/).fill("seek.com.au");
 		await section.getByRole("button", { name: "Save research settings" }).click();
 		await expect(section.getByText("Saved.")).toBeVisible();
@@ -417,11 +417,11 @@ test.describe("mobile — the research screens fit a phone (#946)", () => {
 			await expectFits(page, width, "run page");
 		});
 
-		test(`mobile — the Local browser research settings fit at ${width}px`, async ({ page }) => {
+		test(`mobile — the Research settings fit at ${width}px`, async ({ page }) => {
 			await page.setViewportSize({ width, height: 812 });
 			await mockResearchAgent(page);
 			await page.goto("/console/instances/inst-1/settings?subtab=agent");
-			const section = page.locator("div", { has: page.getByRole("heading", { name: "Local browser research" }) }).last();
+			const section = page.locator("div", { has: page.getByRole("heading", { name: "Research", exact: true }) }).last();
 			await expect(section.getByRole("button", { name: "Save research settings" })).toBeVisible();
 			await expectFits(page, width, "settings section");
 		});
@@ -443,7 +443,7 @@ test.describe("own browser profile on the managed launch path (#1603)", () => {
 		await page.goto("/console/instances/inst-1/settings?subtab=agent");
 		const notice = page.getByTestId("own-profile-notice");
 		await expect(notice).toContainText("Your own profile is not used while a browser or profile is set in Browser settings");
-		await expect(notice.getByRole("link", { name: "Open Browser settings" })).toHaveAttribute("href", "/console/instances/inst-1/settings");
+		await expect(notice.getByRole("link", { name: "Open Browser settings" })).toHaveAttribute("href", "/console/instances/inst-1/settings?subtab=browser");
 		await expect(page.getByLabel(CHECKBOX)).toHaveCount(0);
 	});
 	test("an agent default uses the agent wording", async ({ page }) => {

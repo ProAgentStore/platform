@@ -412,7 +412,7 @@ async function siteDecision(env: Env, row: LeadRow, cap: LocalBrowserCapability,
 async function sourceGate(env: Env, row: LeadRow, cap: LocalBrowserCapability, verification: BrowserVerificationSettings, now: number): Promise<SourceGate> {
 	const site = await siteDecision(env, row, cap, now);
 	if (site.kind === "invalid") {
-		await setLead(env, row, { state: "awaiting", nextAttemptAt: now + WAIT_RETRY_MS, lastDetail: `${site.error} Nothing was opened; fix them in Settings → Local browser research.` }, now);
+		await setLead(env, row, { state: "awaiting", nextAttemptAt: now + WAIT_RETRY_MS, lastDetail: `${site.error} Nothing was opened; fix them in Settings → Agent (Research).` }, now);
 		return { kind: "needs_consent", state: "awaiting" };
 	}
 	if (site.kind === "refused") return site;
@@ -436,7 +436,7 @@ async function sourceGate(env: Env, row: LeadRow, cap: LocalBrowserCapability, v
 			event: "takeover_required",
 		}).catch(() => undefined);
 	}
-	await setLead(env, row, { state: "awaiting", nextAttemptAt: now + WAIT_RETRY_MS, lastDetail: `Waiting for you to allow or decline ${host} (Settings → Local browser research, or set_local_browser_consent). Nothing was opened.` }, now);
+	await setLead(env, row, { state: "awaiting", nextAttemptAt: now + WAIT_RETRY_MS, lastDetail: `Waiting for you to allow or decline ${host} (Settings → Agent (Research), or set_local_browser_consent). Nothing was opened.` }, now);
 	return { kind: "needs_consent", state: "awaiting" };
 }
 
@@ -457,7 +457,7 @@ async function deferLead(env: Env, row: LeadRow, f: InfrastructureFailure, engin
 		nextAttemptAt: until,
 		lastOutcome: f.kind,
 		lastDetail: quota
-			? `The ${engine} engine is out of quota; verification resumes ${when}. No attempt was used. Switch the engine in Settings → Local browser research to continue sooner.`
+			? `The ${engine} engine is out of quota; verification resumes ${when}. No attempt was used. Switch the engine in Settings → Agent (Research) to continue sooner.`
 			: `The runner machine is overloaded and refused the run; trying again around ${when}. No attempt was used.`,
 	}, now);
 	if (!quota || open) return;
@@ -467,7 +467,7 @@ async function deferLead(env: Env, row: LeadRow, f: InfrastructureFailure, engin
 		row.user_id,
 		"local-browser",
 		`${agent} is out of ${engine} quota`,
-		`The ${engine} engine hit its usage limit${f.resetAt ? ` (it resets ${new Date(f.resetAt).toISOString()})` : ""}. Job verification is paused until ${when} and no attempts were used. You can switch the engine in Local browser research settings to continue now.`,
+		`The ${engine} engine hit its usage limit${f.resetAt ? ` (it resets ${new Date(f.resetAt).toISOString()})` : ""}. Job verification is paused until ${when} and no attempts were used. You can switch the engine in Settings → Agent (Research) to continue now.`,
 		deepLinkFor({ kind: "browser-verification", instanceId: row.instance_id }),
 		{ kind: "alert", instanceId: row.instance_id, key: `engine-quota:${row.instance_id}:${engine}` },
 	).catch(() => undefined);
@@ -580,7 +580,7 @@ async function reopenAfterConsent(env: Env, row: LeadRow, now: number): Promise<
 	const site = await siteDecision(env, row, cap.cap, now);
 	if (site.kind !== "open") {
 		const host = hostOf(row.canonical_url);
-		return { error: site.kind === "refused" ? site.detail.replace(/\.$/, "") : `${host} is not allowed yet — allow it in Settings → Local browser research (or set_local_browser_consent), then verify again` };
+		return { error: site.kind === "refused" ? site.detail.replace(/\.$/, "") : `${host} is not allowed yet — allow it in Settings → Agent (Research) (or set_local_browser_consent), then verify again` };
 	}
 	const ran = await env.DB.prepare("SELECT COUNT(*) AS n FROM job_lead_browser_verification_attempts WHERE instance_id = ?1 AND lead_id = ?2 AND state IN ('dispatched', 'completed', 'no_runtime')")
 		.bind(row.instance_id, row.lead_id)

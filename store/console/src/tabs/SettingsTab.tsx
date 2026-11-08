@@ -276,6 +276,10 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 					/>
 				</Section>
 
+				{/* #1592: what this agent does comes first (its source, then its research); the generic model choice after. */}
+				{isGmailScout && <Section id="gmail-scout"><GmailScoutSection instanceId={instanceId} /></Section>}
+				{isLocalBrowser && <Section id="local-browser"><LocalBrowserSection instanceId={instanceId} /></Section>}
+
 				{/* #1043: the Brain (advisory, may use an API key) and the Coding engine (the subscription CLI that
 				    writes code, #1042) are two different things, set in two separate sections. */}
 				<section aria-labelledby="settings-brain-heading" data-testid="settings-brain-section">
@@ -291,8 +295,6 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 						<CodingEngineCard instanceId={instanceId} />
 					</section>
 				)}
-				{isLocalBrowser && <Section id="local-browser"><LocalBrowserSection instanceId={instanceId} /></Section>}
-				{isGmailScout && <Section id="gmail-scout"><GmailScoutSection instanceId={instanceId} /></Section>}
 			</>
 		),
 		browser: (

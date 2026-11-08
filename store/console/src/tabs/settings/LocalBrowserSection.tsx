@@ -18,9 +18,9 @@ const LIMITS = [
 ] as const;
 
 /**
- * Settings → Local browser research (#946). Everything a run is started with, within the agent's
+ * Settings → Agent (Research) (#946). Everything a run is started with, within the agent's
  * own ceilings — and nothing about repositories. The machine it runs on is the instance's runner
- * pin, chosen in the Runner card below; the server refuses anything outside what the agent allows
+ * pin, chosen in Settings → Automation; the server refuses anything outside what the agent allows
  * and the refusal is shown as it is.
  */
 export default function LocalBrowserSection({ instanceId }: { instanceId: string }) {
@@ -98,9 +98,9 @@ export default function LocalBrowserSection({ instanceId }: { instanceId: string
 
 	return (
 		<Card className="mb-3 sm:mb-4">
-			<h3 className="text-base font-bold mb-1">Local browser research</h3>
+			<h3 className="text-base font-bold mb-1">Research</h3>
 			<p className="text-sm text-muted mb-3">
-				Runs on <span className="font-semibold">{data.runnerNode ?? "whichever machine runs `pags up`"}</span> — choose the machine in the Runner card below. PAGS keeps the run and asks you first; the CLI signed in on that machine does the browsing.
+				Runs on <span className="font-semibold">{data.runnerNode ?? "whichever machine runs `pags up`"}</span> — choose the machine in Settings → Automation. PAGS keeps the run and asks you first; the CLI signed in on that machine does the browsing.
 			</p>
 			{data.problem && <p className="text-sm text-warning mb-3">{data.problem}</p>}
 

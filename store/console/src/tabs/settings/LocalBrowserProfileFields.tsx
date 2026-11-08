@@ -13,7 +13,7 @@ export function ownProfileNotice(launch: Launch | null): string | null {
 	return `Your own profile is not used while ${ownerSet ? "a browser or profile is set in Browser settings" : "this agent's default browser or profile applies"}`;
 }
 
-/** Settings → Local browser research → Browser: the profile choice, told truthfully. `launch` is null while loading or failed. */
+/** Settings → Agent (Research) → Browser: the profile choice, told truthfully. `launch` is null while loading or failed. */
 export default function LocalBrowserProfileFields({ instanceId, browserProfile, profileAllowed, launch, onProfile, onConsent }: {
 	instanceId: string;
 	browserProfile: string;
@@ -36,7 +36,7 @@ export default function LocalBrowserProfileFields({ instanceId, browserProfile, 
 				{notice && (
 					<p className="text-xs text-warning ml-5" data-testid="own-profile-notice">
 						{notice} ·{" "}
-						<Link to={`/instances/${encodeURIComponent(instanceId)}/settings`} className="inline-flex items-center min-h-6 underline">
+						<Link to={`/instances/${encodeURIComponent(instanceId)}/settings?subtab=browser`} className="inline-flex items-center min-h-6 underline">
 							Open Browser settings
 						</Link>
 					</p>

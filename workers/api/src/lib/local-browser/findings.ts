@@ -68,7 +68,7 @@ export async function reviewFinding(env: Env, instanceId: string, uid: string, r
 		review = { decision: "skipped", at: now };
 	} else {
 		const mapping = run.policy.collection;
-		if (!mapping) throw new HttpError(409, "No results collection is set for this agent. Choose one in Settings → Local browser research, then save the finding.");
+		if (!mapping) throw new HttpError(409, "No results collection is set for this agent. Choose one in Settings → Agent (Research), then save the finding.");
 		const keyField = mapping.keyField ?? "url";
 		const key = findingKey(finding, keyField);
 		const duplicateOf = key !== null && !force ? await existingRecord(env, instanceId, mapping.name, keyField, key) : null;

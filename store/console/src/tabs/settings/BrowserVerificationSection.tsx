@@ -12,8 +12,8 @@ const input = "bg-paper border border-line rounded px-2 py-1.5 text-sm";
 
 /**
  * Settings → Browser verification (#1031). Turns the agent's DECLARED local browser on for this
- * instance and says where and how it runs. It does not pin the machine (the Runner card does), grant
- * site consent (Local browser research above) or decide pushes (Notifications) — the same split MCP's
+ * instance and says where and how it runs. It does not pin the machine (Settings → Automation does), grant
+ * site consent (Settings → Agent (Research)) or decide pushes (Notifications) — the same split MCP's
  * set_instance_browser_verification keeps, from the same route. The takeover list is history: it lives in
  * Activity → History (#1590), and this card keeps one line saying how many wait for the owner.
  */
@@ -85,7 +85,7 @@ export default function BrowserVerificationSection({ instanceId }: { instanceId:
 		<Card className="mb-3 sm:mb-4" data-testid="browser-verification-card">
 			<h3 className="text-base font-bold mb-1">Browser verification</h3>
 			<p className="text-sm text-muted mb-3">
-				Lets this agent check pages the server cannot fetch, in your own browser on your machine. The machine is the one chosen in the Runner card; site consent is in Local browser research.
+				Lets this agent check pages the server cannot fetch, in your own browser on your machine. The machine is the one pinned in Settings → Automation; site consent is in Settings → Agent (Research).
 			</p>
 			{!data.capability.declared && <p className="text-sm text-warning mb-3">This agent does not declare a local browser, so verification cannot be turned on for it.</p>}
 			<label className="flex gap-2 items-center text-sm mb-3">

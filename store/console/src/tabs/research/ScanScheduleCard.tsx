@@ -131,9 +131,9 @@ export default function ScanScheduleCard({ instanceId, schedule, brief, onChange
 					Scan now
 				</Button>
 			</div>
-			{/* The saved brief each scan is given beside its objective (#1065); edited in Settings → Local browser research. */}
+			{/* The saved brief each scan is given beside its objective (#1065); edited in Settings → Agent (Research). */}
 			<p className="text-xs text-muted mt-2 whitespace-pre-wrap" data-testid="scan-brief">
-				{brief ? `Each scan is also given your saved brief: ${brief}` : "No saved brief: each scan has only its objective. Add one in Settings → Local browser research."}
+				{brief ? `Each scan is also given your saved brief: ${brief}` : "No saved brief: each scan has only its objective. Add one in Settings → Agent (Research)."}
 			</p>
 			{schedule?.lastError && <p className="text-xs text-danger mt-2">Last attempt: {schedule.lastError}</p>}
 			{msg && <p className="text-xs text-danger mt-2">{msg}</p>}
