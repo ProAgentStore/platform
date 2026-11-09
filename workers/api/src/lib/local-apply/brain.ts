@@ -35,7 +35,7 @@ const DECISION_TOOL = {
 	},
 } as const;
 
-type BrainResponse = { tool_calls?: Array<{ name?: unknown; arguments?: unknown }> };
+type BrainResponse = { tool_calls?: Array<{ name?: unknown; arguments?: unknown }>; stopReason?: unknown };
 
 const parsedDirective = (value: unknown): SupervisorDirectiveKind | null =>
 	value === "continue" || value === "request_review" || value === "stop" ? value : null;
@@ -178,8 +178,9 @@ export async function decideApplicationCheckpoint(env: Env, uid: string, run: Ap
 					},
 				],
 				tools: [DECISION_TOOL],
-				toolChoice: "auto",
-				maxTokens: 96,
+				// #1620: at 96 tokens with an optional tool, every reply was cut off before a directive existed.
+				toolChoice: "required",
+				maxTokens: 256,
 				timeoutMs: 20_000,
 			},
 			{ kind: "run", instanceId: run.instanceId },
@@ -188,6 +189,7 @@ export async function decideApplicationCheckpoint(env: Env, uid: string, run: Ap
 		const call = res.tool_calls?.find((c) => c.name === "decide_application_checkpoint");
 		const args = call?.arguments && typeof call.arguments === "object" && !Array.isArray(call.arguments) ? call.arguments as Record<string, unknown> : null;
 		const proposed = parsedDirective(args?.directive);
+		if (!proposed) await logError(env, { source: "job-apply", level: "warn", userId: uid, message: "Application checkpoint brain returned no valid directive", context: { instanceId: run.instanceId, runId: run.id, checkpointId: checkpoint.checkpointId, phase: checkpoint.facts.phase, stopReason: typeof res.stopReason === "string" ? res.stopReason : null, toolCalls: res.tool_calls?.length ?? 0 } }).catch(() => undefined);
 		return decideCheckpoint(run, checkpoint, proposed);
 	} catch (error) {
 		// A model that errored is a model that did not answer — recorded, so the next one is diagnosable (#1575).

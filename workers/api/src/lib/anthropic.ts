@@ -27,7 +27,7 @@ import { UserAiProviderError } from "./user-ai-errors.js";
 export interface AnthropicBody {
 	messages: Array<{ role: string; content: unknown }>;
 	tools?: unknown[];
-	toolChoice?: "auto" | "none";
+	toolChoice?: "auto" | "none" | "required";
 	maxTokens?: number;
 	timeoutMs?: number;
 	streamDeadlines?: StreamDeadlines;
@@ -250,6 +250,8 @@ export const anthropicAdapter: ProviderAdapter<string, AnthropicRequest, Anthrop
 		// omitting them — which is how the final call used to discourage another round — turns the
 		// whole request into a 400 the moment the transcript is in the structured protocol.
 		if (body.toolChoice === "none") anthropicBody.tool_choice = { type: "none" };
+		// `required` is for a caller whose whole answer IS the tool call (#1620): no preamble can use up its token budget.
+		if (body.toolChoice === "required") anthropicBody.tool_choice = { type: "any" };
 	}
 
 	// STREAMED (#427). Not for the client — the caller still gets one whole message — but so the

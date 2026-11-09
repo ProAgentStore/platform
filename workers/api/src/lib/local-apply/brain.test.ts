@@ -78,7 +78,7 @@ describe("Application Runner cloud brain", () => {
 			expect.anything(),
 			"u1",
 			"claude-sonnet-4-6",
-			expect.objectContaining({ tools: expect.any(Array), maxTokens: 96, timeoutMs: 20_000 }),
+			expect.objectContaining({ tools: expect.any(Array), toolChoice: "required", maxTokens: 256, timeoutMs: 20_000 }),
 			expect.objectContaining({ kind: "run", instanceId: "runner-1" }),
 			{ honorModel: true },
 		);
@@ -120,6 +120,14 @@ describe("Application Runner cloud brain", () => {
 			source: "policy",
 			reason: "brain_unavailable",
 		});
+	});
+
+	it("records a model reply that holds no directive, then fails closed at the final checkpoint (#1620)", async () => {
+		runUserWorkersAi.mockResolvedValueOnce({ response: "The facts show", stopReason: "max_tokens" });
+		const db = { DB: { prepare: vi.fn(() => { throw new Error("unavailable"); }) } };
+		const logged = { ...(env() as object), ...db } as never;
+		await expect(decideApplicationCheckpoint(logged, "u1", run("auto_submit"), checkpoint("before_submit"))).resolves.toMatchObject({ directive: "request_review", reason: "brain_unavailable" });
+		expect(db.DB.prepare).toHaveBeenCalled();
 	});
 
 	it("…but a brain that cannot answer does not cancel the owner's approval of THIS application (#1575)", async () => {

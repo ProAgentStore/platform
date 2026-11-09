@@ -801,6 +801,24 @@ describe("tool rounds reach the provider in its own protocol (#398)", () => {
 		expect(body.tool_choice).toEqual({ type: "none" });
 	});
 
+	it("requires a tool call with Anthropic's `any` when the caller's whole answer is the tool (#1620)", async () => {
+		const env = await envWithAnthropicKey();
+		let body: Record<string, unknown> = {};
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_url: string, init: RequestInit) => {
+				body = JSON.parse(init.body as string);
+				return anthropicSse({ content: [{ type: "text", text: "ok" }], usage: {} });
+			}),
+		);
+		await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", {
+			messages: [{ role: "user", content: "hi" }],
+			tools: [{ type: "function", function: { name: "decide", description: "d", parameters: {} } }],
+			toolChoice: "required",
+		});
+		expect(body.tool_choice).toEqual({ type: "any" });
+	});
+
 	it("leaves tool_choice unset for an ordinary tool round", async () => {
 		const env = await envWithAnthropicKey();
 		let body: Record<string, unknown> = {};
