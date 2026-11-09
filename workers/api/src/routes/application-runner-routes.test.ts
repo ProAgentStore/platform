@@ -4,6 +4,7 @@
  * set + audit), the run, the pull, the connection outbox and the Tailor upstream are real code
  * against the real migrations.
  */
+import { LOST_RUNNER_GRACE_MS } from "../lib/local-apply/apply.js";
 import { Hono } from "hono";
 import { completeRunnerBatch } from "../lib/local-apply/__fixtures__/status.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -888,6 +889,20 @@ describe("submission is gated", () => {
 		expect(read.body.run).toMatchObject({ status: "failed", errorCode: "runner_lost" });
 		expect(read.body.application).toMatchObject({ status: "blocked", blockReason: "submit_state_unknown" });
 		expect(read.body.application.submitAttemptedAt).not.toBeNull();
+	});
+
+	it("#1622: a 404 while the dispatch is still unacknowledged is not a lost run, until the grace period ends", async () => {
+		await enableAutoSubmit();
+		const r = await call("POST", "/ap/application-runs", readyApp("lead-1622"));
+		const runId = r.body.run.id;
+		await d1.DB.prepare("UPDATE local_apply_runs SET trace = '[]' WHERE id = ?1").bind(runId).run();
+		answers["/local-apply/status"] = { status: 404, body: { error: "No application run" } };
+		const inFlight = await call("GET", `/ap/application-runs/${runId}`);
+		expect(inFlight.body.run).toMatchObject({ status: "running", errorCode: null });
+		expect(inFlight.body.application.submitAttemptedAt).toBeNull();
+		const old = Date.now() - LOST_RUNNER_GRACE_MS - 60_000;
+		await d1.DB.prepare("UPDATE local_apply_runs SET started_at = ?1, created_at = ?1 WHERE id = ?2").bind(old, runId).run();
+		expect((await call("GET", `/ap/application-runs/${runId}`)).body.run).toMatchObject({ status: "failed", errorCode: "runner_lost" });
 	});
 
 	it("a runner lost during fill-and-review is just lost", async () => {

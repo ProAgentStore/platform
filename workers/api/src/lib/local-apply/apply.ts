@@ -681,6 +681,8 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 	} catch {
 		return timeLimitReached ? stopTimedOutRun(env, runtime, uid, run, now) : run;
 	}
+	// #1622: the run is marked running before the dispatch call returns. Until the Runner has acknowledged it in any way, a 404 means "not delivered yet".
+	if (res.status === 404 && run.lastSyncedAt === null && !run.trace.some((e) => e.type === "runner.dispatched") && now - startedAt <= LOST_RUNNER_GRACE_MS) return run;
 	if (res.status === 404) return endLost(env, uid, run, "The runner no longer holds this run — it was restarted or updated.", now);
 	if (!res.ok) {
 		if (timeLimitReached) return stopTimedOutRun(env, runtime, uid, run, now);
