@@ -67,6 +67,7 @@ export type DirectiveReason =
 	| "brain_unavailable"
 	| "owner_approved_submission"
 	| "brain_decision"
+	| "same_page_already_continued"
 	| "escalation_allows_decision"
 	| "escalation_requires_review";
 
@@ -142,6 +143,22 @@ export function constrainBrainDirective(run: ApplyRun, checkpoint: SupervisorChe
 	return decideCheckpoint(run, checkpoint, proposed).directive;
 }
 
+/** A fresh snapshot, and at most one look at it: what the Runner does between a `continue` and its submit click. */
+const SAME_PAGE_ACTIONS = 2;
+
+/**
+ * Whether the model's latest before_submit answer was `continue` for this same, unchanged page (#1620).
+ * Each model call is stateless, so a second checkpoint on an unchanged page could reverse the first:
+ * live, run `45af08cd…` was told `continue`, took one snapshot, asked again and was told `request_review`.
+ */
+function brainAlreadyContinued(run: ApplyRun, checkpoint: SupervisorCheckpoint): boolean {
+	const f = checkpoint.facts;
+	const decided = run.trace.filter((e) => e.type === "policy.decision" && e.detail?.class === "checkpoint" && e.detail.phase === "before_submit" && e.detail.source === "brain").at(-1)?.detail;
+	if (decided?.decision !== "continue" || decided.filled !== f.filled || decided.uploaded !== f.uploaded || typeof decided.actions !== "number") return false;
+	if (f.actions < decided.actions || f.actions - decided.actions > SAME_PAGE_ACTIONS) return false;
+	return run.trace.some((e) => e.type === "supervisor.checkpoint" && e.detail?.checkpointId === decided.checkpointId && e.url === f.url);
+}
+
 /**
  * Decide the exact checkpoint. Invalid/missing credentials and invalid model output are all a
  * safe review request before submission. Assessed decisions follow the owner threshold without a second model call.
@@ -149,6 +166,11 @@ export function constrainBrainDirective(run: ApplyRun, checkpoint: SupervisorChe
 export async function decideApplicationCheckpoint(env: Env, uid: string, run: ApplyRun, checkpoint: SupervisorCheckpoint): Promise<CheckpointDecision> {
 	// The acting model already assessed this decision. Its owner threshold needs no second model call.
 	if (checkpoint.facts.phase === "uncertain") return decideCheckpoint(run, checkpoint, null);
+	if (checkpoint.facts.phase === "before_submit" && brainAlreadyContinued(run, checkpoint)) {
+		// Every policy rule still applies first: only a decision that remains the brain's is marked as reused.
+		const decision = decideCheckpoint(run, checkpoint, "continue");
+		return decision.source === "brain" ? { ...decision, reason: "same_page_already_continued" } : decision;
+	}
 	const brain = await readInstanceBrain(env, run.instanceId);
 	// No brain configured, or it could not be read: the POLICY still decides. Before #982 this fell
 	// straight to `request_review`, which is how a safe initial checkpoint became a terminal review

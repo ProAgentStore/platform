@@ -122,6 +122,38 @@ describe("Application Runner cloud brain", () => {
 		});
 	});
 
+	describe("a second before_submit checkpoint on an unchanged page (#1620)", () => {
+		const continued = (actions = 2, url = "https://jobs.example.com/apply") => {
+			const r = run("auto_submit");
+			r.trace = [
+				{ type: "supervisor.checkpoint", at: "t1", url, detail: { checkpointId: "first", phase: "before_submit", actions, filled: 1, uploaded: 0 } },
+				{ type: "policy.decision", at: "t2", detail: { class: "checkpoint", checkpointId: "first", phase: "before_submit", decision: "continue", source: "brain", reason: "brain_decision", actions, filled: 1, uploaded: 0 } },
+			];
+			return r;
+		};
+
+		it("keeps the model's continue without asking again", async () => {
+			runUserWorkersAi.mockClear();
+			await expect(decideApplicationCheckpoint(env(), "u1", continued(1), checkpoint("before_submit"))).resolves.toMatchObject({ directive: "continue", source: "brain", reason: "same_page_already_continued" });
+			expect(runUserWorkersAi).not.toHaveBeenCalled();
+		});
+
+		it("asks again when the page, its uploads or the work done since have changed", async () => {
+			for (const r of [continued(2, "https://jobs.example.com/other"), continued(-1)]) {
+				runUserWorkersAi.mockClear();
+				runUserWorkersAi.mockResolvedValueOnce({ tool_calls: [{ name: "decide_application_checkpoint", arguments: { directive: "request_review" } }] });
+				await expect(decideApplicationCheckpoint(env(), "u1", r, checkpoint("before_submit"))).resolves.toMatchObject({ directive: "request_review", source: "brain" });
+				expect(runUserWorkersAi).toHaveBeenCalledTimes(1);
+			}
+		});
+
+		it("never reuses a continue over a blocker or a run without a submit gate", async () => {
+			await expect(decideApplicationCheckpoint(env(), "u1", continued(1), checkpoint("before_submit", ["captcha"]))).resolves.toMatchObject({ directive: "stop", reason: "blocker" });
+			const review = continued(1); review.policy = { ...review.policy, mode: "fill_and_review" };
+			await expect(decideApplicationCheckpoint(env(), "u1", review, checkpoint("before_submit"))).resolves.toMatchObject({ directive: "request_review", source: "policy" });
+		});
+	});
+
 	it("records a model reply that holds no directive, then fails closed at the final checkpoint (#1620)", async () => {
 		runUserWorkersAi.mockResolvedValueOnce({ response: "The facts show", stopReason: "max_tokens" });
 		const db = { DB: { prepare: vi.fn(() => { throw new Error("unavailable"); }) } };
