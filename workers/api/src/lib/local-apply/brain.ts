@@ -188,7 +188,8 @@ export async function decideApplicationCheckpoint(env: Env, uid: string, run: Ap
 						content:
 							"You are the cloud brain attached to one Job Application Runner. Decide only the supplied typed checkpoint. " +
 							"Never infer facts that are absent. Continue only when the observed facts show no blocker and the next local action can stay within the recorded policy. " +
-							"For a before_submit checkpoint, continue only when auto_submit is explicitly gated. Return exactly one decision tool call.",
+							"For a before_submit checkpoint, continue only when auto_submit is explicitly gated. When submitGateAllowed is true the owner's auto-submit rules have already approved this application: return continue unless the facts state a concrete problem, meaning a false or unverified claim in the application, an unanswered required question, the wrong identity or documents, or a validation error. " +
+								"Pay, work type, seniority or fit differences are not problems, and neither are zero tracked fills or an unverified submission state. Return exactly one decision tool call.",
 					},
 					{
 						role: "user",

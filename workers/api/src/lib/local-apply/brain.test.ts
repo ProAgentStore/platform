@@ -122,6 +122,15 @@ describe("Application Runner cloud brain", () => {
 		});
 	});
 
+	it("tells the model that a passed submit gate decides pay and fit, leaving only concrete problems (#1620)", async () => {
+		runUserWorkersAi.mockClear();
+		runUserWorkersAi.mockResolvedValueOnce({ tool_calls: [{ name: "decide_application_checkpoint", arguments: { directive: "continue" } }] });
+		await decideApplicationCheckpoint(env(), "u1", run("auto_submit"), checkpoint("before_submit"));
+		const body = runUserWorkersAi.mock.calls[0][3] as { messages: Array<{ content: string }> };
+		expect(body.messages[0].content).toContain("Pay, work type, seniority or fit differences are not problems");
+		expect(body.messages[0].content).toContain("a false or unverified claim");
+	});
+
 	describe("a second before_submit checkpoint on an unchanged page (#1620)", () => {
 		const continued = (actions = 2, url = "https://jobs.example.com/apply") => {
 			const r = run("auto_submit");
