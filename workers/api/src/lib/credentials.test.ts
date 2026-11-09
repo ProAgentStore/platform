@@ -287,9 +287,9 @@ describe("the apply agent signs in with the RIGHT credential, not the first-stor
 });
 
 describe("generatePassword", () => {
-	it("is 24 characters with every class, and differs each time", () => {
+	it("is 15 characters with every class, and differs each time", () => {
 		const a = generatePassword();
-		expect(a).toHaveLength(24);
+		expect(a).toHaveLength(15);
 		expect(a).toMatch(/[A-Z]/);
 		expect(a).toMatch(/[a-z]/);
 		expect(a).toMatch(/[0-9]/);

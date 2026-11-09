@@ -358,7 +358,7 @@ describe("account registration and password reset by the agent (#1619)", () => {
 		setRunning();
 		expect((await advance(T0 + 10_000, ask({ newPasswordRequested: true }), f)).outcome).toBe("waiting");
 		const issued = (f.sent[1].body.secrets as Record<string, string>).PAGS_NEW_PASSWORD;
-		expect(issued).toHaveLength(24);
+		expect(issued).toHaveLength(15);
 		expect(await findCredentialForHost(env(), INSTANCE, UID, ATS_PAUSE.domain)).toBeNull();
 		const [pending] = await listCredentials(env(), INSTANCE, UID);
 		expect(pending).toMatchObject({ domain: "careers.ats-fixture.test", username: JOB_MAILBOX });

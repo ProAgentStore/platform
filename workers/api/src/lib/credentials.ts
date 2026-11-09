@@ -424,8 +424,8 @@ const LOWER = "abcdefghijkmnopqrstuvwxyz";
 const DIGIT = "23456789";
 const SYMBOL = "!@#$%^&*-_";
 
-/** A strong random password: 24 characters, every class present, from the platform's own CSPRNG. Rejection sampling, so no modulo bias. */
-export function generatePassword(length = 24): string {
+/** A strong random password: 15 characters (Springboard job portals refuse anything longer, #1619), every class present, from the platform's own CSPRNG. Rejection sampling, so no modulo bias. */
+export function generatePassword(length = 15): string {
 	const pick = (set: string): string => {
 		const limit = 256 - (256 % set.length);
 		for (;;) {
