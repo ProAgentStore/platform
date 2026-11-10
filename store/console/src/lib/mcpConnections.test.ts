@@ -97,6 +97,18 @@ describe("hasMcpCapability", () => {
 	});
 });
 
+describe("hasMcpCapability with grants (#1630)", () => {
+	it("shows the panel for an instance holding MCP grants but no mcp tool", () => {
+		const grants = [{ endpoint: "https://mcp.example.com/mcp", tool: "save_document" }];
+		expect(hasMcpCapability([{ connector: "github", allowed: true, disabled: false }], grants)).toBe(true);
+		expect(hasMcpCapability([], grants)).toBe(true);
+	});
+
+	it("stays hidden with neither a tool nor a grant", () => {
+		expect(hasMcpCapability([], [])).toBe(false);
+	});
+});
+
 describe("credentialNote (#286)", () => {
 	const cred = (endpoint: string, over: Partial<McpCredential> = {}): McpCredential => ({
 		endpoint,

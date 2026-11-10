@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import ToolPermissions from "../../components/ToolPermissions";
 import EmailWorkerPanel from "../../components/EmailWorkerPanel";
@@ -145,7 +146,7 @@ export default function ConnectorsSection({
 			<h3 className="text-base font-bold mb-1">Permissions &amp; Connections</h3>
 			<p className="text-sm text-muted mb-3">
 				What <b>this agent</b> may do, and which of your connected folders it may read. Connecting or disconnecting an account is account-wide and lives
-				in <b>Preferences → Connections</b>.
+				in <Link to="/preferences" className="underline text-accent font-bold">Preferences → Connections</Link>.
 			</p>
 			{request && (
 				<div className="mb-3 rounded border p-3 text-sm" style={{ borderColor: "var(--color-warning-line)", background: "var(--color-warning-soft)" }} data-testid="permission-request">

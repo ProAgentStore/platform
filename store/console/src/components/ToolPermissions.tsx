@@ -250,7 +250,7 @@ export default function ToolPermissions({ instanceId }: ToolPermissionsProps) {
 			    panel rather than two text inputs. Gated on ANY mcp tool, read or write: gating on
 			    write hid the panel until the user had already granted a capability they couldn't yet
 			    see. */}
-			{hasMcpCapability(toolPolicy) && (
+			{hasMcpCapability(toolPolicy, mcpGrants) && (
 				<McpConnections
 					instanceId={instanceId}
 					grants={mcpGrants}

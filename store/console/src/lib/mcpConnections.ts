@@ -282,13 +282,19 @@ export function surfaceLine(surface: McpSurfaceReport): { label: string; tone: "
 
 /**
  * Should the MCP Connections panel appear at all? True when the agent has ANY outbound-MCP tool,
- * read or write.
+ * read or write, or already holds any MCP grant.
  *
  * Gating on write access alone (the previous behaviour) hid the panel from an agent that can
  * only discover servers, and — worse — hid it until the user had already granted the connector,
  * so the first thing they saw was a kill switch for a capability they could not yet see.
  */
-export function hasMcpCapability(tools: ReadonlyArray<{ connector?: string; allowed: boolean; disabled?: boolean }>): boolean {
+export function hasMcpCapability(
+	tools: ReadonlyArray<{ connector?: string; allowed: boolean; disabled?: boolean }>,
+	grants: ReadonlyArray<unknown> = [],
+): boolean {
+	// An instance can hold MCP grants with no `mcp` tool at all: the platform reaches a server on
+	// its behalf (e.g. the Application Tailor's CV app, #1630). Those grants need a connect UI too.
+	if (grants.length > 0) return true;
 	return tools.some((t) => t.connector === "mcp" && (t.allowed || t.disabled));
 }
 

@@ -37,7 +37,7 @@ describe("two tabs, both on every agent (#1060)", () => {
 });
 
 describe("each tab renders its own content", () => {
-	const permissions = () => renderToStaticMarkup(createElement(PermissionsTab, { instanceId: "i1", instanceName: "Scout" }));
+	const permissions = () => renderToStaticMarkup(createElement(MemoryRouter, null, createElement(PermissionsTab, { instanceId: "i1", instanceName: "Scout" })));
 	const settings = (subtab = "agent") =>
 		renderToStaticMarkup(
 			createElement(
@@ -113,7 +113,7 @@ describe("permission links land on the Permissions tab", () => {
 });
 
 describe("release notes are a coder integration (#1286)", () => {
-	const markup = (isCoding?: boolean) => renderToStaticMarkup(createElement(PermissionsTab, { instanceId: "i1", instanceName: "Scout", isCoding }));
+	const markup = (isCoding?: boolean) => renderToStaticMarkup(createElement(MemoryRouter, null, createElement(PermissionsTab, { instanceId: "i1", instanceName: "Scout", isCoding })));
 
 	it("a non-coder's Permissions has no release-notes panel, and so mounts nothing that fetches release-note setup", () => {
 		// The panel owns every release-notes fetch (setting, Discord/Slack channel lists, grants): not mounted, nothing loads.
@@ -135,7 +135,7 @@ describe("release notes are a coder integration (#1286)", () => {
 
 	it("the Permissions surface hands the declared coding capability down — not a name", () => {
 		const render = SURFACES.find((s) => s.id === "permissions")?.render as (ctx: SurfaceContext) => never;
-		const html = (isCoding: boolean, instanceName: string) => renderToStaticMarkup(render({ instanceId: "i1", instanceName, isCoding } as SurfaceContext));
+		const html = (isCoding: boolean, instanceName: string) => renderToStaticMarkup(createElement(MemoryRouter, null, render({ instanceId: "i1", instanceName, isCoding } as SurfaceContext)));
 		expect(html(false, "Coder")).not.toContain('data-testid="release-notes-panel"'); // a chat agent named "Coder"
 		expect(html(true, "Banana")).toContain('data-testid="release-notes-panel"'); // a renamed coder
 	});
