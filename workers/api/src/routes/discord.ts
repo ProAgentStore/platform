@@ -6,7 +6,7 @@ import { requireReleaseNotesEligible } from "../lib/release-notes-eligibility.js
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { clipMarked } from "../lib/clip-marked.js";
-import { connectorGrantReach, deleteConnectorGrant, listConnectorGrants, revokeUserConnectorGrants, upsertConnectorGrant } from "../lib/connector-grants.js";
+import { connectorGrantReach, deleteConnectorGrant, listConnectorGrants, revokeUserConnectorGrants, revokeUserConnectorResourceGrants, upsertConnectorGrant } from "../lib/connector-grants.js";
 import { connectorClient } from "../lib/connectors/client.js";
 import { DISCORD_AGENT_GRANT, DISCORD_NOT_CONNECTED, DISCORD_RELEASE_GRANT, discordFailure } from "../lib/connectors/discord.js";
 import { logEvent } from "../lib/events.js";
@@ -15,7 +15,7 @@ import { connectorRefusalFor } from "../lib/instance-connector-access.js";
 import { safeFetch } from "../lib/ssrf.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
-import type { DiscordBot, DiscordBotConnectResponse, DiscordBotDisconnectResponse, DiscordBotStatusResponse, DiscordChannel, DiscordChannelListResponse, DiscordGrantListResponse, DiscordGrantResponse, DiscordGuild, DiscordGuildListResponse } from "../agent-types.js";
+import type { DiscordBot, DiscordBotConnectResponse, DiscordBotDisconnectResponse, DiscordBotStatusResponse, DiscordChannel, DiscordChannelDeleteResponse, DiscordChannelListResponse, DiscordGrantListResponse, DiscordGrantResponse, DiscordGuild, DiscordGuildListResponse, DiscordManagedChannel, DiscordManagedChannelResponse } from "../agent-types.js";
 
 export const discordRoutes = new Hono<{ Bindings: Env }>();
 
@@ -35,10 +35,14 @@ async function botToken(env: Env, userId: string): Promise<string> {
 	return connectorClient(env, "discord", { userId }).token();
 }
 
-async function discordJson(token: string, path: string): Promise<unknown> {
+async function discordJson(token: string, path: string, init: { method?: string; body?: unknown; reason?: string } = {}): Promise<unknown> {
 	let response: Response;
+	const headers: Record<string, string> = { Authorization: `Bot ${token}`, Accept: "application/json" };
+	if (init.body !== undefined) headers["Content-Type"] = "application/json";
+	// Shown in the server's own audit log, so a human there can see which tool made the change.
+	if (init.reason) headers["X-Audit-Log-Reason"] = encodeURIComponent(init.reason);
 	try {
-		response = await safeFetch(`${API}${path}`, { headers: { Authorization: `Bot ${token}`, Accept: "application/json" } });
+		response = await safeFetch(`${API}${path}`, { method: init.method ?? "GET", headers, ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}) });
 	} catch {
 		throw new HttpError(502, "Discord could not be reached.");
 	}
@@ -148,6 +152,135 @@ discordRoutes.get("/guilds/:guildId/channels", async (c) => {
 		return [{ id: row.id, name: row.name, type: row.type, guildId: typeof row.guild_id === "string" ? row.guild_id : guildId, ...(category ? { category } : {}) }];
 	});
 	return c.json({ channels } satisfies DiscordChannelListResponse);
+});
+
+// ── Channel management by the owner's bot (#1625) ───────────────────────────────────────────────────────────
+// Owner-only, like the rest of this file: the owner's session acts with the owner's own bot, in a server
+// that bot is in. Discord enforces the bot's Manage Channels permission; a refusal says to grant it.
+
+const MANAGE_CHANNELS_HELP = "The bot lacks the Manage Channels permission there. In Discord, open Server Settings → Roles, pick the bot's role and turn on Manage Channels (or grant it on the category).";
+const CHANNEL_NAME_MAX = 100;
+const TOPIC_MAX = 1024;
+
+/** A Discord call that manages channels: a 403 is about Manage Channels, not about reading or sending. */
+async function manageJson(token: string, path: string, init: { method: string; body?: unknown; reason: string }): Promise<unknown> {
+	try {
+		return await discordJson(token, path, init);
+	} catch (e) {
+		if (e instanceof HttpError && e.status === 403) throw new HttpError(403, MANAGE_CHANNELS_HELP);
+		throw e;
+	}
+}
+
+function channelName(value: unknown): string {
+	const name = typeof value === "string" ? value.trim() : "";
+	if (!name || name.length > CHANNEL_NAME_MAX) throw new HttpError(400, `name must be 1-${CHANNEL_NAME_MAX} characters.`);
+	return name;
+}
+
+function channelTopic(value: unknown): string | undefined {
+	if (value === undefined || value === null) return undefined;
+	if (typeof value !== "string" || value.length > TOPIC_MAX) throw new HttpError(400, `topic must be text of at most ${TOPIC_MAX} characters.`);
+	return value;
+}
+
+/**
+ * The category a channel goes under: `categoryId`, or `category` by name (case-insensitive) among the server's
+ * categories. Neither → undefined (leave as is); `categoryId: ""` or `category: ""` → null (no category).
+ * A name that matches none, or several, is refused rather than guessed.
+ */
+async function resolveCategory(token: string, guildId: string, body: { categoryId?: unknown; category?: unknown }): Promise<string | null | undefined> {
+	if (body.categoryId === "" || body.category === "") return null;
+	if (body.categoryId !== undefined && body.categoryId !== null) return requireSnowflake(String(body.categoryId), "categoryId");
+	if (body.category === undefined || body.category === null) return undefined;
+	if (typeof body.category !== "string") throw new HttpError(400, "category must be a category name.");
+	const wanted = body.category.trim().toLowerCase();
+	const rows = await discordJson(token, `/guilds/${guildId}/channels`);
+	const matches = (Array.isArray(rows) ? rows : []).filter((r): r is { id: string; name: string } => !!r && typeof r === "object" && (r as { type?: unknown }).type === CATEGORY_CHANNEL_TYPE && typeof (r as { name?: unknown }).name === "string" && (r as { name: string }).name.trim().toLowerCase() === wanted && typeof (r as { id?: unknown }).id === "string");
+	if (matches.length === 0) throw new HttpError(404, `No category named "${body.category}" in this server. list_discord_channels shows each channel's category.`);
+	if (matches.length > 1) throw new HttpError(409, `Several categories are named "${body.category}"; pass categoryId instead (${matches.map((m) => m.id).join(", ")}).`);
+	return matches[0].id;
+}
+
+type ChannelRow = { id?: unknown; name?: unknown; type?: unknown; guild_id?: unknown; parent_id?: unknown; topic?: unknown };
+
+/** The channel as this API reports it: id, name, type, server, category id and topic. */
+function channelView(row: ChannelRow, fallbackGuild?: string): DiscordManagedChannel {
+	return {
+		id: String(row.id ?? ""),
+		name: String(row.name ?? ""),
+		type: typeof row.type === "number" ? row.type : -1,
+		guildId: typeof row.guild_id === "string" ? row.guild_id : (fallbackGuild ?? ""),
+		categoryId: typeof row.parent_id === "string" ? row.parent_id : null,
+		topic: typeof row.topic === "string" ? row.topic : null,
+	};
+}
+
+/** A channel in a server (not a DM or thread); management is refused for anything else. */
+async function guildChannel(token: string, channelId: string): Promise<DiscordManagedChannel> {
+	const view = channelView((await discordJson(token, `/channels/${channelId}`)) as ChannelRow);
+	if (!SNOWFLAKE.test(view.guildId) || view.id !== channelId) throw new HttpError(400, "That is not a channel in a Discord server.");
+	return view;
+}
+
+/** Create a text channel (or, with `type: "category"`, a category) in one server the bot is in. */
+discordRoutes.post("/guilds/:guildId/channels", async (c) => {
+	const session = await requireUser(c);
+	const guildId = requireSnowflake(c.req.param("guildId"), "guildId");
+	const body = (await c.req.json().catch(() => ({}))) as { name?: unknown; topic?: unknown; categoryId?: unknown; category?: unknown; type?: unknown };
+	if (body.type !== undefined && body.type !== "text" && body.type !== "category") throw new HttpError(400, 'type must be "text" (the default) or "category".');
+	const isCategory = body.type === "category";
+	const name = channelName(body.name);
+	const topic = channelTopic(body.topic);
+	if (isCategory && (topic !== undefined || body.categoryId !== undefined || body.category !== undefined)) throw new HttpError(400, "A category takes only a name.");
+	const token = await botToken(c.env, session.uid);
+	const parentId = isCategory ? undefined : await resolveCategory(token, guildId, body);
+	const created = (await manageJson(token, `/guilds/${guildId}/channels`, {
+		method: "POST",
+		reason: "ProAgentStore: create_discord_channel",
+		body: { name, type: isCategory ? CATEGORY_CHANNEL_TYPE : 0, ...(topic !== undefined ? { topic } : {}), ...(parentId ? { parent_id: parentId } : {}) },
+	})) as ChannelRow;
+	const channel = channelView(created, guildId);
+	await audit(c.env, session.uid, "discord.channel_create", `Created Discord ${isCategory ? "category" : "channel"} #${channel.name}`, { guildId, channelId: channel.id, categoryId: channel.categoryId });
+	return c.json({ channel } satisfies DiscordManagedChannelResponse, 201);
+});
+
+/** Rename a channel, change its topic, or move it to another category (or out of one). */
+discordRoutes.patch("/channels/:channelId", async (c) => {
+	const session = await requireUser(c);
+	const channelId = requireSnowflake(c.req.param("channelId"), "channelId");
+	const body = (await c.req.json().catch(() => ({}))) as { name?: unknown; topic?: unknown; categoryId?: unknown; category?: unknown };
+	const token = await botToken(c.env, session.uid);
+	const before = await guildChannel(token, channelId);
+	const patch: Record<string, unknown> = {};
+	if (body.name !== undefined) patch.name = channelName(body.name);
+	const topic = channelTopic(body.topic);
+	if (topic !== undefined) patch.topic = topic;
+	const parentId = await resolveCategory(token, before.guildId, body);
+	if (parentId !== undefined) patch.parent_id = parentId;
+	if (Object.keys(patch).length === 0) throw new HttpError(400, "Nothing to change: pass name, topic, categoryId or category.");
+	const updated = channelView((await manageJson(token, `/channels/${channelId}`, { method: "PATCH", reason: "ProAgentStore: update_discord_channel", body: patch })) as ChannelRow, before.guildId);
+	// A rename is mirrored onto this owner's grants, so list_instance_discord_grants shows the new name.
+	if (updated.name && updated.name !== before.name) {
+		await c.env.DB.prepare("UPDATE instance_connector_grants SET resource_name = ?1 WHERE user_id = ?2 AND provider = 'discord' AND resource_id = ?3").bind(`#${updated.name}`, session.uid, channelId).run();
+	}
+	await audit(c.env, session.uid, "discord.channel_update", `Updated Discord channel #${updated.name}`, { guildId: before.guildId, channelId, changed: Object.keys(patch) });
+	return c.json({ channel: updated, previous: before } satisfies DiscordManagedChannelResponse);
+});
+
+/**
+ * Delete a channel (or an empty category). Every grant of it, on every one of this owner's instances, goes in
+ * the same step — a grant of a channel that no longer exists would only fail later. Not recoverable in Discord.
+ */
+discordRoutes.delete("/channels/:channelId", async (c) => {
+	const session = await requireUser(c);
+	const channelId = requireSnowflake(c.req.param("channelId"), "channelId");
+	const token = await botToken(c.env, session.uid);
+	const channel = await guildChannel(token, channelId);
+	await manageJson(token, `/channels/${channelId}`, { method: "DELETE", reason: "ProAgentStore: delete_discord_channel" });
+	const revokedGrants = await revokeUserConnectorResourceGrants(c.env, session.uid, "discord", channelId);
+	await audit(c.env, session.uid, "discord.channel_delete", `Deleted Discord channel #${channel.name}`, { guildId: channel.guildId, channelId, revokedGrants });
+	return c.json({ deleted: true, channel, revokedGrants } satisfies DiscordChannelDeleteResponse);
 });
 
 discordRoutes.get("/instances/:instanceId/grants", async (c) => {

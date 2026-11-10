@@ -92,6 +92,13 @@ same id), `list_instance_discord_grants`, `revoke_instance_discord_grant`, and `
 (`set_instance_connector_consent`). Connect, rotate, disconnect, grant and revoke each write a
 `discord.*` audit event with ids only — never the token or message content.
 
+The owner's bot can also manage channels (#1625), owner-scoped like the rest: `create_discord_channel`
+(a text channel or a category, optionally under a category given by name), `update_discord_channel` (rename,
+topic, move between categories; a rename updates the name on the owner's grants) and `delete_discord_channel`
+(confirm-gated; every grant of the channel on every instance is revoked in the same step). Each needs the bot's
+Manage Channels permission in that server, and writes a `discord.channel_*` audit event. The change is also
+labelled in the server's own audit log. Creating a channel grants no agent anything.
+
 ### Release notes and Slack (#1216, #1217)
 
 When a coder run ships to a repository's default branch, the platform posts **one release note per

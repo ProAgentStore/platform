@@ -192,6 +192,21 @@ export async function revokeUserConnectorGrants(
 	return reach;
 }
 
+/** Revoke every one of a user's grants of ONE resource, on every instance (a deleted Discord channel, #1625). Returns how many went. */
+export async function revokeUserConnectorResourceGrants(
+	env: Env,
+	userId: string,
+	provider: ConnectorProvider,
+	resourceId: string,
+): Promise<number> {
+	const res = await env.DB.prepare(
+		"DELETE FROM instance_connector_grants WHERE user_id = ?1 AND provider = ?2 AND resource_id = ?3",
+	)
+		.bind(userId, provider, resourceId)
+		.run();
+	return res.meta?.changes ?? 0;
+}
+
 export async function requireConnectorGrant(
 	env: Env,
 	instanceId: string,

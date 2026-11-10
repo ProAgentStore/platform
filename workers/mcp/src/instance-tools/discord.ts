@@ -110,6 +110,90 @@ export function registerDiscordTools(server: McpServer, ctx: InstanceToolsCtx): 
 		},
 	);
 
+	// ── #1625: the owner's bot manages channels (create / update / delete) ──
+	const categoryArgs = {
+		category: z.string().optional().describe('Category NAME to put the channel under, case-insensitive (the `category` field of list_discord_channels). "" = no category. Refused when no or several categories have that name.'),
+		category_id: z.string().optional().describe('Category id instead of a name. "" = no category.'),
+	};
+	const categoryBody = (category?: string, category_id?: string) => ({ ...(category !== undefined ? { category } : {}), ...(category_id !== undefined ? { categoryId: category_id } : {}) });
+
+	server.tool(
+		"create_discord_channel",
+		"Create a text channel (or, with type \"category\", a category) in one server your bot is in (guild_id from list_discord_guilds), optionally under a category and with a topic. Discord lower-cases text channel names and turns spaces into dashes. The bot needs Manage Channels there; the error says so when it is missing. Creating a channel grants no agent anything: grant it with grant_instance_discord_channel (channel.id). Not idempotent: calling twice makes two channels, so read list_discord_channels first. WRITE. Call with dry_run first.",
+		{
+			token: tokenArg,
+			guild_id: z.string().describe("Server id from list_discord_guilds."),
+			name: z.string().min(1).max(100).describe("Channel name, e.g. check-in-ana-lee."),
+			type: z.enum(["text", "category"]).optional().describe("text (default) or category."),
+			topic: z.string().max(1024).optional().describe("Optional channel topic (text channels only)."),
+			...categoryArgs,
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, guild_id, name, type, topic, category, category_id, dry_run }) => {
+			const session = tokenFor(token);
+			if (!session) return authRequired();
+			const input = { guild_id, name, ...(type ? { type } : {}), ...(topic !== undefined ? { topic } : {}), ...categoryBody(category, category_id) };
+			const denied = await requirePermission(safetyFor(token), "write", "create_discord_channel", input);
+			if (denied) return denied;
+			if (dry_run) return dryRun(safetyFor(token), "create_discord_channel", `create Discord ${type === "category" ? "category" : "channel"} "${name}"`, input, { endpoint: `/v1/discord/guilds/${encodeURIComponent(guild_id)}/channels`, method: "POST" });
+			const data = await authedCall(`/v1/discord/guilds/${encodeURIComponent(guild_id)}/channels`, session, { method: "POST", body: JSON.stringify({ name, ...(type ? { type } : {}), ...(topic !== undefined ? { topic } : {}), ...categoryBody(category, category_id) }) }, env);
+			if (err(data)) return text(`Error: ${err(data)}`);
+			await audit(safetyFor(token), { tool: "create_discord_channel", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"update_discord_channel",
+		"Rename a Discord channel, change its topic, or move it to another category (or out of one, with category \"\"). Only the fields you pass change. A rename also updates the channel's name on your instance grants. The result has the channel before (`previous`) and after. The bot needs Manage Channels. WRITE. Call with dry_run first.",
+		{
+			token: tokenArg,
+			channel_id: z.string().describe("Channel id from list_discord_channels."),
+			name: z.string().min(1).max(100).optional(),
+			topic: z.string().max(1024).optional(),
+			...categoryArgs,
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, channel_id, name, topic, category, category_id, dry_run }) => {
+			const session = tokenFor(token);
+			if (!session) return authRequired();
+			const body = { ...(name !== undefined ? { name } : {}), ...(topic !== undefined ? { topic } : {}), ...categoryBody(category, category_id) };
+			const input = { channel_id, ...body };
+			const denied = await requirePermission(safetyFor(token), "write", "update_discord_channel", input);
+			if (denied) return denied;
+			if (dry_run) return dryRun(safetyFor(token), "update_discord_channel", "change a Discord channel's name, topic or category", input, { endpoint: `/v1/discord/channels/${encodeURIComponent(channel_id)}`, method: "PATCH" });
+			const data = await authedCall(`/v1/discord/channels/${encodeURIComponent(channel_id)}`, session, { method: "PATCH", body: JSON.stringify(body) }, env);
+			if (err(data)) return text(`Error: ${err(data)}`);
+			await audit(safetyFor(token), { tool: "update_discord_channel", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"delete_discord_channel",
+		"Delete one Discord channel (or an empty category) with your bot, and revoke every grant of it on all your instances in the same step (`revokedGrants`). Its messages are gone for good; Discord has no undo. The bot needs Manage Channels. DESTRUCTIVE: requires confirm. Call with dry_run first.",
+		{
+			token: tokenArg,
+			channel_id: z.string().describe("Channel id from list_discord_channels."),
+			confirm: z.string().optional().describe('Must be "delete_discord_channel" to delete.'),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, channel_id, confirm, dry_run }) => {
+			const session = tokenFor(token);
+			if (!session) return authRequired();
+			const input = { channel_id };
+			const denied = await requirePermission(safetyFor(token), "destructive", "delete_discord_channel", input);
+			if (denied) return denied;
+			if (dry_run) return dryRun(safetyFor(token), "delete_discord_channel", "delete a Discord channel and revoke every grant of it", input, { endpoint: `/v1/discord/channels/${encodeURIComponent(channel_id)}`, method: "DELETE" });
+			const unconfirmed = await requireConfirmation(safetyFor(token), "delete_discord_channel", confirm, "delete_discord_channel", input);
+			if (unconfirmed) return unconfirmed;
+			const data = await authedCall(`/v1/discord/channels/${encodeURIComponent(channel_id)}`, session, { method: "DELETE" }, env);
+			if (err(data)) return text(`Error: ${err(data)}`);
+			await audit(safetyFor(token), { tool: "delete_discord_channel", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
 	server.tool(
 		"list_instance_discord_grants",
 		"List the Discord channels one instance is granted, each with its stable grant `id` — the `grantId` the agent's Discord tools take, and what revoke_instance_discord_grant takes. An agent can read or post only in a channel listed here with resourceType `discord_channel`; one with `discord_release_channel` is reserved for release notes (the platform posts there, the agent cannot). Read-only.",

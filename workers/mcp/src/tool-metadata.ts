@@ -477,6 +477,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	verify_provider_key: "write", // #1343 — spends one small provider request and a pass lifts an automatic-run pause on that key; changes no stored key, deletes nothing
 	connect_discord_bot: "write",
 	grant_instance_discord_channel: "write",
+	create_discord_channel: "write",
+	update_discord_channel: "write",
 	// #1217: who receives release notes, a test note to one granted channel, and the Slack bot + its grants — reversible owner state.
 	set_instance_release_notes: "write",
 	send_test_release_note: "write",
@@ -631,6 +633,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	revoke_instance_calendar_grant: "destructive",
 	disconnect_discord_bot: "destructive",
 	revoke_instance_discord_grant: "destructive",
+	delete_discord_channel: "destructive",
 	// #1217: disconnecting drops the Slack bot token and every Slack grant; a revoke stops an instance's notes reaching a channel.
 	disconnect_slack_bot: "destructive",
 	revoke_instance_slack_grant: "destructive",

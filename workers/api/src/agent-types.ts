@@ -293,6 +293,29 @@ export interface DiscordGrantResponse {
 	note?: string;
 }
 
+/** A channel the owner's bot created, changed or deleted (#1625). `categoryId` is the parent category, null for none. */
+export interface DiscordManagedChannel {
+	id: string;
+	name: string;
+	type: number;
+	guildId: string;
+	categoryId: string | null;
+	topic: string | null;
+}
+
+export interface DiscordManagedChannelResponse {
+	channel: DiscordManagedChannel;
+	/** On an update: the channel as it was before. */
+	previous?: DiscordManagedChannel;
+}
+
+export interface DiscordChannelDeleteResponse {
+	deleted: true;
+	channel: DiscordManagedChannel;
+	/** How many of the owner's instance grants of this channel were revoked with it. */
+	revokedGrants: number;
+}
+
 /** The bot a Discord token authenticates as (#1132). Never the token. */
 export interface DiscordBot {
 	id: string;

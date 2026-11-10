@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**428 tool registrations.** 399 are always registered; 29 are gated to the console
+**431 tool registrations.** 402 are always registered; 29 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -633,6 +633,9 @@ immediately instead of a whole transcript.
 | `list_instance_discord_grants` | One instance's granted Discord channels, with the stable grant ids its Discord tools take (#1132) | read | | |
 | `grant_instance_discord_channel` | Grant one instance one channel, checked with the bot first; a re-grant returns the same id; `purpose: release_notes` grants release notes only, no Discord tools needed (#1132, #1218) | write | yes | |
 | `revoke_instance_discord_grant` | Revoke one instance's channel grant by id (#1132) | destructive | yes | `revoke_instance_discord_grant` |
+| `create_discord_channel` | Create a text channel or category with the owner's bot, optionally under a category by name; needs Manage Channels (#1625) | write | yes | |
+| `update_discord_channel` | Rename a channel, change its topic or move it between categories; a rename updates the grants' names (#1625) | write | yes | |
+| `delete_discord_channel` | Delete a channel and revoke every grant of it on all the owner's instances (#1625) | destructive | yes | `delete_discord_channel` |
 | `get_instance_release_notes` | Who receives an instance's release notes: its own setting, the account default, and each granted Discord/Slack channel marked `selected` (#1217) | read | | |
 | `set_instance_release_notes` | Turn an instance's release notes on/off (null = follow the account) and choose which granted channels receive them; an ungranted grant id is refused (#1217) | write | yes | |
 | `send_test_release_note` | Post a test release note to one channel granted to the instance (#1217) | write | yes | |

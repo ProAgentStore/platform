@@ -54,7 +54,7 @@ function discord(path: string, method: string, auth: string | null): Response {
 	if (revokedTokens.has(token) || ![TOKEN_A, TOKEN_A2, TOKEN_B, USER_TOKEN].includes(token)) return json({ message: "401: Unauthorized" }, 401);
 	if (path === "/users/@me") return token === USER_TOKEN ? json({ id: "777777777777777777", username: "a-person" }) : json({ id: token === TOKEN_B ? BOT_B : BOT_A, username: token === TOKEN_B ? "other-bot" : "pags-bot", bot: true });
 	if (path === "/users/@me/guilds") return json([{ id: GUILD, name: "Ops" }]);
-	if (path === `/guilds/${GUILD}/channels`) {
+	if (path === `/guilds/${GUILD}/channels` && method === "GET") {
 		return json([
 			{ id: CH_ALERTS, name: "alerts", type: 0, guild_id: GUILD, parent_id: "555555555555555555" },
 			{ id: "555555555555555555", name: "FREE-APPS", type: 4, guild_id: GUILD },
@@ -62,6 +62,11 @@ function discord(path: string, method: string, auth: string | null): Response {
 			{ id: CH_VOICE, name: "lounge", type: 2, guild_id: GUILD },
 		]);
 	}
+	// #1625: channel management. CH_PRIVATE is the one the bot may manage; CH_ALERTS's server refuses Manage Channels for PATCH/DELETE.
+	if (path === `/guilds/${GUILD}/channels` && method === "POST") return json({ id: "121212121212121212", name: "check-in-ana", type: 0, guild_id: GUILD, parent_id: "555555555555555555", topic: null }, 201);
+	if (path === `/channels/${CH_PRIVATE}` && method === "PATCH") return json({ id: CH_PRIVATE, name: "renamed", type: 0, guild_id: GUILD, parent_id: null });
+	if (path === `/channels/${CH_PRIVATE}` && method === "DELETE") return json({ id: CH_PRIVATE, name: "private", type: 0, guild_id: GUILD });
+	if (path === `/channels/${CH_ALERTS}` && (method === "PATCH" || method === "DELETE")) return json({ message: "Missing Permissions", code: 50013 }, 403);
 	if (path === `/channels/${CH_HIDDEN}`) return json({ message: "Missing Access", code: 50001 }, 403);
 	if (path === `/channels/${CH_ALERTS}`) return json({ id: CH_ALERTS, name: "alerts", type: 0, guild_id: GUILD });
 	if (path === `/channels/${CH_VOICE}`) return json({ id: CH_VOICE, name: "lounge", type: 2, guild_id: GUILD });
@@ -395,5 +400,59 @@ describe("release-note grants reach a coder that declares no Discord tools (#121
 		await forReleaseNotes(CH_ALERTS);
 		await call("DELETE", "/v1/discord/bot");
 		expect(grantsOf(CODER)).toEqual([]);
+	});
+});
+
+describe("the owner's bot manages channels (#1625)", () => {
+	const sentTo = (method: string, path: string) => sent.filter((r) => r.method === method && r.path === path);
+
+	it("creates a text channel under a category named case-insensitively, and audits it", async () => {
+		await call("PUT", "/v1/discord/bot", { token: TOKEN_A });
+		const created = await call("POST", `/v1/discord/guilds/${GUILD}/channels`, { name: "check-in-ana", category: "free-apps", topic: "weekly check-in" });
+		expect(created.status).toBe(201);
+		expect(created.json.channel).toMatchObject({ id: "121212121212121212", name: "check-in-ana", guildId: GUILD, categoryId: "555555555555555555" });
+		const [req] = sentTo("POST", `/guilds/${GUILD}/channels`);
+		expect(JSON.parse(req.body ?? "{}")).toEqual({ name: "check-in-ana", type: 0, topic: "weekly check-in", parent_id: "555555555555555555" });
+		expect(events().map((e) => e.event)).toContain("discord.channel_create");
+	});
+
+	it("refuses an unknown category name before anything is created", async () => {
+		await call("PUT", "/v1/discord/bot", { token: TOKEN_A });
+		const res = await call("POST", `/v1/discord/guilds/${GUILD}/channels`, { name: "x", category: "Nope" });
+		expect(res.status).toBe(404);
+		expect(res.json.error).toMatch(/No category named "Nope"/);
+		expect(sentTo("POST", `/guilds/${GUILD}/channels`)).toEqual([]);
+	});
+
+	it("rename updates the name on the owner's grants; a move to no category sends parent_id null", async () => {
+		await call("PUT", "/v1/discord/bot", { token: TOKEN_A });
+		expect((await grant(CH_PRIVATE)).status).toBe(201);
+		const res = await call("PATCH", `/v1/discord/channels/${CH_PRIVATE}`, { name: "renamed", category: "" });
+		expect(res.status).toBe(200);
+		expect(res.json).toMatchObject({ channel: { name: "renamed" }, previous: { name: "private" } });
+		expect(JSON.parse(sentTo("PATCH", `/channels/${CH_PRIVATE}`)[0].body ?? "{}")).toEqual({ name: "renamed", parent_id: null });
+		const grants = (await call("GET", `/v1/discord/instances/${INSTANCE}/grants`)).json.grants as Array<{ resourceName: string }>;
+		expect(grants.map((g) => g.resourceName)).toEqual(["#renamed"]);
+	});
+
+	it("delete removes the channel and every grant of it", async () => {
+		await call("PUT", "/v1/discord/bot", { token: TOKEN_A });
+		await grant(CH_PRIVATE);
+		await grant(CH_ALERTS);
+		const res = await call("DELETE", `/v1/discord/channels/${CH_PRIVATE}`);
+		expect(res.status).toBe(200);
+		expect(res.json).toMatchObject({ deleted: true, revokedGrants: 1, channel: { id: CH_PRIVATE, name: "private" } });
+		const grants = (await call("GET", `/v1/discord/instances/${INSTANCE}/grants`)).json.grants as Array<{ resourceId: string }>;
+		expect(grants.map((g) => g.resourceId)).toEqual([CH_ALERTS]);
+		expect(events().map((e) => e.event)).toContain("discord.channel_delete");
+	});
+
+	it("a missing Manage Channels permission says so, and no grant is revoked", async () => {
+		await call("PUT", "/v1/discord/bot", { token: TOKEN_A });
+		await grant(CH_ALERTS);
+		const res = await call("DELETE", `/v1/discord/channels/${CH_ALERTS}`);
+		expect(res.status).toBe(403);
+		expect(res.json.error).toMatch(/Manage Channels/);
+		expect(((await call("GET", `/v1/discord/instances/${INSTANCE}/grants`)).json.grants as unknown[]).length).toBe(1);
 	});
 });

@@ -743,6 +743,19 @@ const READBACK: Record<string, string | null> = {
 	"grant_instance_discord_channel.channel_id": "list_instance_discord_grants",
 	"grant_instance_discord_channel.purpose": "list_instance_discord_grants",
 	"revoke_instance_discord_grant.grant_id": "list_instance_discord_grants",
+	// #1625: what the owner's bot made or changed reads back from the channel list.
+	"create_discord_channel.guild_id": "list_discord_channels",
+	"create_discord_channel.name": "list_discord_channels",
+	"create_discord_channel.type": "list_discord_channels",
+	"create_discord_channel.topic": null,
+	"create_discord_channel.category": "list_discord_channels",
+	"create_discord_channel.category_id": "list_discord_channels",
+	"update_discord_channel.channel_id": "list_discord_channels",
+	"update_discord_channel.name": "list_discord_channels",
+	"update_discord_channel.topic": null,
+	"update_discord_channel.category": "list_discord_channels",
+	"update_discord_channel.category_id": "list_discord_channels",
+	"delete_discord_channel.channel_id": "list_discord_channels",
 
 	// ── #1217: release notes + the Slack bot and channel grants ──
 	"set_account_preferences.releaseNotes": "get_account_preferences",

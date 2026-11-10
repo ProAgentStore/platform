@@ -18785,6 +18785,86 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "502": { $ref: "#/components/responses/BadGateway" }
+    post:
+      summary: Create a Discord channel with my bot
+      description: Creates a text channel (or, with type category, a category) in a server the owner's bot is in, optionally under a category given by id or by name (case-insensitive). The bot needs Manage Channels. Grants no agent anything (#1625).
+      operationId: createDiscordChannel
+      tags: [Connectors]
+      parameters:
+        - { name: guildId, in: path, required: true, schema: { type: string }, description: Discord guild snowflake. }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 100 }
+                type: { type: string, enum: [text, category] }
+                topic: { type: string, maxLength: 1024 }
+                categoryId: { type: string, description: Category snowflake; empty string for none. }
+                category: { type: string, description: Category name; empty string for none. }
+      responses:
+        "201":
+          description: The created channel
+          content:
+            application/json:
+              schema: { type: object, properties: { channel: { type: object, properties: { id: { type: string }, name: { type: string }, type: { type: integer }, guildId: { type: string }, categoryId: { type: string, nullable: true }, topic: { type: string, nullable: true } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /v1/discord/channels/{channelId}:
+    patch:
+      summary: Rename, re-topic or move a Discord channel with my bot
+      description: Changes only the fields passed. A rename also updates the channel name on the owner's instance grants. The bot needs Manage Channels (#1625).
+      operationId: updateDiscordChannel
+      tags: [Connectors]
+      parameters:
+        - { name: channelId, in: path, required: true, schema: { type: string }, description: Discord channel snowflake. }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 100 }
+                topic: { type: string, maxLength: 1024 }
+                categoryId: { type: string, description: Category snowflake; empty string for none. }
+                category: { type: string, description: Category name; empty string for none. }
+      responses:
+        "200":
+          description: The channel after and before the change
+          content:
+            application/json:
+              schema: { type: object, properties: { channel: { type: object, properties: { id: { type: string }, name: { type: string }, type: { type: integer }, guildId: { type: string }, categoryId: { type: string, nullable: true }, topic: { type: string, nullable: true } } }, previous: { type: object, properties: { id: { type: string }, name: { type: string }, type: { type: integer }, guildId: { type: string }, categoryId: { type: string, nullable: true }, topic: { type: string, nullable: true } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+    delete:
+      summary: Delete a Discord channel with my bot
+      description: Deletes the channel and revokes every grant of it on all the owner's instances in the same step. Not recoverable. The bot needs Manage Channels (#1625).
+      operationId: deleteDiscordChannel
+      tags: [Connectors]
+      parameters:
+        - { name: channelId, in: path, required: true, schema: { type: string }, description: Discord channel snowflake. }
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema: { type: object, properties: { deleted: { type: boolean }, channel: { type: object, properties: { id: { type: string }, name: { type: string }, type: { type: integer }, guildId: { type: string }, categoryId: { type: string, nullable: true }, topic: { type: string, nullable: true } } }, revokedGrants: { type: integer } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { $ref: "#/components/responses/BadGateway" }
 
   /v1/discord/instances/{instanceId}/grants:
     get:
