@@ -22,7 +22,7 @@ import type { LocalArtifactFile, LocalArtifactLead } from "./local-artifact/cont
 export const JOBS_SYNC_RETRY_MS = 15 * 60_000;
 const SWEEP_WINDOW_MS = 14 * 24 * 60 * 60_000;
 /** PAGS status -> Jobs status. `materials_ready` is a (re)save, which keeps Jobs' own status. */
-const JOBS_STATUS = { submitted: "submitted", failed: "failed", archived: "archived" } as const;
+export const JOBS_STATUS = { submitted: "submitted", failed: "failed", archived: "archived" } as const;
 
 type SyncableStatus = "materials_ready" | keyof typeof JOBS_STATUS;
 const isSyncable = (s: string): s is SyncableStatus => s === "materials_ready" || s in JOBS_STATUS;
@@ -34,10 +34,20 @@ export function desiredJobsKey(app: Pick<JobApplication, "status" | "tailoringRu
 }
 
 const decode = (base64: string) => new TextDecoder().decode(Uint8Array.from(atob(base64), (c) => c.charCodeAt(0)));
-const fileName = (f: LocalArtifactFile | null) => (f ? (f.cloud?.name ?? f.path.split(/[\\/]/).pop() ?? "") : "") || undefined;
+export const fileName = (f: LocalArtifactFile | null) => (f ? (f.cloud?.name ?? f.path.split(/[\\/]/).pop() ?? "") : "") || undefined;
+
+/** The tailored resume and cover letter texts, from the exact stored documents. Also used by the CV mirror (#1624). */
+export async function tailoredTexts(env: Env, userId: string, app: JobApplication): Promise<{ resume?: string; coverLetter?: string }> {
+	const docs = (await loadCloudDocuments(env, userId, app, PORTABLE_DOCUMENTS_MIN_CLI)) ?? [];
+	const text = (role: string) => {
+		const d = docs.find((x) => x.role === role);
+		return d ? decode(d.contentBase64) : undefined;
+	};
+	return { resume: text("resume"), coverLetter: text("cover_letter") };
+}
 
 /** The owner's answers for this application (latest per question), applied or not. */
-async function ownerAnswers(env: Env, userId: string, applicationId: string): Promise<Array<{ question: string; answer: string }>> {
+export async function ownerAnswers(env: Env, userId: string, applicationId: string): Promise<Array<{ question: string; answer: string }>> {
 	const { results } = await env.DB.prepare("SELECT question, answer FROM owner_decisions WHERE user_id = ?1 AND scope = ?2 AND answered_at IS NOT NULL AND answer IS NOT NULL ORDER BY answered_at ASC, rowid ASC")
 		.bind(userId, applicationId)
 		.all<{ question: string; answer: string }>();
@@ -48,19 +58,15 @@ async function ownerAnswers(env: Env, userId: string, applicationId: string): Pr
 
 async function saveArgs(env: Env, userId: string, app: JobApplication): Promise<Record<string, unknown>> {
 	const lead = (app.lead ?? {}) as Partial<LocalArtifactLead>;
-	const docs = (await loadCloudDocuments(env, userId, app, PORTABLE_DOCUMENTS_MIN_CLI)) ?? [];
-	const text = (role: string) => {
-		const d = docs.find((x) => x.role === role);
-		return d ? decode(d.contentBase64) : undefined;
-	};
+	const { resume, coverLetter } = await tailoredTexts(env, userId, app);
 	return {
 		external_id: app.id,
 		source_url: lead.leadUrl ?? lead.lead?.url ?? "",
 		title: lead.lead?.title || "Untitled role",
 		company_name: lead.lead?.company || "Unknown company",
 		...(lead.lead?.location ? { location: lead.lead.location } : {}),
-		...(text("resume") ? { resume_md: text("resume") } : {}),
-		...(text("cover_letter") ? { cover_letter_md: text("cover_letter") } : {}),
+		...(resume ? { resume_md: resume } : {}),
+		...(coverLetter ? { cover_letter_md: coverLetter } : {}),
 		answers: JSON.stringify(await ownerAnswers(env, userId, app.id)),
 		...(fileName(app.resumeArtifact) ? { resume_file_name: fileName(app.resumeArtifact) } : {}),
 		...(fileName(app.coverLetterArtifact) ? { cover_letter_file_name: fileName(app.coverLetterArtifact) } : {}),

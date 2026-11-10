@@ -13,10 +13,18 @@ const { exportCall } = vi.hoisted(() => ({ exportCall: vi.fn() }));
 vi.mock("../../routes/instances-runtime.js", () => ({ callRuntime: exportCall, runtimeJson: (r: Response) => r.json() }));
 const calls: Array<{ tool: string; args: Record<string, unknown>; instanceId: string }> = [];
 let outcome: { ok: true } | { ok: false; reason: "failed" | "no_grant"; detail: string } = { ok: true };
+const cvCalls: Array<{ tool: string; args: Record<string, unknown>; instanceId: string; url: string }> = [];
+let cvOutcome: { ok: true } | { ok: false; reason: "failed" | "no_grant"; detail: string } = { ok: true };
 vi.mock("../jobs-app.js", () => ({
+	JOBS_MCP_URL: "https://mcp.proappstore.online/mcp/apps/jobs",
+	CV_MCP_URL: "https://mcp.proappstore.online/mcp/apps/cv",
 	callJobsTool: async (_env: unknown, who: { instanceId: string }, tool: string, args: Record<string, unknown>) => {
 		calls.push({ tool, args, instanceId: who.instanceId });
 		return outcome;
+	},
+	callAppTool: async (_env: unknown, who: { instanceId: string }, url: string, tool: string, args: Record<string, unknown>) => {
+		cvCalls.push({ tool, args, instanceId: who.instanceId, url });
+		return cvOutcome;
 	},
 	jobsAccountProblem: async () => null,
 }));
@@ -24,7 +32,12 @@ const { persistCloudDocuments } = await import("./cloud-documents.js");
 const { moveApplication } = await import("../local-apply/store.js");
 const { settleApplication, setApplicationMirror } = await import("./store.js");
 const { syncApplicationToJobs, syncPendingToJobs, JOBS_SYNC_RETRY_MS } = await import("../jobs-tailored.js");
-setApplicationMirror(syncApplicationToJobs); // what index.ts does at startup
+const { syncApplicationToCv, syncPendingToCv } = await import("../cv-documents.js");
+// What index.ts does at startup: both mirrors, Jobs first.
+setApplicationMirror(async (e, u, id) => {
+	await syncApplicationToJobs(e, u, id);
+	await syncApplicationToCv(e, u, id);
+});
 
 let d1: RealSchemaD1;
 let files: Map<string, { meta: Record<string, unknown>; bytes: Uint8Array }>;
@@ -66,6 +79,8 @@ async function readyApplication() {
 beforeEach(() => {
 	calls.length = 0;
 	outcome = { ok: true };
+	cvCalls.length = 0;
+	cvOutcome = { ok: true };
 	files = new Map();
 	uploads = 0;
 	d1 = realSchemaD1();
@@ -154,5 +169,52 @@ describe("Runner outcome -> Jobs set_tailored_status", () => {
 		const moved = await moveApplication(env(), await get(), "owner", { to: "submitted", actor: "runner", runId: "fill", expectRun: "fill", submitted: { at: "2026-11-07T01:02:03.000Z", url: "https://x.example/done" } }, 4000);
 		expect(moved).toBe(true);
 		expect((d1.sqlite.prepare("SELECT status FROM job_applications WHERE id='application'").get() as { status: string }).status).toBe("submitted");
+	});
+});
+
+describe("#1624: tailoring completion and Runner outcomes -> CV save_document / set_document_status", () => {
+	const cvRow = () => d1.sqlite.prepare("SELECT cv_synced_key AS k, cv_sync_error AS e, jobs_synced_key AS jk FROM job_applications WHERE id='application'").get() as { k: string | null; e: string | null; jk: string | null };
+
+	it("materials_ready saves the resume, cover letter and answers once each, as the Tailor, on the CV endpoint", async () => {
+		await readyApplication();
+		await syncApplicationToCv(env(), "owner", "application"); // a repeat changes nothing
+		expect(cvCalls.map((c) => [c.tool, c.args.kind])).toEqual([["save_document", "resume"], ["save_document", "cover_letter"], ["save_document", "answers"]]);
+		for (const c of cvCalls) expect(c).toMatchObject({ instanceId: "tailor", url: "https://mcp.proappstore.online/mcp/apps/cv" });
+		expect(cvCalls[0].args).toEqual({ external_id: "application", kind: "resume", company: "Acme", position: "Engineer", job_url: "https://jobs.example.com/job", content_md: "Synthetic resume text\n", file_name: expect.stringMatching(/resume/) });
+		expect(cvCalls[2].args.content_md).toBe("**Work rights?**\n\nCitizen");
+		expect(cvRow()).toEqual({ k: "tailor-run|materials_ready", e: null, jk: "tailor-run|materials_ready" });
+	});
+
+	it("a confirmed submit sets status submitted with submitted_at", async () => {
+		await readyApplication();
+		cvCalls.length = 0;
+		const get = async () => (await d1.DB.prepare("SELECT id, status, state_version AS stateVersion FROM job_applications WHERE id='application'").first()) as never;
+		await moveApplication(env(), await get(), "owner", { to: "filling", actor: "runner", actorInstanceId: "apply", runId: "fill", bindRun: "fill" }, 3000);
+		await moveApplication(env(), await get(), "owner", { to: "submitted", actor: "runner", actorInstanceId: "apply", runId: "fill", expectRun: "fill", submitted: { at: "2026-11-07T01:02:03.000Z", url: "https://jobs.example.com/done" } }, 4000);
+		const status = cvCalls.filter((c) => c.tool === "set_document_status");
+		expect(status).toHaveLength(1);
+		expect(status[0].args).toEqual({ external_id: "application", status: "submitted", submitted_at: Date.parse("2026-11-07T01:02:03.000Z") });
+	});
+
+	it("a CV failure never blocks the Jobs mirror or tailoring, is shown in health, and is retried by its own sweep", async () => {
+		cvOutcome = { ok: false, reason: "failed", detail: "CV is down" };
+		await readyApplication();
+		expect(cvRow()).toMatchObject({ k: null, jk: "tailor-run|materials_ready" });
+		expect(cvRow().e).toContain("CV is down");
+		const health = await pipelineHealth(env(), "owner", { scouts: [], tailors: ["tailor"], runners: [] }, [], Date.now());
+		expect(health.problems.map((p) => p.code)).toContain("cv_sync_failing");
+		expect(health.problems.map((p) => p.code)).not.toContain("jobs_sync_failing");
+		d1.exec(`UPDATE job_applications SET updated_at = ${Date.now()}`);
+		cvOutcome = { ok: true };
+		expect(await syncPendingToCv(env(), Date.now() + 1000)).toBe(0); // backed off
+		expect(await syncPendingToCv(env(), Date.now() + JOBS_SYNC_RETRY_MS + 1000)).toBe(1);
+		expect(cvRow()).toMatchObject({ k: "tailor-run|materials_ready", e: null });
+	});
+
+	it("an instance with no CV grant is quiet", async () => {
+		cvOutcome = { ok: false, reason: "no_grant", detail: "no grant" };
+		await readyApplication();
+		const health = await pipelineHealth(env(), "owner", { scouts: [], tailors: ["tailor"], runners: [] }, [], Date.now());
+		expect(health.problems.map((p) => p.code)).not.toContain("cv_sync_failing");
 	});
 });

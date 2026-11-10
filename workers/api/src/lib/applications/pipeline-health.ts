@@ -36,6 +36,7 @@ export type PipelineProblemCode =
 	| "source_stale"
 	| "source_junk_leads"
 	| "jobs_sync_failing"
+	| "cv_sync_failing"
 	| "jobs_not_connected"
 	| "engine_quota_exhausted"
 	| "finder_edge_disabled"
@@ -123,7 +124,7 @@ export interface SourceFact {
 }
 
 /** Pure: the facts in, every problem out. */
-export function pipelineHealthFrom(input: { pipeline: { scouts: string[]; tailors: string[]; runners: string[] }; edges: EdgeFact[]; sources: SourceFact[]; now: number; jobsSync?: JobsSyncFact[]; jobsConnection?: JobsConnectionFact[]; finders?: FinderFact[]; engineQuota?: EngineQuotaFact[] }): PipelineHealth {
+export function pipelineHealthFrom(input: { pipeline: { scouts: string[]; tailors: string[]; runners: string[] }; edges: EdgeFact[]; sources: SourceFact[]; now: number; jobsSync?: JobsSyncFact[]; cvSync?: JobsSyncFact[]; jobsConnection?: JobsConnectionFact[]; finders?: FinderFact[]; engineQuota?: EngineQuotaFact[] }): PipelineHealth {
 	const problems: PipelineProblem[] = finderProblems(input.finders ?? [], input.now);
 	for (const e of input.edges) {
 		if (!e.enabled) problems.push({ code: "edge_disabled", connectionId: e.id, message: `The ${e.eventType === "job.application.materials_ready" ? "Tailor → Runner" : "Scout → Tailor"} connection ${e.id} is disabled, so nothing moves along it until it is re-enabled.` });
@@ -131,6 +132,9 @@ export function pipelineHealthFrom(input: { pipeline: { scouts: string[]; tailor
 	}
 	if (input.pipeline.scouts.length && !input.pipeline.tailors.length) problems.push({ code: "no_tailor", message: "No Application Tailor is connected, so an approved lead cannot get materials." });
 	if (input.pipeline.tailors.length && !input.pipeline.runners.length) problems.push({ code: "no_runner", message: "No Application Runner is connected, so ready materials cannot be filled." });
+	for (const j of input.cvSync ?? []) {
+		if (j.failing > 0) problems.push({ code: "cv_sync_failing", instanceId: j.instanceId, message: `Tailor ${j.instanceId} could not copy ${j.failing} application${j.failing === 1 ? "" : "s"} to the CV app (last error: ${j.lastError ?? "none recorded"}). It retries every 15 minutes; check the Tailor's MCP grant and account for the CV endpoint.` });
+	}
 	for (const j of input.jobsSync ?? []) {
 		if (j.failing > 0) problems.push({ code: "jobs_sync_failing", instanceId: j.instanceId, message: `Tailor ${j.instanceId} could not send ${j.failing} application${j.failing === 1 ? "" : "s"} to the Jobs app (last error: ${j.lastError ?? "none recorded"}). It retries every 15 minutes; check the Tailor's MCP grant and account for the Jobs endpoint.` });
 	}
@@ -184,15 +188,18 @@ export async function pipelineHealth(env: Env, uid: string, pipeline: { scouts: 
 			return { instanceId, runtime: caps?.runtime ?? null, gmail, browser };
 		}),
 	);
-	const jobsSync = await Promise.all(
+	// A missing grant or connection is not counted: both mirrors are opt-in (#1586, #1624).
+	const syncFailures = (prefix: "jobs" | "cv") => Promise.all(
 		pipeline.tailors.map(async (instanceId): Promise<JobsSyncFact> => {
-			const row = await env.DB.prepare("SELECT COUNT(*) AS n, MAX(jobs_sync_error) AS e FROM job_applications WHERE instance_id = ?1 AND user_id = ?2 AND jobs_sync_error IS NOT NULL AND jobs_sync_error NOT LIKE 'no_grant:%' AND jobs_sync_error NOT LIKE 'not_connected:%' AND jobs_sync_error NOT LIKE 'ambiguous:%' AND jobs_sync_error NOT LIKE 'pinned_account_gone:%' AND jobs_sync_at >= ?3")
+			const e = `${prefix}_sync_error`;
+			const row = await env.DB.prepare(`SELECT COUNT(*) AS n, MAX(${e}) AS e FROM job_applications WHERE instance_id = ?1 AND user_id = ?2 AND ${e} IS NOT NULL AND ${e} NOT LIKE 'no_grant:%' AND ${e} NOT LIKE 'not_connected:%' AND ${e} NOT LIKE 'ambiguous:%' AND ${e} NOT LIKE 'pinned_account_gone:%' AND ${prefix}_sync_at >= ?3`)
 				.bind(instanceId, uid, now - 14 * 24 * 60 * 60_000)
 				.first<{ n: number; e: string | null }>()
 				.catch(() => null);
 			return { instanceId, failing: row?.n ?? 0, lastError: row?.e ?? null };
 		}),
 	);
+	const [jobsSync, cvSync] = await Promise.all([syncFailures("jobs"), syncFailures("cv")]);
 	const jobsConnection = (
 		await Promise.all([
 			...pipeline.scouts.map(async (instanceId) => ({ instanceId, role: "Scout" as const, problem: await jobsAccountProblem(env, { userId: uid, instanceId }, "submit_leads").catch(() => null) })),
@@ -210,7 +217,7 @@ export async function pipelineHealth(env: Env, uid: string, pipeline: { scouts: 
 			}),
 		)
 	).filter((f): f is EngineQuotaFact => !!f);
-	return pipelineHealthFrom({ pipeline, edges, sources, now, jobsSync, jobsConnection, engineQuota, finders: await finderFacts(env, uid, pipeline.scouts, now).catch(() => []) });
+	return pipelineHealthFrom({ pipeline, edges, sources, now, jobsSync, cvSync, jobsConnection, engineQuota, finders: await finderFacts(env, uid, pipeline.scouts, now).catch(() => []) });
 }
 
 /**
