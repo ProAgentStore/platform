@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, realpathSync, lstatSync, writeFileSync } from "node:fs";
-import { extname, isAbsolute, join } from "node:path";
+import { basename, extname, isAbsolute, join } from "node:path";
 /** Opt-in native tools: no interpretation of page content or native schema rewriting. */
 import type { BrowserTools } from "../local-browser/bridge.js";
 import { signInQuestion, type ApplyBridgeHost, type ToolResult } from "./bridge.js";
@@ -175,7 +175,7 @@ export function fullArtifactPaths(original: ApplyBridgeHost["artifactPath"], kin
 	for (const { kind } of kinds) {
 		const approved = original(kind); if ("error" in approved) throw new RunnerInputError(approved.error);
 		if (extname(approved.path).toLowerCase() !== ".pdf") throw new RunnerInputError("A real PDF attachment is required; text-file upload fallback is disabled.");
-		const path = join(directory, `${kind}${extname(approved.path)}`); writeFileSync(path, readFileSync(approved.path), { mode: 0o600, flag: "wx" }); paths.set(kind, path);
+		const path = join(directory, basename(approved.path)); writeFileSync(path, readFileSync(approved.path), { mode: 0o600, flag: "wx" }); paths.set(kind, path);
 	}
 	return (kind) => {
 		const approved = original(kind); if ("error" in approved) return approved;
