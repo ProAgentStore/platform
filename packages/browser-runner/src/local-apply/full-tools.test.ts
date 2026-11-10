@@ -73,6 +73,15 @@ describe("accepted full native application tools", () => {
 		await f.bridge.callTool("supervisor_checkpoint", { checkpointId: "final2", phase: "before_submit" }); f.navigate("https://forms.example.test/other");
 		expect((await f.bridge.callTool("submit_application", { ref: "s1" })).isError).toBe(true);
 	});
+	it("reports no `filled` fact in full mode: native calls are not field counts (#1629)", async () => {
+		const supervisorCheckpoint = vi.fn(async () => "continue" as const);
+		const f = fixture({ supervisorCheckpoint });
+		await f.bridge.callTool("browser_fill_form", { fields: [{ name: "Q", type: "textbox", value: "A", ref: "x" }] });
+		await f.bridge.callTool("supervisor_checkpoint", { checkpointId: "c1", phase: "before_submit" });
+		const facts = (supervisorCheckpoint.mock.calls[0] as unknown as [{ facts: Record<string, unknown> }])[0].facts;
+		expect(facts).toMatchObject({ actions: 1, uploaded: 0 });
+		expect("filled" in facts).toBe(false);
+	});
 	it("keeps the before_submit approval across read-only observation, but not across an action (#1628)", async () => {
 		const refusal = /obtain a before_submit checkpoint/;
 		const text = (r: { content?: Array<{ text?: string }> }) => (r.content ?? []).map((c) => c.text ?? "").join("\n");

@@ -261,7 +261,7 @@ export class ApplyBridge {
 	) {
 		this.replay = new ApplyReplay(host, shots);
 		this.browser = { uploadContext: () => browser.uploadContext?.() ?? null, listTools: () => browser.listTools(), callTool: (name, args, opts) => this.replay.call(browser, name, args, opts), refused: (tool, args, reason) => browser.refused?.(tool, args, reason) };
-		if (host.toolAccess === "full") this.full = new FullApplyTools(this.browser, host, () => ({ actions: this.actions, filled: this.filled, uploaded: this.uploaded.size }), (approved) => { this.supervisorApproved = approved; }, (blocked) => { this.blocked = blocked; });
+		if (host.toolAccess === "full") this.full = new FullApplyTools(this.browser, host, () => ({ actions: this.actions, uploaded: this.uploaded.size }), (approved) => { this.supervisorApproved = approved; }, (blocked) => { this.blocked = blocked; });
 	}
 
 	callTool(name: string, args: Record<string, unknown> = {}): Promise<ToolResult> {

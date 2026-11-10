@@ -565,7 +565,7 @@ export interface LocalApplySupervisorFacts {
 	/** The acting model assesses the decision; code does not classify page content. */
 	decision?: LocalApplyDecisionAssessment;
 	actions: number;
-	filled: number;
+	filled?: number; // absent = unmeasured (full native tools), never 0 (#1629)
 	uploaded: number;
 	blockers: LocalApplySupervisorBlocker[];
 	url?: string;

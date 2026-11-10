@@ -16,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Env } from "../../types.js";
 import { type RealSchemaD1, realSchemaD1, seedTenant } from "../d1-sqlite.js";
 import type { LocalApplySupervisorFacts } from "./contract.js";
-import { SUPERVISOR_SCHEMA_VERSION, issueSupervisorDirective, receiveSupervisorCheckpoint } from "./supervision.js";
+import { SUPERVISOR_SCHEMA_VERSION, issueSupervisorDirective, receiveSupervisorCheckpoint, sanitizeSupervisorFacts } from "./supervision.js";
 
 const UID = "u1";
 const RUN = { id: "run-1", instanceId: "inst-1" };
@@ -106,5 +106,17 @@ describe("a directive is issued once and replayed, never decided twice (#970)", 
 		await expect(issue({ checkpointId: id, idempotencyKey: "bad key with spaces", directive: "continue" })).rejects.toThrow(/Invalid supervisor directive/);
 		await expect(issue({ checkpointId: id, idempotencyKey: "k", directive: "proceed" as "continue" })).rejects.toThrow(/Invalid supervisor directive/);
 		expect(await directiveRows()).toBe(0);
+	});
+});
+
+describe("unmeasured field counts (#1629)", () => {
+	it("accepts facts with no `filled` and keeps it absent, so it is never read as 0", () => {
+		const { filled: _omitted, ...unmeasured } = FACTS;
+		expect(sanitizeSupervisorFacts(unmeasured)).toEqual(unmeasured);
+		expect(sanitizeSupervisorFacts(FACTS)?.filled).toBe(5);
+		expect(sanitizeSupervisorFacts({ ...FACTS, filled: 0 })?.filled).toBe(0);
+	});
+	it("still refuses a malformed `filled`", () => {
+		for (const filled of [-1, 1.5, "3", null]) expect(sanitizeSupervisorFacts({ ...FACTS, filled })).toBeNull();
 	});
 });

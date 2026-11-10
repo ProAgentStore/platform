@@ -92,7 +92,7 @@ export const isSupervisorDirective = (value: unknown): value is SupervisorDirect
 export function sanitizeSupervisorFacts(value: unknown): LocalApplySupervisorFacts | null {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
 	const facts = value as Record<string, unknown>;
-	if (!PHASES.has(facts.phase as LocalApplySupervisorFacts["phase"]) || !validCount(facts.actions) || !validCount(facts.filled) || !validCount(facts.uploaded)) return null;
+	if (!PHASES.has(facts.phase as LocalApplySupervisorFacts["phase"]) || !validCount(facts.actions) || facts.filled !== undefined && !validCount(facts.filled) || !validCount(facts.uploaded)) return null;
 	if (!Array.isArray(facts.blockers) || facts.blockers.length > BLOCKERS.size || facts.blockers.some((v) => typeof v !== "string" || !BLOCKERS.has(v))) return null;
 	if ((facts.url !== undefined && !validUrl(facts.url)) || (facts.domain !== undefined && !validDomain(facts.domain)) || (facts.title !== undefined && !validTitle(facts.title))) return null;
 	const reviewWait = facts.reviewWait as Record<string, unknown> | undefined;
@@ -104,7 +104,7 @@ export function sanitizeSupervisorFacts(value: unknown): LocalApplySupervisorFac
 		...(reviewWait ? { reviewWait: { expiresAt: Number(reviewWait.expiresAt), budgetMs: Number(reviewWait.budgetMs) } } : {}),
 		phase: facts.phase as LocalApplySupervisorFacts["phase"],
 		actions: facts.actions,
-		filled: facts.filled,
+		...(facts.filled === undefined ? {} : { filled: facts.filled }),
 		uploaded: facts.uploaded,
 		blockers: [...new Set(facts.blockers)] as LocalApplySupervisorFacts["blockers"],
 		...(facts.url === undefined ? {} : { url: facts.url }),

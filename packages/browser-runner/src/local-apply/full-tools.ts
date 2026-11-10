@@ -51,7 +51,7 @@ export class FullApplyTools {
 	private credentialOrigin: string | null = null;
 	private submissionPage: object | null = null;
 	private submissionUrl = "";
-	constructor(private readonly browser: BrowserTools, private readonly host: ApplyBridgeHost, private readonly counts: () => { actions: number; filled: number; uploaded: number }, private readonly approve: (approved: boolean) => void, private readonly setBlocked: (blocked: { reason: "login_required"; questions: string[] } | null) => void) {}
+	constructor(private readonly browser: BrowserTools, private readonly host: ApplyBridgeHost, private readonly counts: () => { actions: number; filled?: number; uploaded: number }, private readonly approve: (approved: boolean) => void, private readonly setBlocked: (blocked: { reason: "login_required"; questions: string[] } | null) => void) {}
 	async listTools(): Promise<NativeTool[]> {
 		this.inventory ??= await this.browser.listTools();
 		return [...this.inventory, ...applyTools([], false).filter((t) => TASK_TOOLS.has(t.name)).map((t) => t.name === "supervisor_checkpoint" ? { ...t, description: "Request review of an uncertain decision under the configured escalation level, or obtain an immediate before_submit authorization. Routine initial and page-change checkpoints are optional in full mode." } : t.name === "upload_artifact" ? { ...t, description: "Select an approved, hash-verified document in the current upload input. Observe the website afterward to verify acceptance." } : t), {

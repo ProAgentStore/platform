@@ -244,7 +244,7 @@ export function checkpointDecisionEvent(checkpoint: SupervisorCheckpoint, decisi
 			source: decision.source,
 			reason: decision.reason,
 			actions: f.actions,
-			filled: f.filled,
+			...(f.filled === undefined ? {} : { filled: f.filled }),
 			uploaded: f.uploaded,
 			// Joined rather than an array: a trace detail holds scalars, and these are closed ids.
 			...(f.blockers.length ? { blockers: f.blockers.join(",") } : {}),

@@ -667,7 +667,7 @@ export class LocalApplyRuntime {
 		const budgetMs = Math.floor(run.envelope.limits.maxMinutes * 60_000 * 0.9);
 		const lease: ReviewApprovalLease = { checkpointId: crypto.randomUUID(), page, url: page.url(), budgetMs, expiresAt: this.now() + budgetMs };
 		run.reviewApprovalLease = lease;
-		const directive = await this.supervisorCheckpoint(run, { schemaVersion: 1, checkpointId: lease.checkpointId, facts: { phase: "before_submit", reviewWait: { expiresAt: lease.expiresAt, budgetMs }, actions: run.bridge?.actions ?? 0, filled: run.bridge?.filled ?? 0, uploaded: run.bridge?.uploaded.size ?? 0, blockers: [], url: lease.url, domain: new URL(lease.url).hostname } });
+		const directive = await this.supervisorCheckpoint(run, { schemaVersion: 1, checkpointId: lease.checkpointId, facts: { phase: "before_submit", reviewWait: { expiresAt: lease.expiresAt, budgetMs }, actions: run.bridge?.actions ?? 0, ...(run.envelope.policy.toolAccess === "full" ? {} : { filled: run.bridge?.filled ?? 0 }), uploaded: run.bridge?.uploaded.size ?? 0, blockers: [], url: lease.url, domain: new URL(lease.url).hostname } });
 		return directive === "continue" && !!lease.authorization && !run.result && !run.cancelled;
 	}
 
@@ -730,7 +730,7 @@ export class LocalApplyRuntime {
 				type: "supervisor.checkpoint",
 				...(supervisor.facts.url ? { url: supervisor.facts.url } : {}),
 				...(supervisor.facts.domain ? { domain: supervisor.facts.domain } : {}),
-				detail: { checkpointId, phase: supervisor.facts.phase, actions: supervisor.facts.actions, filled: supervisor.facts.filled, uploaded: supervisor.facts.uploaded },
+				detail: { checkpointId, phase: supervisor.facts.phase, actions: supervisor.facts.actions, ...(supervisor.facts.filled === undefined ? {} : { filled: supervisor.facts.filled }), uploaded: supervisor.facts.uploaded },
 			});
 		}
 		if (checkpoint.directive) {
