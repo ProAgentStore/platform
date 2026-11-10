@@ -5,11 +5,12 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { ApplyBridge, type ApplyBridgeHost } from "./bridge.js";
 import { fullArtifactPaths, parseToolAccess } from "./full-tools.js";
+import { ACCOUNT_DATA_RULE, fullApplyPrompt } from "./full-prompt.js";
 import { sourceId } from "./answer-decision.js";
 import type { BrowserTools } from "../local-browser/bridge.js";
 import type { MaskablePage } from "../local-browser/replay.js";
 
-const names = ["browser_snapshot", "browser_type", "browser_fill_form", "browser_evaluate", "browser_run_code_unsafe", "browser_take_screenshot", "browser_tabs", "browser_click", "browser_navigate"];
+const names = ["browser_snapshot", "browser_type", "browser_fill_form", "browser_evaluate", "browser_run_code_unsafe", "browser_take_screenshot", "browser_tabs", "browser_click", "browser_navigate", "browser_select_option"];
 const native = names.map((name) => ({ name, description: `native ${name}`, inputSchema: { type: "object", properties: { target: { type: "string" }, code: { type: "string" } }, additionalProperties: false } }));
 function fixture(over: Partial<ApplyBridgeHost> = {}) {
 	let url = "https://forms.example.test/start";
@@ -164,7 +165,44 @@ describe("accepted full native application tools", () => {
 		for (const assessment of [{ classification: "optional" }, { classification: "optional", observationUrl: "https://other.example.test/", evidence: "Old page", omissionVerified: true, decision: { risk: "minor", reason: "Optional" } }]) expect((await f.bridge.callTool("request_answer", { question, assessment })).isError).toBe(true);
 		expect(f.bridge.unresolvedQuestions).toEqual([question]);
 	});
-
+	describe("owner account storage (#1626)", () => {
+		const limitDialog = ['- dialog "Resumé limit reached. Please select a resumé to delete from your list and try again." [ref=d0]', '- combobox "Résumé to delete" [ref=d1]', '- button "Delete selected résumé" [ref=d2]', '- button "Remove resume.pdf from application" [ref=f1]'].join("\n");
+		function limitFixture(over: Partial<ApplyBridgeHost> = {}) {
+			const f = fixture(over);
+			f.callTool.mockImplementation(async (name) => ({ content: [{ type: "text", text: name === "browser_snapshot" ? limitDialog : "native response" }] }));
+			return f;
+		}
+		it("holds a delete on the owner's stored resumes with a missing_answer pause and never dispatches it", async () => {
+			const pause = vi.fn(async () => "resumed" as const);
+			const f = limitFixture({ pause, escalationLevel: "autonomous" });
+			await f.bridge.callTool("browser_snapshot");
+			const select = await f.bridge.callTool("browser_select_option", { element: "Résumé to delete dropdown", target: "#docLimitExceededDropdown", values: ["10/11/26 - resume.pdf"] });
+			expect(select.isError).toBe(true);
+			expect(pause).toHaveBeenCalledWith(expect.objectContaining({ reason: "missing_answer", question: expect.stringContaining("forms.example.test") }), undefined);
+			const click = await f.bridge.callTool("browser_click", { element: "Delete selected résumé button", target: "d2" });
+			expect(click.isError).toBe(true);
+			expect(f.callTool.mock.calls.map(([n]) => n)).toEqual(["browser_snapshot"]);
+		});
+		it("lets the delete through once the owner's answer arrives, for one click", async () => {
+			let facts = "Trusted facts";
+			const f = limitFixture({ pause: async () => { facts += " Owner: delete the oldest"; return "resumed"; }, grounding: () => facts });
+			await f.bridge.callTool("browser_snapshot");
+			expect((await f.bridge.callTool("browser_click", { element: "Delete selected résumé button", target: "d2" })).isError).toBe(true);
+			await f.bridge.callTool("browser_click", { element: "Delete selected résumé button", target: "d2" });
+			expect(f.callTool.mock.calls.filter(([n]) => n === "browser_click")).toHaveLength(1);
+		});
+		it("does not block removing an attachment from the current application form", async () => {
+			const pause = vi.fn(async () => "resumed" as const);
+			const f = fixture({ pause });
+			await f.bridge.callTool("browser_click", { element: "Remove resume.pdf from application", target: "f1" });
+			expect(pause).not.toHaveBeenCalled();
+			expect(f.callTool.mock.calls.map(([n]) => n)).toEqual(["browser_click"]);
+		});
+		it("tells the model never to delete stored account data", () => {
+			expect(ACCOUNT_DATA_RULE).toMatch(/Never delete, remove or replace data stored on the owner's job-site account/);
+			expect(fullApplyPrompt({ job: { title: "T" }, applicationUrl: "https://x.test", policy: {}, limits: { maxActions: 1, maxPages: 1, maxMinutes: 1 } } as never, [])).toContain(ACCOUNT_DATA_RULE);
+		});
+	});
 });
 
 describe("full tool authority and document provenance", () => {

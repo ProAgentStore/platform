@@ -24,6 +24,25 @@ export function parseToolAccess(policy: Record<string, unknown>, instanceId: str
 	return { toolAccess: "full", toolAccessAcceptance: { revision: "full_playwright_v1", instanceId, acceptedBy: a.acceptedBy, acceptedAt: a.acceptedAt } };
 }
 
+const DESTRUCTIVE_VERB = /\b(delete|remove|erase|discard)\b/i;
+const RESUME = "r[eé]sum[eé]?s?|cv|cover letters?";
+/** The page itself says a site-side storage limit was hit (SEEK: "Resumé limit reached", `#docLimitExceededDropdown`). */
+export const STORAGE_LIMIT_CUE = /(limit (reached|exceeded)|docLimit|maximum number of (r[eé]sum|documents?))/i;
+const STORED_ITEM_CUE = new RegExp(`\\b(selected|saved|stored|existing|default|my|your)\\b.{0,20}\\b(${RESUME}|profile|documents?)\\b|\\b(${RESUME}) (list|library)\\b|\\b(from|in) (your|my) (account|profile|list)\\b|docLimit`, "i");
+
+/**
+ * A click or select that deletes data stored on the owner's job-site account (a saved résumé, profile entry),
+ * not an attachment on the current form. The label must name a stored item, or the page must have shown a
+ * storage-limit dialog (`limitShown`). The owner chooses what to delete, never the model (#1626).
+ */
+export function isAccountStorageDeletion(name: string, args: Record<string, unknown>, targetName: string, limitShown: boolean): boolean {
+	if (name !== "browser_click" && name !== "browser_select_option") return false;
+	const label = [args.element, targetName].filter((v): v is string => typeof v === "string").join(" ");
+	const ref = typeof args.target === "string" ? args.target : typeof args.ref === "string" ? args.ref : "";
+	if (!DESTRUCTIVE_VERB.test(label)) return false;
+	return limitShown || STORED_ITEM_CUE.test(`${label} ${ref}`);
+}
+
 export class FullApplyTools {
 	private inventory: NativeTool[] | null = null;
 	calls = 0;

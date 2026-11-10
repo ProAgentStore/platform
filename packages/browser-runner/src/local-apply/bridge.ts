@@ -1,6 +1,6 @@
 import type { PreparedUpload } from "./documents.js";
 import { waitForFinalAnswers, type FinalAnswerPauseOptions } from "./final-answer-wait.js";
-import { FullApplyTools, FULL_SUBMISSION_UNKNOWN } from "./full-tools.js";
+import { FullApplyTools, FULL_SUBMISSION_UNKNOWN, STORAGE_LIMIT_CUE, isAccountStorageDeletion } from "./full-tools.js";
 import { answerDecision, decisionReason, parseDecision, sourceCatalog, sourceId } from "./answer-decision.js";
 import { applyTools, recoveryTools } from "./tool-schemas.js";
 import { assessQuestion, type DeferredQuestion } from "./question-assessment.js";
@@ -215,6 +215,10 @@ export class ApplyBridge {
 	actions = 0;
 	pages = 0;
 	private lastSnapshot = "";
+	/** The latest snapshot showed a site storage-limit dialog (#1626); kept across non-snapshot calls until a snapshot no longer shows it. */
+	private storageLimitShown = false;
+	/** The owner answered a delete question: one destructive click may follow (#1626). */
+	private accountDeleteGranted = false;
 	/** A run owns one page: concurrent calls must not share a pre-submit observation. */
 	private toolQueue: Promise<void> = Promise.resolve();
 	private readonly admitted = new Set<string>();
@@ -321,9 +325,14 @@ export class ApplyBridge {
 		if (this.full && await this.full.has(name)) {
 			if (this.host.overTime() || ++this.actions > this.host.limits.maxActions) return text("The browser action or time limit is reached. Call ready_for_review.", true);
 			if ((name === "browser_navigate" || name === "browser_navigate_back") && ++this.pages > this.host.limits.maxPages) return text("The navigation limit is reached. Call ready_for_review.", true);
+			if (isAccountStorageDeletion(name, args, this.target(args)?.name ?? "", this.storageLimitShown)) {
+				const held = await this.holdAccountDeletion(name, args);
+				if (held) return held;
+			}
 			this.lastSnapshot = "";
 			const result = await this.full.call(name, args, this.signInOrigin ?? undefined);
-			if (name === "browser_snapshot") this.lastSnapshot = textOf(result);
+			if (name === "browser_snapshot") { this.lastSnapshot = textOf(result); this.storageLimitShown = STORAGE_LIMIT_CUE.test(this.lastSnapshot); }
+			if (name === "browser_click") this.accountDeleteGranted = false;
 			return result;
 		}
 		if (this.full) return this.refuse(name, "read", "This tool is not in the native inventory or task tool set.");
@@ -804,6 +813,24 @@ export class ApplyBridge {
 		this.uploaded.add(kind);
 		this.host.emit({ type: "artifact.uploaded", detail: { kind, sha256: file.sha256, ...(file.sourceSha256 ? { sourceSha256: file.sourceSha256, rendererRevision: file.rendererRevision, mimeType: file.mimeType, bytes: file.bytes } : {}), class: "fill", status: "selected", reason: "site_acceptance_unconfirmed" } });
 		return text(`Selected the approved ${kind.replace("_", " ")} in the file input. Website acceptance is not confirmed. Take browser_snapshot now to inspect the current page; a Snapshot file link is not inline page evidence. Resolve any validation error before continuing.\n\n<untrusted_browser_observation>\n${textOf(res)}\n</untrusted_browser_observation>`);
+	}
+
+	/**
+	 * Full mode never deletes the owner's stored job-site data on its own (#1626). Asks through the same
+	 * missing_answer pause as request_answer, at every escalation level. Returns a refusal, or null when the
+	 * owner has already answered and this action may proceed.
+	 */
+	private async holdAccountDeletion(name: string, args: Record<string, unknown>): Promise<ToolResult | null> {
+		if (this.accountDeleteGranted) return null;
+		const site = hostOf(this.host.page?.()?.url?.() ?? "") ?? "the job site";
+		const label = String(args.element ?? this.target(args)?.name ?? "a control").slice(0, 100);
+		const question = `${site} asks to delete data stored on your account ("${label}"). PAGS never deletes it on its own. Tell me exactly what may be deleted, or resume to leave it and stop.`.slice(0, LOCAL_APPLY_CAPS.questionChars);
+		const before = this.host.grounding().length;
+		this.host.emit({ type: "policy.decision", detail: { tool: name, decision: "deferred", reason: "account_storage_deletion" } });
+		if (!await this.pauseFor({ reason: "missing_answer", question })) return text("Nobody answered. Do not delete anything. Stop now.", true);
+		if (this.host.grounding().length === before) return text("The owner resumed without authorizing a deletion. Do not delete or replace anything stored on the account; leave it and report the blocker with ready_for_review.", true);
+		this.accountDeleteGranted = true;
+		return text(`The owner answered. Their answer is now part of your sources:\n${sourceCatalog(this.host.groundingSources?.() ?? [])}\nDelete only what it names, then repeat the action.`, true);
 	}
 
 	private async requestAnswer(args: Record<string, unknown>): Promise<ToolResult> {
