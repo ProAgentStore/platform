@@ -1399,7 +1399,7 @@ describe("accepted full native runtime wiring", () => {
 			rt.start(input); await settle();
 			expect(spawned).toHaveLength(1); expect(configure).toHaveBeenCalledWith("full", expect.stringContaining("run-1"));
 			expect(nativePolicy?.toolAccess).toBe("full");
-			expect(nativePolicy?.approvedUploadPaths?.()).toEqual([expect.stringContaining("native-documents/resume.pdf"), expect.stringContaining("native-documents/cover_letter.pdf")]);
+			expect(nativePolicy?.approvedUploadPaths?.()).toEqual([expect.stringContaining("native-documents/resume.pdf"), expect.stringContaining("native-documents/cover-letter.pdf")]);
 			expect(spawned[0].args.find((arg) => arg.includes("enabled_tools="))).toContain('"browser_evaluate"');
 			expect(spawned[0].args.find((arg) => arg.includes("enabled_tools="))).toContain('"submit_application"');
 			await call(rt, "browser_type", { target: "e1", text: "Jane Citizen" });
