@@ -310,7 +310,7 @@ export class ApplyBridge {
 			return { ...result, content: [{ type: "text", text: `Supervised-action result only. ${FULL_SUBMISSION_UNKNOWN}` }, ...result.content] };
 		}
 		if (this.full && name === "request_sign_in") return this.full.signIn();
-		if (this.full && name === "finish_sign_in") return this.full.finishSignIn(args.signedIn === true);
+		if (this.full && name === "finish_sign_in") return args.signedIn === true ? this.agentObservedSignIn(this.full.finishSignIn(true)) : this.full.finishSignIn(false);
 		if (this.full && name === "request_sign_in_code") return this.full.signInCode();
 		if (this.full && name === "request_new_password") return this.full.newPassword();
 		if (this.full && name === "request_sign_in_link") return this.full.signInLink();
@@ -465,6 +465,16 @@ export class ApplyBridge {
 		const res = await this.browser.callTool("browser_evaluate", { element: label || "sign-in control", target: ref, function: SIGN_IN_CONTROL_PROBE_FN }, { internal: true }).catch(() => null);
 		const facts = res && !res.isError ? evaluateResult(textOf(res)) as SignInControlFacts | null : null;
 		return facts && typeof facts.origin === "string" && typeof facts.visible === "boolean" ? facts : null;
+	}
+
+	/** #1623: an already-signed-in profile shows no wall, so observeSignIn never records it and every gated press pauses again.
+	 * When the runner's own inspection agrees (same site, no sign-in blocker), end it as signedIn() does; a wrong record only bounces and is learned. */
+	private async agentObservedSignIn(finished: ToolResult): Promise<ToolResult> {
+		const state = await this.inspect();
+		const host = state ? hostOf(state.url) ?? "" : "";
+		const site = this.signIn?.site || (host ? siteKeyOf(host) : "");
+		if (!state || !host || !site || siteKeyOf(host) !== site || state.credentialWall || this.blockerOf(state) || !this.host.isAllowed(host)) return finished;
+		return this.signedIn(textOf(finished), host);
 	}
 
 	private async signedIn(toolText: string, host: string): Promise<ToolResult> {

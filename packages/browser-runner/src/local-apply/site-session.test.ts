@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BrowserTools } from "../local-browser/bridge.js";
+import type { MaskablePage } from "../local-browser/replay.js";
 import { ApplyBridge, type ApplyBridgeHost } from "./bridge.js";
 import { type LocalApplyEvent, type LocalApplyPause, parseLocalApplyEvent, traceUrl } from "./contract.js";
 import { looksLikeSignIn, type SessionCookie, SiteSessionLedger, siteKeyOf } from "./site-session.js";
@@ -222,5 +223,68 @@ describe("the session gate before a one-click press (#1094)", () => {
 		(h.bridge as unknown as { host: ApplyBridgeHost }).host.sessions = undefined;
 		await h.press();
 		expect(h.pressed()).toBe(1);
+	});
+});
+
+// ── #1623: an agent sign-in on a profile that was already signed in ───────────────────────────
+
+describe("finish_sign_in on an already-signed-in profile records the site (#1623)", () => {
+	const REVIEW = `${JOB}/apply/review`;
+	function fullHarness(o: { wall?: boolean; site?: string } = {}) {
+		const url = o.site ?? REVIEW;
+		const tools: BrowserTools = {
+			listTools: async () => [],
+			callTool: async (name) => name === "browser_evaluate"
+				? { content: [{ text: `### Result\n${JSON.stringify({ url, title: "Review", login: !!o.wall })}` }] }
+				: { content: [{ text: `${name} ok` }] },
+		};
+		const events: Array<Omit<LocalApplyEvent, "at">> = [];
+		const sessions = ledger();
+		const host: ApplyBridgeHost = {
+			emit: (e) => events.push(e),
+			pause: async () => "sign_in",
+			supervisorCheckpoint: async () => "continue",
+			isAllowed: (h) => h.endsWith("seek.com"),
+			grounding: () => "",
+			artifactPath: () => ({ error: "none" }),
+			overTime: () => false,
+			isStopped: () => false,
+			now: () => NOW,
+			limits: { maxPages: 20, maxMinutes: 20, maxActions: 50 },
+			mode: "auto_submit",
+			gateId: "gate-1",
+			toolAccess: "full",
+			escalationLevel: "autonomous",
+			signInSecrets: () => ["PAGS_LOGIN_USERNAME"],
+			signInDone: () => undefined,
+			page: () => ({ url: () => url }) as MaskablePage,
+			sessions,
+		};
+		return { bridge: new ApplyBridge(tools, host), sessions, events };
+	}
+
+	it("an empty ledger said never_signed_in; after the agent observes the signed-in page the next press is not gated", async () => {
+		const h = fullHarness();
+		expect(await h.sessions.check(JOB)).toEqual({ state: "missing", site: "seek.com", reason: "never_signed_in" });
+		await h.bridge.callTool("request_sign_in");
+		const res = await h.bridge.callTool("finish_sign_in", { signedIn: true });
+		expect(res.isError).toBeFalsy();
+		expect(await h.sessions.check(JOB)).toEqual({ state: "ok", site: "seek.com" });
+		expect(h.events).toContainEqual(expect.objectContaining({ detail: expect.objectContaining({ tool: "sign_in", decision: "recorded", site: "seek.com" }) }));
+		expect(ledger().entries()).toEqual([expect.objectContaining({ site: "seek.com", state: "signed_in" })]);
+	});
+
+	it("records nothing while the page still shows a sign-in wall", async () => {
+		const h = fullHarness({ wall: true });
+		await h.bridge.callTool("request_sign_in");
+		await h.bridge.callTool("finish_sign_in", { signedIn: true });
+		expect((await h.sessions.check(JOB)).state).toBe("missing");
+	});
+
+	it("records nothing when the agent abandons the sign-in", async () => {
+		const h = fullHarness();
+		await h.bridge.callTool("request_sign_in");
+		await h.bridge.callTool("finish_sign_in", { signedIn: false });
+		expect((await h.sessions.check(JOB)).state).toBe("missing");
 	});
 });
