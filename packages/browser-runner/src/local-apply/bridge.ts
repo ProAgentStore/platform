@@ -1,6 +1,6 @@
 import type { PreparedUpload } from "./documents.js";
 import { waitForFinalAnswers, type FinalAnswerPauseOptions } from "./final-answer-wait.js";
-import { FullApplyTools, FULL_SUBMISSION_UNKNOWN, STORAGE_LIMIT_CUE, isAccountStorageDeletion } from "./full-tools.js";
+import { FullApplyTools, FULL_SUBMISSION_UNKNOWN, STORAGE_LIMIT_CUE, OBSERVATION_TOOLS, isAccountStorageDeletion } from "./full-tools.js";
 import { answerDecision, decisionReason, parseDecision, sourceCatalog, sourceId } from "./answer-decision.js";
 import { applyTools, recoveryTools } from "./tool-schemas.js";
 import { assessQuestion, type DeferredQuestion } from "./question-assessment.js";
@@ -294,7 +294,7 @@ export class ApplyBridge {
 	private async dispatch(name: string, args: Record<string, unknown>): Promise<ToolResult> {
 		if (this.host.isStopped?.()) return this.refuse(name, "read", "The application was stopped. No further browser action is allowed.");
 		if (this.done) return text("The application is finished for this run. Stop now.", true);
-		if (name !== "submit_application" && name !== "supervisor_checkpoint") this.full?.invalidateSubmission();
+		if (name !== "submit_application" && name !== "supervisor_checkpoint" && !OBSERVATION_TOOLS.has(name)) this.full?.invalidateSubmission();
 		if (this.full && name === "browser_read_screenshot") {
 			if (this.host.overTime() || ++this.actions > this.host.limits.maxActions) return text("The action or time limit is reached.", true);
 			return this.replay.modelScreenshot(async () => true);
@@ -329,7 +329,7 @@ export class ApplyBridge {
 				const held = await this.holdAccountDeletion(name, args);
 				if (held) return held;
 			}
-			this.lastSnapshot = "";
+			if (!OBSERVATION_TOOLS.has(name)) this.lastSnapshot = "";
 			const result = await this.full.call(name, args, this.signInOrigin ?? undefined);
 			if (name === "browser_snapshot") { this.lastSnapshot = textOf(result); this.storageLimitShown = STORAGE_LIMIT_CUE.test(this.lastSnapshot); }
 			if (name === "browser_click") this.accountDeleteGranted = false;

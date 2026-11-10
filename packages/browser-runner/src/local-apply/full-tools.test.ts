@@ -73,6 +73,23 @@ describe("accepted full native application tools", () => {
 		await f.bridge.callTool("supervisor_checkpoint", { checkpointId: "final2", phase: "before_submit" }); f.navigate("https://forms.example.test/other");
 		expect((await f.bridge.callTool("submit_application", { ref: "s1" })).isError).toBe(true);
 	});
+	it("keeps the before_submit approval across read-only observation, but not across an action (#1628)", async () => {
+		const refusal = /obtain a before_submit checkpoint/;
+		const text = (r: { content?: Array<{ text?: string }> }) => (r.content ?? []).map((c) => c.text ?? "").join("\n");
+		const f = fixture({ mode: "auto_submit", gateId: "gate" });
+		await f.bridge.callTool("browser_snapshot");
+		await f.bridge.callTool("supervisor_checkpoint", { checkpointId: "one", phase: "before_submit" });
+		await f.bridge.callTool("browser_snapshot");
+		await f.bridge.callTool("browser_take_screenshot", {});
+		expect(text(await f.bridge.callTool("submit_application", { ref: "s1" }))).not.toMatch(refusal);
+		const g = fixture({ mode: "auto_submit", gateId: "gate" });
+		await g.bridge.callTool("browser_snapshot");
+		await g.bridge.callTool("supervisor_checkpoint", { checkpointId: "one", phase: "before_submit" });
+		await g.bridge.callTool("browser_click", { target: "s1", element: "Final send" });
+		await g.bridge.callTool("browser_snapshot");
+		const refused = await g.bridge.callTool("submit_application", { ref: "s1" });
+		expect(refused.isError).toBe(true); expect(text(refused)).toMatch(refusal);
+	});
 	it("requests sign-in explicitly and binds only credential-placeholder calls to the observed origin", async () => {
 		const clear = vi.fn(); const f = fixture({ pause: async () => "sign_in", signInSecrets: () => ["PAGS_LOGIN_PASSWORD"], signInDone: clear });
 		await f.bridge.callTool("request_sign_in");

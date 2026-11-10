@@ -24,6 +24,8 @@ export function parseToolAccess(policy: Record<string, unknown>, instanceId: str
 	return { toolAccess: "full", toolAccessAcceptance: { revision: "full_playwright_v1", instanceId, acceptedBy: a.acceptedBy, acceptedAt: a.acceptedAt } };
 }
 
+/** Read-only observation keeps the before_submit approval and the latest snapshot; canSubmit() rechecks page and URL at submit time (#1628). */
+export const OBSERVATION_TOOLS = new Set(["browser_snapshot", "browser_find", "browser_take_screenshot"]);
 const DESTRUCTIVE_VERB = /\b(delete|remove|erase|discard)\b/i;
 const RESUME = "r[eé]sum[eé]?s?|cv|cover letters?";
 /** The page itself says a site-side storage limit was hit (SEEK: "Resumé limit reached", `#docLimitExceededDropdown`). */
@@ -65,7 +67,7 @@ export class FullApplyTools {
 	}
 	async has(name: string): Promise<boolean> { await this.listTools(); return this.inventory!.some((tool) => tool.name === name); }
 	async call(name: string, args: Record<string, unknown>, expectedOrigin?: string): Promise<ToolResult> {
-		this.invalidateSubmission();
+		if (!OBSERVATION_TOOLS.has(name)) this.invalidateSubmission();
 		this.calls++;
 		const names = new Set(this.host.signInSecrets?.() ?? []);
 		const usesSecret = name === "browser_type" && names.has(String(args.text)) || name === "browser_fill_form" && Array.isArray(args.fields) && args.fields.some((field) => field && typeof field === "object" && names.has(String(field.value)));
