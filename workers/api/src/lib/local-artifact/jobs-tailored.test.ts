@@ -185,6 +185,12 @@ describe("#1624: tailoring completion and Runner outcomes -> CV save_document / 
 		expect(cvRow()).toEqual({ k: "tailor-run|materials_ready", e: null, jk: "tailor-run|materials_ready" });
 	});
 
+	it("a run built from the CV book records its revision, playbook and region on every document", async () => {
+		d1.exec(`UPDATE local_artifact_runs SET policy = json_set(policy, '$.uploadedSources', json('[{"role":"resume","fileId":"cv-career-book","version":"book-r42.pm.AU-VIC"},{"role":"profile","fileId":"cv-profile-playbook","version":"book-r42.pm.AU-VIC"}]')) WHERE id = 'tailor-run'`);
+		await readyApplication();
+		for (const c of cvCalls) expect(c.args).toMatchObject({ book_revision: 42, playbook_kind: "pm", region: "AU-VIC" });
+	});
+
 	it("a confirmed submit sets status submitted with submitted_at", async () => {
 		await readyApplication();
 		cvCalls.length = 0;

@@ -13,7 +13,8 @@ import type { Env } from "../types.js";
 import { callAppTool, CV_MCP_URL } from "./jobs-app.js";
 import { clipMarked } from "./clip-marked.js";
 import { desiredJobsKey, fileName, JOBS_STATUS, JOBS_SYNC_RETRY_MS, ownerAnswers, tailoredTexts } from "./jobs-tailored.js";
-import { getOwnedApplication, type JobApplication } from "./local-artifact/store.js";
+import { getOwnedApplication, getTailorRun, type JobApplication } from "./local-artifact/store.js";
+import { cvProvenance } from "./local-artifact/cv-sources.js";
 import type { LocalArtifactLead } from "./local-artifact/contract.js";
 
 const SWEEP_WINDOW_MS = 14 * 24 * 60 * 60_000;
@@ -22,11 +23,15 @@ const SWEEP_WINDOW_MS = 14 * 24 * 60 * 60_000;
 async function documents(env: Env, userId: string, app: JobApplication): Promise<Array<Record<string, unknown>>> {
 	const lead = (app.lead ?? {}) as Partial<LocalArtifactLead>;
 	const url = lead.leadUrl ?? lead.lead?.url ?? "";
+	// A run built from the CV book (#1624 phase 2) records which revision and playbook produced these documents.
+	const run = app.tailoringRunId ? await getTailorRun(env, app.instanceId, userId, app.tailoringRunId).catch(() => null) : null;
+	const from = cvProvenance(run?.policy.uploadedSources);
 	const common = {
 		external_id: app.id,
 		company: lead.lead?.company || "Unknown company",
 		position: lead.lead?.title || "Untitled role",
 		...(/^https?:\/\//.test(url) ? { job_url: url } : {}),
+		...(from ? { book_revision: from.bookRevision, ...(from.playbookKind ? { playbook_kind: from.playbookKind } : {}), ...(from.region ? { region: from.region } : {}) } : {}),
 	};
 	const { resume, coverLetter } = await tailoredTexts(env, userId, app);
 	const answers = await ownerAnswers(env, userId, app.id);

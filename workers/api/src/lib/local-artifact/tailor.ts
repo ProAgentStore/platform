@@ -68,7 +68,8 @@ import {
 	unemittedReadyApplications,
 	updateTailorRun,
 } from "./store.js";
-import { listUploadedTailorSourceSelections, materializeUploadedTailorSources } from "./uploaded-sources.js";
+import { listUploadedTailorSourceSelections } from "./uploaded-sources.js";
+import { cvSourcesEnabled, resolveTailorSources } from "./cv-sources.js";
 import { LOCAL_ARTIFACT_CAPS, type LocalArtifactOwnerAnswer, type LocalArtifactUploadedSource } from "./contract.js";
 import { getProfile, profileCustomAnswers, saveReusableAnswer } from "../profile.js";
 import { clipMarked } from "../clip-marked.js";
@@ -240,10 +241,11 @@ export async function startTailoring(env: Env, instanceId: string, uid: string, 
 	const cloudProblem = cloudDocumentsRunnerProblem(runtime.runner_version, runtime.runner_node);
 	if (cloudProblem) throw new HttpError(409, cloudProblem);
 	let uploadedSources: LocalArtifactUploadedSource[] | undefined;
-	if ((await listUploadedTailorSourceSelections(env, instanceId, uid)).length > 0) {
+	// #1624: the CV app's career book when this Tailor takes its sources from there, else the uploaded-file selection.
+	if ((await cvSourcesEnabled(env, instanceId)) || (await listUploadedTailorSourceSelections(env, instanceId, uid)).length > 0) {
 		const incompatibility = uploadedSourcesRunnerProblem(runtime.runner_version, runtime.runner_node);
 		if (incompatibility) throw new HttpError(409, incompatibility);
-		try { uploadedSources = await materializeUploadedTailorSources(env, instanceId, uid); }
+		try { uploadedSources = await resolveTailorSources(env, { userId: uid, instanceId }, lead, undefined, now); }
 		catch (err) { throw new HttpError(409, `Uploaded sources are not ready: ${err instanceof Error ? err.message : "unknown error"}. No local or historical résumé was used.`); }
 	}
 
@@ -341,10 +343,11 @@ export async function retryTailoring(env: Env, instanceId: string, uid: string, 
 	const cloudProblem = cloudDocumentsRunnerProblem(runtime.runner_version, runtime.runner_node);
 	if (cloudProblem) throw new HttpError(409, cloudProblem);
 	let uploadedSources: LocalArtifactUploadedSource[] | undefined;
-	if ((await listUploadedTailorSourceSelections(env, instanceId, uid)).length > 0) {
+	// #1624: the CV app's career book when this Tailor takes its sources from there, else the uploaded-file selection.
+	if ((await cvSourcesEnabled(env, instanceId)) || (await listUploadedTailorSourceSelections(env, instanceId, uid)).length > 0) {
 		const incompatibility = uploadedSourcesRunnerProblem(runtime.runner_version, runtime.runner_node);
 		if (incompatibility) throw new HttpError(409, incompatibility);
-		try { uploadedSources = await materializeUploadedTailorSources(env, instanceId, uid); }
+		try { uploadedSources = await resolveTailorSources(env, { userId: uid, instanceId }, parsed.lead, undefined, now); }
 		catch (err) { throw new HttpError(409, `Uploaded sources are not ready: ${err instanceof Error ? err.message : "unknown error"}. No local or historical résumé was used.`); }
 	}
 	const instancePreferences = await instancePreferencesFor(env, instanceId, uid, runtime.runner_version, now);
@@ -617,7 +620,7 @@ export async function dispatchNextQueuedTailoring(env: Env, instanceId: string, 
 			await settleApplication(env, instanceId, uid, next.applicationId, run.id, { to: "blocked", blockReason: "runner_unsupported", blockQuestions: [incompatibility] }, now);
 			return "exhausted";
 		}
-		try { uploadedSources = await materializeUploadedTailorSources(env, instanceId, uid, run.policy.uploadedSources); }
+		try { uploadedSources = await resolveTailorSources(env, { userId: uid, instanceId }, parsed.lead, run.policy.uploadedSources, now); }
 		catch (err) {
 			const error = `Uploaded sources are no longer ready: ${err instanceof Error ? err.message : "unknown error"}`;
 			await updateTailorRun(env, run, { to: "failed", errorCode: "uploaded_source_stale", error, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: "uploaded_source_stale" } }] }, now);
