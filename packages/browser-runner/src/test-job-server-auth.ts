@@ -34,12 +34,15 @@ export interface TestJobServerAuth {
 	twoStepLoginUrl: string;
 	/** Step 1 of the emailed-code shape (#1412): ordinary email+password. */
 	mfaLoginUrl: string;
+	/** Step 1 of sign-up-with-code (#1422): full name, email and a chosen password, but no account until the code is verified. */
+	registerWithCodeUrl: string;
 	submissions: TestJobSubmission[];
 	users: TestUser[];
 	sessions: Map<string, string>;
 	/**
-	 * The code the server "emailed" for each pending MFA sign-in, keyed by email — a test reads this the
-	 * same way the real Worker reads a Gmail inbox: out of band, never from the page itself.
+	 * The code the server "emailed" for each pending MFA sign-in or sign-up-with-code registration, keyed by
+	 * email — a test reads this the same way the real Worker reads a Gmail inbox: out of band, never from the
+	 * page itself.
 	 */
 	pendingMfaCodes: Map<string, string>;
 	close: () => Promise<void>;
@@ -50,10 +53,11 @@ export async function startTestJobServerAuth(port = 0): Promise<TestJobServerAut
 	const users: TestUser[] = [];
 	const sessions = new Map<string, string>();
 	const pendingMfaCodes = new Map<string, string>();
+	const pendingRegistrations = new Map<string, { fullName: string; email: string; password: string }>();
 
 	const server = createServer(async (req, res) => {
 		try {
-			await route(req, res, { submissions, users, sessions, pendingMfaCodes });
+			await route(req, res, { submissions, users, sessions, pendingMfaCodes, pendingRegistrations });
 		} catch (error) {
 			html(res, 500, page("Error", `<main><h1>Server Error</h1><pre>${escapeHtml(String(error))}</pre></main>`));
 		}
@@ -70,6 +74,7 @@ export async function startTestJobServerAuth(port = 0): Promise<TestJobServerAut
 		registerUrl: `${url}/register`,
 		twoStepLoginUrl: `${url}/login/two-step`,
 		mfaLoginUrl: `${url}/login/mfa`,
+		registerWithCodeUrl: `${url}/register/code`,
 		submissions,
 		users,
 		sessions,
@@ -91,6 +96,7 @@ interface ServerState {
 	users: TestUser[];
 	sessions: Map<string, string>;
 	pendingMfaCodes: Map<string, string>;
+	pendingRegistrations: Map<string, { fullName: string; email: string; password: string }>;
 }
 
 async function route(
@@ -294,6 +300,76 @@ async function route(
 		return;
 	}
 
+	// #1422: sign-up-with-code — name/email/password creates no account yet; a code the server "emailed" (same
+	// out-of-band map as the MFA sign-in above) must be verified before the account and its session exist.
+	if (req.method === "GET" && url.pathname === "/register/code") {
+		const error = url.searchParams.get("error") || "";
+		html(res, 200, registerCodePage(error));
+		return;
+	}
+
+	if (req.method === "POST" && url.pathname === "/register/code") {
+		const body = await parseFormBody(req);
+		const email = body.email?.trim().toLowerCase();
+		const password = body.password?.trim();
+		const fullName = body.fullName?.trim();
+
+		if (!email || !password || !fullName) {
+			redirect(res, "/register/code?error=All+fields+are+required");
+			return;
+		}
+		if (password.length < 6) {
+			redirect(res, "/register/code?error=Password+must+be+at+least+6+characters");
+			return;
+		}
+		if (state.users.some((u) => u.email === email)) {
+			redirect(res, "/register/code?error=Email+already+registered");
+			return;
+		}
+
+		state.pendingRegistrations.set(email, { fullName, email, password });
+		const code = String(Math.floor(100_000 + Math.random() * 900_000));
+		state.pendingMfaCodes.set(email, code);
+		setStepCookie(res, "register_email", email);
+		redirect(res, "/register/code/verify");
+		return;
+	}
+
+	if (req.method === "GET" && url.pathname === "/register/code/verify") {
+		const email = parseCookie(req.headers.cookie || "", "register_email");
+		if (!email || !state.pendingRegistrations.has(email)) {
+			redirect(res, "/register/code");
+			return;
+		}
+		const error = url.searchParams.get("error") || "";
+		html(res, 200, registerCodeVerifyPage(error));
+		return;
+	}
+
+	if (req.method === "POST" && url.pathname === "/register/code/verify") {
+		const email = parseCookie(req.headers.cookie || "", "register_email");
+		const pending = email ? state.pendingRegistrations.get(email) : undefined;
+		if (!email || !pending) {
+			redirect(res, "/register/code");
+			return;
+		}
+		const body = await parseFormBody(req);
+		if (state.pendingMfaCodes.get(email) !== body.code?.trim()) {
+			redirect(res, "/register/code/verify?error=Incorrect+code");
+			return;
+		}
+		state.pendingMfaCodes.delete(email);
+		state.pendingRegistrations.delete(email);
+		clearStepCookie(res, "register_email");
+		const newUser: TestUser = { id: `user_${crypto.randomUUID()}`, email: pending.email, password: pending.password, fullName: pending.fullName, createdAt: new Date().toISOString() };
+		state.users.push(newUser);
+		const newSessionId = `sess_${crypto.randomUUID()}`;
+		state.sessions.set(newSessionId, newUser.id);
+		setSessionCookie(res, newSessionId);
+		redirect(res, "/dashboard");
+		return;
+	}
+
 	if (req.method === "POST" && url.pathname === "/logout") {
 		if (sessionId) state.sessions.delete(sessionId);
 		clearSessionCookie(res);
@@ -373,6 +449,41 @@ function registerPage(error: string): string {
           <button type="submit">Create account</button>
         </form>
         <p class="switch">Already have an account? <a href="/login">Sign in</a></p>
+      </section>
+    </main>
+  `);
+}
+
+function registerCodePage(error: string): string {
+	return page("Create Account", `
+    <main>
+      <section class="auth-card">
+        <h1>Create Account</h1>
+        <p class="subtitle">We'll email you a code to verify this address</p>
+        ${error ? `<p class="error">${escapeHtml(error)}</p>` : ""}
+        <form action="/register/code" method="post" class="auth-form">
+          <label>Full name <input name="fullName" autocomplete="name" required /></label>
+          <label>Email <input name="email" type="email" autocomplete="email" required /></label>
+          <label>Password <input name="password" type="password" autocomplete="new-password" minlength="6" required /></label>
+          <button type="submit">Send me a code</button>
+        </form>
+        <p class="switch">Already have an account? <a href="/login">Sign in</a></p>
+      </section>
+    </main>
+  `);
+}
+
+function registerCodeVerifyPage(error: string): string {
+	return page("Verify Your Email", `
+    <main>
+      <section class="auth-card">
+        <h1>Check your email</h1>
+        <p class="subtitle">We emailed you a 6-digit code to finish creating your account</p>
+        ${error ? `<p class="error">${escapeHtml(error)}</p>` : ""}
+        <form action="/register/code/verify" method="post" class="auth-form">
+          <label>Code <input name="code" autocomplete="one-time-code" required /></label>
+          <button type="submit">Create account</button>
+        </form>
       </section>
     </main>
   `);

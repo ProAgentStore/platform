@@ -99,6 +99,40 @@ function host(names: string[], o: { onRequestCode?: () => Promise<boolean> } = {
 	return { host: h, events, pauses };
 }
 
+/**
+ * The full-tool-access host for the #1619 account-registration operations (#1422: the sign-up-with-code
+ * fixture) — `request_new_password` and `request_sign_in_link`/`request_sign_in_code` only exist on
+ * `FullApplyTools`, so this drives `toolAccess: "full"` rather than the guarded `host()` above.
+ */
+function fullAccountHost(names: string[], o: { onRequestNewPassword: () => Promise<boolean>; onRequestCode: () => Promise<boolean> }) {
+	const events: Array<Omit<LocalApplyEvent, "at">> = [];
+	const pauses: LocalApplyPause[] = [];
+	const h: ApplyBridgeHost = {
+		emit: (e) => events.push(e),
+		pause: async (p) => {
+			pauses.push(p);
+			return p.reason === "login_required" ? "sign_in" : "stopped";
+		},
+		signInSecrets: () => [...names],
+		accountOperations: true,
+		requestNewPassword: o.onRequestNewPassword,
+		requestSignInCode: o.onRequestCode,
+		signInDone: () => undefined,
+		supervisorCheckpoint: async () => "continue",
+		isAllowed: () => true,
+		grounding: () => PROFILE,
+		artifactPath: () => ({ error: "no artifact needed in this test" }),
+		overTime: () => false,
+		isStopped: () => false,
+		now: () => Date.now(),
+		limits: { maxMinutes: 5, maxPages: 30, maxActions: 100 },
+		mode: "fill_and_review",
+		toolAccess: "full",
+		page: () => launched!.activePage(),
+	};
+	return { host: h, events, pauses };
+}
+
 /** The ref Playwright's real ARIA snapshot assigned to the first line matching `pattern` — frame-prefixed (`f1e8`), not bare (`e8`). */
 function refFor(snapshot: string, pattern: RegExp): string {
 	const line = snapshot.split("\n").find((l) => pattern.test(l));
@@ -337,6 +371,81 @@ describe("the agent-driven sign-in against a REAL browser and REAL @playwright/m
 		const dump = JSON.stringify({ calls, events });
 		expect(dump).not.toContain(PASSWORD);
 		expect(dump).not.toContain(EMAIL);
+		expect(code).not.toBe("");
+		expect(dump).not.toContain(code);
+	}, 60_000);
+
+	it("sign-up with code (#1422): registering a new account, confirmed by an emailed code, through FULL tool access", async () => {
+		const NEW_EMAIL = "nina.newhire@example.com";
+		const GENERATED_PASSWORD = "Gen3rated-np-9f2!";
+		mcp.provideSecrets({ PAGS_LOGIN_USERNAME: NEW_EMAIL });
+		const names = ["PAGS_LOGIN_USERNAME"];
+		let code = "";
+		const { tools, calls } = recordingTools();
+		const { host: h, events, pauses } = fullAccountHost(names, {
+			onRequestNewPassword: async () => {
+				mcp.provideSecrets({ PAGS_NEW_PASSWORD: GENERATED_PASSWORD });
+				names.push("PAGS_NEW_PASSWORD");
+				return true;
+			},
+			onRequestCode: async () => {
+				// The same thing the real Worker does: read the emailed code out of band, never from the page.
+				code = server.pendingMfaCodes.get(NEW_EMAIL) ?? "";
+				if (!code) return false;
+				mcp.provideSecrets({ PAGS_LOGIN_CODE: code });
+				names.push("PAGS_LOGIN_CODE");
+				return true;
+			},
+		});
+		const bridge = new ApplyBridge(tools, h);
+
+		await bridge.callTool("browser_navigate", { url: server.registerWithCodeUrl });
+		const signIn = await bridge.callTool("request_sign_in", {});
+		expect(pauses).toHaveLength(1);
+		expect(pauses[0]).toMatchObject({ reason: "login_required" });
+		expect(signIn.content[0].text).toMatch(/request_new_password/);
+		expect(signIn.content[0].text).not.toContain(NEW_EMAIL);
+
+		const regSnap = await bridge.callTool("browser_snapshot", {});
+		const regText = (regSnap.content[0] as { text: string }).text;
+		const nameRef = refFor(regText, /textbox "Full name"/i);
+		const emailRef = refFor(regText, /textbox "Email"/i);
+		const passwordRef = refFor(regText, /textbox "Password"/i);
+
+		// Full access places no source-quote restriction on an ordinary literal like a name.
+		expect((await bridge.callTool("browser_type", { target: nameRef, text: "Nina New Hire" })).isError).toBeUndefined();
+		expect((await bridge.callTool("browser_type", { target: emailRef, text: "PAGS_LOGIN_USERNAME" })).isError).toBeUndefined();
+
+		const np = await bridge.callTool("request_new_password", {});
+		expect(np.isError).toBeFalsy();
+		expect((await bridge.callTool("browser_type", { target: passwordRef, text: "PAGS_NEW_PASSWORD" })).isError).toBeUndefined();
+
+		const sendSnap = await bridge.callTool("browser_snapshot", {});
+		const sendRef = refFor((sendSnap.content[0] as { text: string }).text, /button "Send me a code"/i);
+		expect((await bridge.callTool("browser_click", { target: sendRef })).isError).toBeUndefined();
+
+		const codeSnap = await bridge.callTool("browser_snapshot", {});
+		const codeRef = refFor((codeSnap.content[0] as { text: string }).text, /textbox "Code"/i);
+
+		const waited = await bridge.callTool("request_sign_in_code", {});
+		expect(waited.isError).toBeFalsy();
+		expect(code).toMatch(/^\d{6}$/);
+
+		expect((await bridge.callTool("browser_type", { target: codeRef, text: "PAGS_LOGIN_CODE" })).isError).toBeUndefined();
+		const verifySnap = await bridge.callTool("browser_snapshot", {});
+		const createRef = refFor((verifySnap.content[0] as { text: string }).text, /button "Create account"/i);
+		expect((await bridge.callTool("browser_click", { target: createRef })).isError).toBeUndefined();
+
+		// Genuinely registered and signed in, not just believed to be: the dashboard's real content, read live.
+		const dash = await bridge.callTool("browser_snapshot", {});
+		expect((dash.content[0] as { text: string }).text).toMatch(/My Applications/);
+
+		expect((await bridge.callTool("finish_sign_in", { signedIn: true })).isError).toBeFalsy();
+		expect(events.some((e) => e.type === "policy.decision" && e.detail?.tool === "agent_sign_in" && e.detail?.decision === "signed_in")).toBe(true);
+
+		const dump = JSON.stringify({ calls, events });
+		expect(dump).not.toContain(GENERATED_PASSWORD);
+		expect(dump).not.toContain(NEW_EMAIL);
 		expect(code).not.toBe("");
 		expect(dump).not.toContain(code);
 	}, 60_000);

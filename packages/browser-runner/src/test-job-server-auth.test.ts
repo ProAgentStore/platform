@@ -337,6 +337,66 @@ describe("test job server with auth", () => {
 		expect(res.headers.get("location")).toContain("error=Invalid+email+or+password");
 	});
 
+	it("sign-up-with-code (#1422): name/email/password creates no account until the emailed code is verified", async () => {
+		const step1 = await fetch(`${server.url}/register/code`, {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded" },
+			body: "fullName=New+Hire&email=newhire@example.com&password=secret123",
+			redirect: "manual",
+		});
+		expect(step1.status).toBe(303);
+		expect(step1.headers.get("location")).toBe("/register/code/verify");
+		const stepCookie = (step1.headers.get("set-cookie") || "").split(";")[0];
+		expect(stepCookie).toContain("register_email=newhire@example.com");
+		expect(server.users).toHaveLength(0);
+
+		const code = server.pendingMfaCodes.get("newhire@example.com");
+		expect(code).toMatch(/^\d{6}$/);
+
+		const wrong = await fetch(`${server.url}/register/code/verify`, {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded", Cookie: stepCookie },
+			body: "code=000000",
+			redirect: "manual",
+		});
+		expect(wrong.headers.get("location")).toContain("error=Incorrect+code");
+		expect(server.users).toHaveLength(0);
+
+		const step2 = await fetch(`${server.url}/register/code/verify`, {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded", Cookie: stepCookie },
+			body: `code=${code}`,
+			redirect: "manual",
+		});
+		expect(step2.status).toBe(303);
+		expect(step2.headers.get("location")).toBe("/dashboard");
+		expect(step2.headers.get("set-cookie")).toContain("session=sess_");
+		expect(server.users).toHaveLength(1);
+		expect(server.users[0]).toMatchObject({ email: "newhire@example.com", fullName: "New Hire" });
+		expect(server.pendingMfaCodes.has("newhire@example.com")).toBe(false);
+	});
+
+	it("sign-up-with-code rejects a duplicate email at step 1 and an unknown step without the cookie", async () => {
+		await fetch(`${server.url}/register`, {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded" },
+			body: "fullName=Existing&email=existing@example.com&password=secret123",
+			redirect: "manual",
+		});
+
+		const dup = await fetch(`${server.url}/register/code`, {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded" },
+			body: "fullName=Existing+Too&email=existing@example.com&password=secret123",
+			redirect: "manual",
+		});
+		expect(dup.headers.get("location")).toContain("error=Email+already+registered");
+
+		const noCookie = await fetch(`${server.url}/register/code/verify`, { redirect: "manual" });
+		expect(noCookie.status).toBe(303);
+		expect(noCookie.headers.get("location")).toBe("/register/code");
+	});
+
 	it("logout clears session", async () => {
 		const regRes = await fetch(`${server.url}/register`, {
 			method: "POST",

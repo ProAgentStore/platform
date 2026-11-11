@@ -376,6 +376,23 @@ describe("account registration and password reset by the agent (#1619)", () => {
 		expect(JSON.stringify(trace) + dumpD1()).not.toContain(issued);
 	});
 
+	it("#1422 acceptance: a pre-existing vault row for an unrelated host is untouched by a registration on another host", async () => {
+		const unrelatedId = await createCredential(env(), INSTANCE, UID, { domain: "indeed.com", username: USERNAME, password: PASSWORD } as Parameters<typeof createCredential>[3]);
+		const before = await findCredentialForHost(env(), INSTANCE, UID, "indeed.com");
+
+		insertRun(RUN, ATS_PAUSE, AUTH);
+		const f = fakes();
+		await advance(T0, none, f);
+		setRunning();
+		await advance(T0 + 10_000, ask({ newPasswordRequested: true }), f);
+		await advance(T0 + 60_000, { signIn: null, events: [ATS_SIGNED_IN] }, f);
+
+		const after = await findCredentialForHost(env(), INSTANCE, UID, "indeed.com");
+		expect(after).toEqual(before);
+		const rows = await listCredentials(env(), INSTANCE, UID);
+		expect(rows.find((r) => r.id === unrelatedId)).toMatchObject({ domain: "indeed.com", username: USERNAME });
+	});
+
 	it("reset: the new password replaces the saved one on the same credential, keeping one row, only after the agent reports signed in", async () => {
 		insertRun(RUN, ATS_PAUSE, AUTH);
 		const old = await createCredential(env(), INSTANCE, UID, { domain: "ats-fixture.test", username: "me@example.test", password: "stale-password-1!" } as Parameters<typeof createCredential>[3]);

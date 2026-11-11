@@ -153,6 +153,21 @@ describe("runner server", () => {
 		});
 		expect(res.status).toBe(401);
 	});
+
+	// #1422: the email-code, vault-sign-in and account-creation macros (and their routes) were retired once
+	// the agent-driven sign-in (#1412) became the only path; these three paths are gone, not reassigned.
+	it.each(["/local-apply/email-code", "/local-apply/vault-sign-in", "/local-apply/account-creation"])("404s the retired %s macro route", async (path) => {
+		const res = await fetch(`${url}${path}`, {
+			method: "POST",
+			headers: {
+				Authorization: "Bearer secret",
+				"X-PAGS-Instance-Id": "inst-1",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({ runId: "run-1" }),
+		});
+		expect(res.status).toBe(404);
+	});
 });
 
 // ── #245: this surface drives a CLI with permissions skipped ─────────────────
