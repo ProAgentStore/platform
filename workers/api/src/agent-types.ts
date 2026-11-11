@@ -316,6 +316,42 @@ export interface DiscordChannelDeleteResponse {
 	revokedGrants: number;
 }
 
+/** A member of a server the owner's bot is in (#1633). `globalName` is the account's display name, `nick` the server nickname. */
+export interface DiscordMember {
+	id: string;
+	username: string;
+	globalName: string | null;
+	nick: string | null;
+	bot: boolean;
+}
+
+export interface DiscordMemberListResponse {
+	members: DiscordMember[];
+}
+
+/** One permission overwrite on a channel (#1633): who it is for, and whether it lets them see the channel. */
+export interface DiscordChannelAccessEntry {
+	id: string;
+	kind: "everyone" | "role" | "member";
+	/** Role name, or the member's username; null when Discord no longer knows them. */
+	name: string | null;
+	/** What this overwrite does to View Channel. */
+	view: "allow" | "deny" | "inherit";
+	allow: string;
+	deny: string;
+}
+
+export interface DiscordChannelAccessResponse {
+	channel: DiscordManagedChannel;
+	access: DiscordChannelAccessEntry[];
+}
+
+export interface DiscordMemberAccessResponse {
+	channel: DiscordManagedChannel;
+	member: DiscordMember;
+	access: "granted" | "removed";
+}
+
 /** The bot a Discord token authenticates as (#1132). Never the token. */
 export interface DiscordBot {
 	id: string;

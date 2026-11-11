@@ -99,6 +99,13 @@ topic, move between categories; a rename updates the name on the owner's grants)
 Manage Channels permission in that server, and writes a `discord.channel_*` audit event. The change is also
 labelled in the server's own audit log. Creating a channel grants no agent anything.
 
+Creating a channel lets nobody new in, so the bot can also manage who sees one (#1633): `list_discord_members`
+finds a member's user id by name (it needs the bot's Server Members Intent), `get_discord_channel_access` shows a
+channel's overwrites for @everyone, roles and members, and `set_discord_channel_member_access` gives one member
+View Channel, Send Messages, Read Message History, Add Reactions, Attach Files and Embed Links, or removes that
+member's own overwrite. Setting access needs the bot's Manage Roles permission, and writes a
+`discord.member_access_*` audit event.
+
 ### Release notes and Slack (#1216, #1217)
 
 When a coder run ships to a repository's default branch, the platform posts **one release note per

@@ -194,6 +194,70 @@ export function registerDiscordTools(server: McpServer, ctx: InstanceToolsCtx): 
 		},
 	);
 
+	// ── #1633: server members, and who can see a channel ──
+	server.tool(
+		"list_discord_members",
+		"List members of one server your bot is in (guild_id from list_discord_guilds): each one's Discord user id, username, display name (`globalName`) and server nickname (`nick`). Pass `query` to find people whose username or nickname starts with it; without it, up to `limit` members (max 1000) in id order, continued with `after` (the last id you got). Use it to find a person's user id before set_discord_channel_member_access; a display name alone does not prove who someone is. Needs the bot's Server Members Intent; the error says so when it is off. Read-only.",
+		{
+			token: tokenArg,
+			guild_id: z.string().describe("Server id from list_discord_guilds."),
+			query: z.string().max(100).optional().describe("Start of a username or nickname, case-insensitive."),
+			limit: z.coerce.number().int().min(1).max(1000).optional().describe("At most this many members (default 1000)."),
+			after: z.string().optional().describe("Without query: list members after this user id."),
+		},
+		async ({ token, guild_id, query, limit, after }) => {
+			const session = tokenFor(token);
+			if (!session) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "list_discord_members", { guild_id, query, limit, after });
+			if (denied) return denied;
+			const params = new URLSearchParams();
+			if (query) params.set("query", query);
+			if (limit) params.set("limit", String(limit));
+			if (after) params.set("after", after);
+			const qs = params.toString();
+			const data = await authedCall(`/v1/discord/guilds/${encodeURIComponent(guild_id)}/members${qs ? `?${qs}` : ""}`, session, {}, env);
+			return err(data) ? text(`Error: ${err(data)}`) : jsonText(data);
+		},
+	);
+
+	server.tool(
+		"get_discord_channel_access",
+		"Who can see one Discord channel: its permission overwrites for @everyone, roles and individual members, each with a name and `view` (allow / deny / inherit for View Channel). A member listed with view \"allow\" can see the channel; with @everyone denied, nobody else can unless a role lets them. Use it to check a private channel after set_discord_channel_member_access. Read-only.",
+		{ token: tokenArg, channel_id: z.string().describe("Channel id from list_discord_channels.") },
+		async ({ token, channel_id }) => {
+			const session = tokenFor(token);
+			if (!session) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "get_discord_channel_access", { channel_id });
+			if (denied) return denied;
+			const data = await authedCall(`/v1/discord/channels/${encodeURIComponent(channel_id)}/access`, session, {}, env);
+			return err(data) ? text(`Error: ${err(data)}`) : jsonText(data);
+		},
+	);
+
+	server.tool(
+		"set_discord_channel_member_access",
+		"Give one server member access to one Discord channel with your bot (`access: \"grant\"`: View Channel, Send Messages, Read Message History, Add Reactions, Attach Files, Embed Links), or remove that member's own access (`\"remove\"`; roles and @everyone are untouched). The user must already be in the server (user_id from list_discord_members). The bot needs Manage Roles (Manage Permissions) there; the error says so when it is missing. Read the result back with get_discord_channel_access. WRITE. Call with dry_run first.",
+		{
+			token: tokenArg,
+			channel_id: z.string().describe("Channel id from list_discord_channels."),
+			user_id: z.string().describe("Discord user id from list_discord_members."),
+			access: z.enum(["grant", "remove"]).describe("grant: let them see and post in the channel. remove: take their own access away."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, channel_id, user_id, access, dry_run }) => {
+			const session = tokenFor(token);
+			if (!session) return authRequired();
+			const input = { channel_id, user_id, access };
+			const denied = await requirePermission(safetyFor(token), "write", "set_discord_channel_member_access", input);
+			if (denied) return denied;
+			if (dry_run) return dryRun(safetyFor(token), "set_discord_channel_member_access", `${access} a member's access to a Discord channel`, input, { endpoint: `/v1/discord/channels/${encodeURIComponent(channel_id)}/members/${encodeURIComponent(user_id)}`, method: "PUT" });
+			const data = await authedCall(`/v1/discord/channels/${encodeURIComponent(channel_id)}/members/${encodeURIComponent(user_id)}`, session, { method: "PUT", body: JSON.stringify({ access }) }, env);
+			if (err(data)) return text(`Error: ${err(data)}`);
+			await audit(safetyFor(token), { tool: "set_discord_channel_member_access", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
 	server.tool(
 		"list_instance_discord_grants",
 		"List the Discord channels one instance is granted, each with its stable grant `id` — the `grantId` the agent's Discord tools take, and what revoke_instance_discord_grant takes. An agent can read or post only in a channel listed here with resourceType `discord_channel`; one with `discord_release_channel` is reserved for release notes (the platform posts there, the agent cannot). Read-only.",

@@ -18829,6 +18829,79 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "502": { $ref: "#/components/responses/BadGateway" }
 
+  /v1/discord/guilds/{guildId}/members:
+    get:
+      summary: List or search the members of a Discord server with my bot
+      description: Without query, up to limit members (max 1000) after the id in after; with query, members whose username or nickname starts with it. Needs the bot's Server Members Intent (#1633).
+      operationId: listDiscordMembers
+      tags: [Connectors]
+      parameters:
+        - { name: guildId, in: path, required: true, schema: { type: string }, description: Discord guild snowflake. }
+        - { name: query, in: query, required: false, schema: { type: string, maxLength: 100 } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 1000 } }
+        - { name: after, in: query, required: false, schema: { type: string }, description: List members after this user snowflake (no query). }
+      responses:
+        "200":
+          description: Members
+          content:
+            application/json:
+              schema: { type: object, properties: { members: { type: array, items: { type: object, properties: { id: { type: string }, username: { type: string }, globalName: { type: string, nullable: true }, nick: { type: string, nullable: true }, bot: { type: boolean } } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /v1/discord/channels/{channelId}/access:
+    get:
+      summary: Who can see a Discord channel
+      description: The channel's permission overwrites for @everyone, roles and members, with names and what each does to View Channel (#1633).
+      operationId: getDiscordChannelAccess
+      tags: [Connectors]
+      parameters:
+        - { name: channelId, in: path, required: true, schema: { type: string }, description: Discord channel snowflake. }
+      responses:
+        "200":
+          description: The channel and its overwrites
+          content:
+            application/json:
+              schema: { type: object, properties: { channel: { type: object, properties: { id: { type: string }, name: { type: string }, type: { type: integer }, guildId: { type: string }, categoryId: { type: string, nullable: true }, topic: { type: string, nullable: true } } }, access: { type: array, items: { type: object, properties: { id: { type: string }, kind: { type: string, enum: [everyone, role, member] }, name: { type: string, nullable: true }, view: { type: string, enum: [allow, deny, inherit] }, allow: { type: string }, deny: { type: string } } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /v1/discord/channels/{channelId}/members/{userId}:
+    put:
+      summary: Give or remove one member's access to a Discord channel with my bot
+      description: grant sets a member overwrite allowing View Channel, Send Messages, Read Message History, Add Reactions, Attach Files and Embed Links; remove deletes that member's overwrite. The user must be in the server. The bot needs Manage Roles (#1633).
+      operationId: setDiscordChannelMemberAccess
+      tags: [Connectors]
+      parameters:
+        - { name: channelId, in: path, required: true, schema: { type: string }, description: Discord channel snowflake. }
+        - { name: userId, in: path, required: true, schema: { type: string }, description: Discord user snowflake. }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [access]
+              properties:
+                access: { type: string, enum: [grant, remove] }
+      responses:
+        "200":
+          description: The change made
+          content:
+            application/json:
+              schema: { type: object, properties: { channel: { type: object, properties: { id: { type: string }, name: { type: string }, type: { type: integer }, guildId: { type: string }, categoryId: { type: string, nullable: true }, topic: { type: string, nullable: true } } }, member: { type: object, properties: { id: { type: string }, username: { type: string }, globalName: { type: string, nullable: true }, nick: { type: string, nullable: true }, bot: { type: boolean } } }, access: { type: string, enum: [granted, removed] } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
   /v1/discord/instances/{instanceId}/grants:
     get:
       summary: Discord channels granted to this instance

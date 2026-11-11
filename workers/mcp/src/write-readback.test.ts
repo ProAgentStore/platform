@@ -756,6 +756,10 @@ const READBACK: Record<string, string | null> = {
 	"update_discord_channel.category": "list_discord_channels",
 	"update_discord_channel.category_id": "list_discord_channels",
 	"delete_discord_channel.channel_id": "list_discord_channels",
+	// #1633: a member's access reads back from the channel's overwrites.
+	"set_discord_channel_member_access.channel_id": "get_discord_channel_access",
+	"set_discord_channel_member_access.user_id": "get_discord_channel_access",
+	"set_discord_channel_member_access.access": "get_discord_channel_access",
 
 	// ── #1217: release notes + the Slack bot and channel grants ──
 	"set_account_preferences.releaseNotes": "get_account_preferences",

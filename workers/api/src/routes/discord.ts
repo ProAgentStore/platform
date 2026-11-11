@@ -15,7 +15,7 @@ import { connectorRefusalFor } from "../lib/instance-connector-access.js";
 import { safeFetch } from "../lib/ssrf.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
-import type { DiscordBot, DiscordBotConnectResponse, DiscordBotDisconnectResponse, DiscordBotStatusResponse, DiscordChannel, DiscordChannelDeleteResponse, DiscordChannelListResponse, DiscordGrantListResponse, DiscordGrantResponse, DiscordGuild, DiscordGuildListResponse, DiscordManagedChannel, DiscordManagedChannelResponse } from "../agent-types.js";
+import type { DiscordBot, DiscordBotConnectResponse, DiscordBotDisconnectResponse, DiscordBotStatusResponse, DiscordChannel, DiscordChannelDeleteResponse, DiscordChannelListResponse, DiscordGrantListResponse, DiscordGrantResponse, DiscordGuild, DiscordGuildListResponse, DiscordManagedChannel, DiscordManagedChannelResponse, DiscordChannelAccessEntry, DiscordChannelAccessResponse, DiscordMember, DiscordMemberAccessResponse, DiscordMemberListResponse } from "../agent-types.js";
 
 export const discordRoutes = new Hono<{ Bindings: Env }>();
 
@@ -281,6 +281,107 @@ discordRoutes.delete("/channels/:channelId", async (c) => {
 	const revokedGrants = await revokeUserConnectorResourceGrants(c.env, session.uid, "discord", channelId);
 	await audit(c.env, session.uid, "discord.channel_delete", `Deleted Discord channel #${channel.name}`, { guildId: channel.guildId, channelId, revokedGrants });
 	return c.json({ deleted: true, channel, revokedGrants } satisfies DiscordChannelDeleteResponse);
+});
+
+// ── Members and who can see a channel (#1633) ───────────────────────────────────────────────────────────────
+// Creating a channel (#1625) lets nobody new in: a private check-in channel is useless until its person can see it.
+
+const MEMBERS_INTENT_HELP = "Discord refused the member list. In the Developer Portal open your application → Bot and turn on Server Members Intent (a privileged intent), then retry.";
+const MANAGE_PERMISSIONS_HELP = "The bot cannot change who can see that channel. In Discord give the bot's role Manage Roles (shown as Manage Permissions on a channel or category), or Administrator, and make sure the bot can itself see the channel.";
+/** What a member overwrite lets a person do: View Channel, Send Messages, Read Message History, Add Reactions, Attach Files, Embed Links. */
+const MEMBER_ALLOW = (1n << 10n) | (1n << 11n) | (1n << 16n) | (1n << 6n) | (1n << 15n) | (1n << 14n);
+const VIEW_CHANNEL = 1n << 10n;
+
+type MemberRow = { user?: { id?: unknown; username?: unknown; global_name?: unknown; bot?: unknown }; nick?: unknown };
+
+function memberView(row: MemberRow): DiscordMember | null {
+	const u = row?.user;
+	if (!u || typeof u.id !== "string" || typeof u.username !== "string") return null;
+	return { id: u.id, username: u.username, globalName: typeof u.global_name === "string" ? u.global_name : null, nick: typeof row.nick === "string" ? row.nick : null, bot: u.bot === true };
+}
+
+/** One member of the server, or a 404 that says they are not in it. */
+async function guildMember(token: string, guildId: string, userId: string): Promise<DiscordMember> {
+	const row = await discordJson(token, `/guilds/${guildId}/members/${userId}`).catch((e: unknown) => {
+		if (e instanceof HttpError && e.status === 404) throw new HttpError(404, `Discord user ${userId} is not a member of this server. They must join it before they can be given a channel.`);
+		throw e;
+	});
+	const member = memberView(row as MemberRow);
+	if (!member) throw new HttpError(502, "Discord returned no member.");
+	return member;
+}
+
+/** Members of one server: everyone (up to `limit`, after `after`), or those whose username or nickname starts with `query`. */
+discordRoutes.get("/guilds/:guildId/members", async (c) => {
+	const session = await requireUser(c);
+	const guildId = requireSnowflake(c.req.param("guildId"), "guildId");
+	const query = c.req.query("query")?.trim() ?? "";
+	if (query.length > 100) throw new HttpError(400, "query must be at most 100 characters.");
+	const limit = Math.min(Math.max(Number(c.req.query("limit") ?? 1000) || 1000, 1), 1000);
+	const after = c.req.query("after");
+	const path = query
+		? `/guilds/${guildId}/members/search?query=${encodeURIComponent(query)}&limit=${limit}`
+		: `/guilds/${guildId}/members?limit=${limit}${after ? `&after=${requireSnowflake(after, "after")}` : ""}`;
+	const data = await discordJson(await botToken(c.env, session.uid), path).catch((e: unknown) => {
+		if (e instanceof HttpError && e.status === 403) throw new HttpError(403, MEMBERS_INTENT_HELP);
+		throw e;
+	});
+	const members = (Array.isArray(data) ? data : []).flatMap((row) => memberView(row as MemberRow) ?? []);
+	return c.json({ members } satisfies DiscordMemberListResponse);
+});
+
+/** Who can see a channel: its permission overwrites, @everyone, roles and members, with names. */
+discordRoutes.get("/channels/:channelId/access", async (c) => {
+	const session = await requireUser(c);
+	const channelId = requireSnowflake(c.req.param("channelId"), "channelId");
+	const token = await botToken(c.env, session.uid);
+	const row = (await discordJson(token, `/channels/${channelId}`)) as ChannelRow & { permission_overwrites?: unknown };
+	const channel = channelView(row);
+	if (!SNOWFLAKE.test(channel.guildId) || channel.id !== channelId) throw new HttpError(400, "That is not a channel in a Discord server.");
+	const overwrites = (Array.isArray(row.permission_overwrites) ? row.permission_overwrites : []) as { id?: unknown; type?: unknown; allow?: unknown; deny?: unknown }[];
+	const roles = overwrites.some((o) => o.type === 0) ? ((await discordJson(token, `/guilds/${channel.guildId}/roles`)) as { id?: unknown; name?: unknown }[]) : [];
+	const roleNames = new Map((Array.isArray(roles) ? roles : []).flatMap((r) => (typeof r.id === "string" && typeof r.name === "string" ? [[r.id, r.name] as const] : [])));
+	const access: DiscordChannelAccessEntry[] = [];
+	for (const o of overwrites) {
+		if (typeof o.id !== "string") continue;
+		const allow = String(o.allow ?? "0");
+		const deny = String(o.deny ?? "0");
+		const view = (BigInt(allow) & VIEW_CHANNEL) !== 0n ? "allow" : (BigInt(deny) & VIEW_CHANNEL) !== 0n ? "deny" : "inherit";
+		if (o.type === 1) {
+			const member = await guildMember(token, channel.guildId, o.id).catch(() => null);
+			access.push({ id: o.id, kind: "member", name: member?.username ?? null, view, allow, deny });
+		} else {
+			const everyone = o.id === channel.guildId;
+			access.push({ id: o.id, kind: everyone ? "everyone" : "role", name: everyone ? "@everyone" : (roleNames.get(o.id) ?? null), view, allow, deny });
+		}
+	}
+	return c.json({ channel, access } satisfies DiscordChannelAccessResponse);
+});
+
+/**
+ * Let one server member see and post in a channel (`access: "grant"`), or take that member overwrite away
+ * (`"remove"`). Only the member's own overwrite changes; roles and @everyone are left as they are.
+ */
+discordRoutes.put("/channels/:channelId/members/:userId", async (c) => {
+	const session = await requireUser(c);
+	const channelId = requireSnowflake(c.req.param("channelId"), "channelId");
+	const userId = requireSnowflake(c.req.param("userId"), "userId");
+	const body = (await c.req.json().catch(() => ({}))) as { access?: unknown };
+	if (body.access !== "grant" && body.access !== "remove") throw new HttpError(400, 'access must be "grant" or "remove".');
+	const token = await botToken(c.env, session.uid);
+	const channel = await guildChannel(token, channelId);
+	const member = await guildMember(token, channel.guildId, userId);
+	const reason = `ProAgentStore: set_discord_channel_member_access ${body.access}`;
+	const change = body.access === "grant"
+		? { method: "PUT", body: { type: 1, allow: MEMBER_ALLOW.toString(), deny: "0" }, reason }
+		: { method: "DELETE", reason };
+	await discordJson(token, `/channels/${channelId}/permissions/${userId}`, change).catch((e: unknown) => {
+		if (e instanceof HttpError && e.status === 403) throw new HttpError(403, MANAGE_PERMISSIONS_HELP);
+		throw e;
+	});
+	const access = body.access === "grant" ? "granted" : "removed";
+	await audit(c.env, session.uid, `discord.member_access_${body.access}`, `${access === "granted" ? "Gave" : "Removed"} ${member.username} access to Discord channel #${channel.name}`, { guildId: channel.guildId, channelId, memberId: userId });
+	return c.json({ channel, member, access } satisfies DiscordMemberAccessResponse);
 });
 
 discordRoutes.get("/instances/:instanceId/grants", async (c) => {

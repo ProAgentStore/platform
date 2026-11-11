@@ -34,6 +34,9 @@ const CH_ALERTS = "333333333333333333";
 const CH_PRIVATE = "444444444444444444";
 const CH_HIDDEN = "555555555555555555";
 const CH_VOICE = "666666666666666666";
+const ANA = "131313131313131313";
+const STRANGER = "141414141414141414";
+const ROLE_STAFF = "151515151515151515";
 const DISCORD_TOOLS = ["discord_list_granted_channels", "discord_read_messages", "discord_read_reactions", "discord_send_message", "discord_add_reaction"];
 
 let d1: RealSchemaD1;
@@ -67,10 +70,17 @@ function discord(path: string, method: string, auth: string | null): Response {
 	if (path === `/channels/${CH_PRIVATE}` && method === "PATCH") return json({ id: CH_PRIVATE, name: "renamed", type: 0, guild_id: GUILD, parent_id: null });
 	if (path === `/channels/${CH_PRIVATE}` && method === "DELETE") return json({ id: CH_PRIVATE, name: "private", type: 0, guild_id: GUILD });
 	if (path === `/channels/${CH_ALERTS}` && (method === "PATCH" || method === "DELETE")) return json({ message: "Missing Permissions", code: 50013 }, 403);
+	// #1633: members, a channel's overwrites, and a member overwrite. CH_ALERTS's server refuses Manage Roles.
+	if (path === `/guilds/${GUILD}/members` || path === `/guilds/${GUILD}/members/search`) return json([{ user: { id: ANA, username: "ana.l", global_name: "Ana Lee" }, nick: "Ana" }, { user: { id: BOT_A, username: "pags-bot", bot: true }, nick: null }]);
+	if (path === `/guilds/${GUILD}/members/${ANA}`) return json({ user: { id: ANA, username: "ana.l", global_name: "Ana Lee" }, nick: "Ana" });
+	if (path === `/guilds/${GUILD}/members/${STRANGER}`) return json({ message: "Unknown Member", code: 10007 }, 404);
+	if (path === `/guilds/${GUILD}/roles`) return json([{ id: GUILD, name: "@everyone" }, { id: ROLE_STAFF, name: "staff" }]);
+	if (path === `/channels/${CH_PRIVATE}/permissions/${ANA}` && (method === "PUT" || method === "DELETE")) return new Response(null, { status: 204 });
+	if (path === `/channels/${CH_ALERTS}/permissions/${ANA}`) return json({ message: "Missing Permissions", code: 50013 }, 403);
 	if (path === `/channels/${CH_HIDDEN}`) return json({ message: "Missing Access", code: 50001 }, 403);
 	if (path === `/channels/${CH_ALERTS}`) return json({ id: CH_ALERTS, name: "alerts", type: 0, guild_id: GUILD });
 	if (path === `/channels/${CH_VOICE}`) return json({ id: CH_VOICE, name: "lounge", type: 2, guild_id: GUILD });
-	if (path === `/channels/${CH_PRIVATE}`) return json({ id: CH_PRIVATE, name: "private", type: 0, guild_id: GUILD });
+	if (path === `/channels/${CH_PRIVATE}`) return json({ id: CH_PRIVATE, name: "private", type: 0, guild_id: GUILD, permission_overwrites: [{ id: GUILD, type: 0, allow: "0", deny: "1024" }, { id: ROLE_STAFF, type: 0, allow: "1024", deny: "0" }, { id: ANA, type: 1, allow: "117824", deny: "0" }] });
 	// #1274: one message with its reaction counts, and who reacted with each emoji.
 	if (path === `/channels/${CH_ALERTS}/messages/888888888888888888` && method === "GET") return json({ id: "888888888888888888", reactions: [{ count: 2, me: false, emoji: { id: null, name: "👍" } }, { count: 1, me: true, emoji: { id: "123123123123123123", name: "pags" } }] });
 	if (path === `/channels/${CH_ALERTS}/messages/888888888888888888/reactions/${encodeURIComponent("👍")}` && method === "GET") return json([{ id: "111111111111111110", username: "ana", email: "never-passed-on@example.com" }, { id: "111111111111111111", username: "bo", bot: true }]);
@@ -454,5 +464,64 @@ describe("the owner's bot manages channels (#1625)", () => {
 		expect(res.status).toBe(403);
 		expect(res.json.error).toMatch(/Manage Channels/);
 		expect(((await call("GET", `/v1/discord/instances/${INSTANCE}/grants`)).json.grants as unknown[]).length).toBe(1);
+	});
+});
+
+describe("the owner's bot finds members and lets one into a channel (#1633)", () => {
+	const sentTo = (method: string, path: string) => sent.filter((r) => r.method === method && r.path === path);
+
+	it("searches server members by name and lists them with ids, names and the bot flag", async () => {
+		await call("PUT", "/v1/discord/bot", { token: TOKEN_A });
+		const res = await call("GET", `/v1/discord/guilds/${GUILD}/members?query=ana`);
+		expect(res.status).toBe(200);
+		expect(res.json.members).toEqual([
+			{ id: ANA, username: "ana.l", globalName: "Ana Lee", nick: "Ana", bot: false },
+			{ id: BOT_A, username: "pags-bot", globalName: null, nick: null, bot: true },
+		]);
+		expect(sent.some((r) => r.path === `/guilds/${GUILD}/members/search?query=ana&limit=1000`)).toBe(true);
+	});
+
+	it("grants a member View/Send/History on a channel with a member overwrite, and audits it", async () => {
+		await call("PUT", "/v1/discord/bot", { token: TOKEN_A });
+		const res = await call("PUT", `/v1/discord/channels/${CH_PRIVATE}/members/${ANA}`, { access: "grant" });
+		expect(res.status).toBe(200);
+		expect(res.json).toMatchObject({ access: "granted", member: { id: ANA, username: "ana.l" }, channel: { id: CH_PRIVATE } });
+		const [req] = sentTo("PUT", `/channels/${CH_PRIVATE}/permissions/${ANA}`);
+		expect(JSON.parse(req.body ?? "{}")).toEqual({ type: 1, allow: "117824", deny: "0" });
+		expect(events().map((e) => e.event)).toContain("discord.member_access_grant");
+	});
+
+	it("remove deletes only that member's overwrite", async () => {
+		await call("PUT", "/v1/discord/bot", { token: TOKEN_A });
+		const res = await call("PUT", `/v1/discord/channels/${CH_PRIVATE}/members/${ANA}`, { access: "remove" });
+		expect(res.status).toBe(200);
+		expect(res.json.access).toBe("removed");
+		expect(sentTo("DELETE", `/channels/${CH_PRIVATE}/permissions/${ANA}`)).toHaveLength(1);
+	});
+
+	it("refuses someone who is not in the server before touching the channel", async () => {
+		await call("PUT", "/v1/discord/bot", { token: TOKEN_A });
+		const res = await call("PUT", `/v1/discord/channels/${CH_PRIVATE}/members/${STRANGER}`, { access: "grant" });
+		expect(res.status).toBe(404);
+		expect(res.json.error).toMatch(/not a member of this server/);
+		expect(sent.some((r) => r.path.includes("/permissions/"))).toBe(false);
+	});
+
+	it("a missing Manage Roles permission says so", async () => {
+		await call("PUT", "/v1/discord/bot", { token: TOKEN_A });
+		const res = await call("PUT", `/v1/discord/channels/${CH_ALERTS}/members/${ANA}`, { access: "grant" });
+		expect(res.status).toBe(403);
+		expect(res.json.error).toMatch(/Manage Roles/);
+	});
+
+	it("shows who can see a channel: @everyone denied, a role and a member allowed, with names", async () => {
+		await call("PUT", "/v1/discord/bot", { token: TOKEN_A });
+		const res = await call("GET", `/v1/discord/channels/${CH_PRIVATE}/access`);
+		expect(res.status).toBe(200);
+		expect(res.json.access).toEqual([
+			{ id: GUILD, kind: "everyone", name: "@everyone", view: "deny", allow: "0", deny: "1024" },
+			{ id: ROLE_STAFF, kind: "role", name: "staff", view: "allow", allow: "1024", deny: "0" },
+			{ id: ANA, kind: "member", name: "ana.l", view: "allow", allow: "117824", deny: "0" },
+		]);
 	});
 });

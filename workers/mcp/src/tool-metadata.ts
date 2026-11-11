@@ -356,6 +356,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	discord_bot_status: "read",
 	list_discord_guilds: "read",
 	list_discord_channels: "read",
+	list_discord_members: "read",
+	get_discord_channel_access: "read",
 	list_instance_discord_grants: "read",
 	// #1217: an instance's release-notes setting, and the Slack bot's status, channels and an instance's grants. Never the token.
 	get_instance_release_notes: "read",
@@ -479,6 +481,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	grant_instance_discord_channel: "write",
 	create_discord_channel: "write",
 	update_discord_channel: "write",
+	set_discord_channel_member_access: "write",
 	// #1217: who receives release notes, a test note to one granted channel, and the Slack bot + its grants — reversible owner state.
 	set_instance_release_notes: "write",
 	send_test_release_note: "write",
