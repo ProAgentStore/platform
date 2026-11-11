@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -698,10 +698,14 @@ describe("4b. the TMPDIR an engine is given stays short enough for a Unix domain
 		const first = m.engineEnv({}, LONG_SESSION_ID, join(LONG_BASE, "repos", "x"));
 		const dir = first.TMPDIR as string;
 		allocatedDirs.push(dir);
-		// Swap: remove the directory this manager created and put a DIFFERENT one at the exact same
-		// path — same uid, same mode, same name; only the inode differs. Stands in for anything else
-		// writing to the shared, world-writable /tmp between allocation and the next engineEnv call.
-		rmSync(dir, { recursive: true, force: true });
+		// Swap: move the directory this manager created aside and put a DIFFERENT one at the exact same
+		// path — same uid, same mode, same name; only the inode differs. Moved aside, not deleted: Linux
+		// hands a freed inode number to the next directory created, so delete-and-recreate can reproduce
+		// the same dev+ino, which no dev+ino check can tell apart. Only a same-uid process can swap a
+		// 0700 dir in sticky /tmp at all, and it could delete the dir outright, so that case is no
+		// privilege boundary; a replacement with a different inode is what this check exists to catch.
+		renameSync(dir, `${dir}-moved-aside`);
+		allocatedDirs.push(`${dir}-moved-aside`);
 		mkdirSync(dir, { mode: 0o700 });
 		writeFileSync(join(dir, "not-the-original"), "x");
 		const second = m.engineEnv({}, LONG_SESSION_ID, join(LONG_BASE, "repos", "x"));
@@ -718,7 +722,9 @@ describe("4b. the TMPDIR an engine is given stays short enough for a Unix domain
 			const m = manager(LONG_BASE);
 			const first = m.engineEnv({}, sessionId, join(LONG_BASE, "repos", "x"));
 			const dir = first.TMPDIR as string;
-			rmSync(dir, { recursive: true, force: true });
+			// Moved aside, not deleted — see the REUSE test above for why (Linux inode reuse).
+			renameSync(dir, `${dir}-moved-aside`);
+			allocatedDirs.push(`${dir}-moved-aside`);
 			mkdirSync(dir, { mode: 0o700 });
 			writeFileSync(join(dir, "not-the-original"), "x");
 			allocatedDirs.push(dir);

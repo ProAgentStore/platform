@@ -96,7 +96,10 @@ describe.skipIf(process.platform === "win32")("post-run cleanup against real pro
 		chmodSync(persistent, 0o755);
 		chmodSync(oneshot, 0o755);
 	});
-	afterAll(() => {
+	afterAll(async () => {
+		// End every session a test started, as the runtime does (runtime.ts endSession): the engine's
+		// socket-safe TMPDIR lives in /tmp, outside `dir`, so removing `dir` alone would leave it behind.
+		for (const { cleanup, id } of started.splice(0)) await cleanup.endSession(id, new Set(), []);
 		for (const pid of strays) {
 			try {
 				process.kill(pid, "SIGKILL");
@@ -106,6 +109,8 @@ describe.skipIf(process.platform === "win32")("post-run cleanup against real pro
 		}
 		rmSync(dir, { recursive: true, force: true });
 	});
+
+	const started: Array<{ cleanup: CleanupManager; id: string }> = [];
 
 	function manager(mode: "gentle" | "harsh"): CleanupManager {
 		const m = new CleanupManager({ baseDir: join(dir, `cfg-${mode}-${Math.random().toString(36).slice(2, 7)}`), reposBaseDir: join(dir, "repos"), log: () => undefined, registerExitHook: false });
@@ -119,6 +124,7 @@ describe.skipIf(process.platform === "win32")("post-run cleanup against real pro
 
 	function session(opts: { id: string; tag: string; bin: string; client: "claude" | "codex"; cleanup?: CleanupManager; maxTurnMs?: number }) {
 		const f = files(opts.tag);
+		if (opts.cleanup) started.push({ cleanup: opts.cleanup, id: opts.id });
 		const s = new HeadlessSession({
 			id: opts.id,
 			workDir: dir,
