@@ -655,6 +655,13 @@ describe("coverageShortfall — fan_out stopped at its page cap (#640)", () => {
 		expect(coverageShortfall("fan_out", { mode: "pages", count: 12, pages: 2, maxPages: 5, hasMore: false })).toBeNull();
 	});
 
+	it("a fan_out stopped at the 2000-offset ceiling says so, and asks to narrow the request rather than raise maxPages (#1634)", () => {
+		const line = coverageShortfall("fan_out", { mode: "pages", count: 2000, pages: 40, maxPages: 45, hasMore: true, offsetCap: true });
+		expect(line).toContain("2000-offset ceiling");
+		expect(line).toContain("Narrow the request");
+		expect(line).not.toContain("Raise maxPages");
+	});
+
 	it("says nothing for grid mode, which is exhaustive by construction", () => {
 		// The shipped lead-finder uses `grid`; it enumerates every cell, so there is no cap to warn
 		// about and a line on every run would be noise.

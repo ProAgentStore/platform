@@ -212,6 +212,9 @@ export function coverageShortfall(tool: string, output: unknown): string | null 
 	// A paginated source stopped at its cap: how much was left is UNKNOWABLE, so the sentence says
 	// what is known — it stopped early, and there was more. Claiming a number here would be the same
 	// mistake in the other direction.
+	if (o.hasMore === true && o.offsetCap === true) {
+		return `${tool} stopped at the source's 2000-offset ceiling with a full last page — ${kept} record(s) aggregated, and the source may hold more that no offset can reach. Narrow the request (e.g. a location or category facet) to see the rest.`;
+	}
 	if (o.hasMore === true) {
 		const pages = typeof o.pages === "number" ? o.pages : 0;
 		return `${tool} stopped at its ${pages}-page cap with more pages still available — ${kept} record(s) aggregated, and the source was NOT exhausted. Raise maxPages (max 50), or narrow the request, if you need the rest.`;

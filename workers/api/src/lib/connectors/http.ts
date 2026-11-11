@@ -35,8 +35,26 @@ function interpolate(template: string, inputs: Record<string, unknown>): string 
 	});
 }
 
+// A template string that is NOTHING but one placeholder — no literal text around it, e.g.
+// "{{offset}}" but not "page-{{offset}}". Only this shape can carry a typed value through:
+// anything with surrounding text has to produce a string regardless of what the input is.
+const WHOLE_PLACEHOLDER = /^\{\{\s*([\w.]+)\s*\}\}$/;
+
 function interpolateDeep(value: unknown, inputs: Record<string, unknown>): unknown {
-	if (typeof value === "string") return interpolate(value, inputs);
+	if (typeof value === "string") {
+		const whole = WHOLE_PLACEHOLDER.exec(value);
+		if (whole) {
+			const v = inputs[whole[1]];
+			// A whole-placeholder body field templates a JSON value, not a string fragment — a
+			// Workday/SmartRecruiters `{"offset":"{{offset}}"}` must send the NUMBER 20, not "20"
+			// (several ATS APIs 400 on a stringified offset/limit). Only non-string primitives need
+			// the escape hatch: a string input already comes out right through the stringifying path,
+			// and undefined/null still falls through to interpolate()'s "" so an unused optional slot
+			// doesn't leak the literal "{{x}}".
+			if (v !== undefined && v !== null && typeof v !== "string") return v;
+		}
+		return interpolate(value, inputs);
+	}
 	if (Array.isArray(value)) return value.map((v) => interpolateDeep(v, inputs));
 	if (value && typeof value === "object") {
 		const out: Record<string, unknown> = {};
@@ -215,6 +233,10 @@ export const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS", "TRACE"]);
  */
 export const READ_SHAPED_POST: readonly RegExp[] = [
 	/^https:\/\/places\.googleapis\.com\/v1\/places:(searchText|searchNearby)$/,
+	// Workday's public CXS job-search endpoint (`wd1`..`wd99`-style pod subdomain, tenant +
+	// site id in the path): a POST'd `{offset,limit,searchText}` filter with no GET
+	// equivalent, same shape as Places above (#1634).
+	/^https:\/\/[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com\/wday\/cxs\/[^/]+\/[^/]+\/jobs$/,
 ];
 
 /** Is this request a read, whatever its verb says? Exported for the guard tests. */

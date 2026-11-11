@@ -140,7 +140,9 @@ describe("http_request — {{param}} interpolation", () => {
 		expect(calls).toHaveLength(1);
 		expect(calls[0].url).toBe("https://api.example.com/v1/search?q=coffee");
 		expect((calls[0].init.headers as Headers).get("X-Trace")).toBe("abc");
-		expect(JSON.parse(calls[0].init.body as string)).toEqual({ text: "coffee", n: "5" });
+		// n is a whole-placeholder body value, so it keeps the resolved NUMBER (#1634) —
+		// not stringified, unlike q/X-Trace which are string inputs anyway.
+		expect(JSON.parse(calls[0].init.body as string)).toEqual({ text: "coffee", n: 5 });
 	});
 	it("joins base + path and drops empty query params", async () => {
 		const { calls } = mockFetch(200, {});
@@ -297,7 +299,11 @@ describe("http_request — {{param}} interpolation (deeper coverage)", () => {
 		expect(calls[0].url).not.toContain("{{");
 	});
 
-	it("coerces non-string inputs (numbers/booleans) to strings in the body", async () => {
+	it("keeps a whole-placeholder body value's resolved type (#1634)", async () => {
+		// Workday/SmartRecruiters/Lever/Phenom offset paging sends {"offset":20,"limit":20} as
+		// JSON numbers — a stringified "20" 400s on several of them. A template string that is
+		// NOTHING but one placeholder carries the actual value through; anything with surrounding
+		// text still has to produce a string.
 		const { calls } = mockFetch(200, {});
 		await run({
 			method: "POST",
@@ -306,9 +312,28 @@ describe("http_request — {{param}} interpolation (deeper coverage)", () => {
 			inputs: { count: 7, on: true },
 		});
 		const sent = JSON.parse(calls[0].init.body as string);
-		expect(sent.n).toBe("7");
-		expect(sent.flag).toBe("true");
-		expect(sent.nested.deep).toBe("7");
+		expect(sent.n).toBe(7);
+		expect(sent.flag).toBe(true);
+		expect(sent.nested.deep).toBe(7);
+	});
+
+	it("still stringifies a partial placeholder (surrounding text forces a string)", async () => {
+		const { calls } = mockFetch(200, {});
+		await run({
+			method: "POST",
+			url: "https://api.example.com/x",
+			body: { page: "page-{{n}}" },
+			inputs: { n: 3 },
+		});
+		const sent = JSON.parse(calls[0].init.body as string);
+		expect(sent.page).toBe("page-3");
+	});
+
+	it("falls back to the empty string for a whole-placeholder with no matching input", async () => {
+		const { calls } = mockFetch(200, {});
+		await run({ method: "POST", url: "https://api.example.com/x", body: { n: "{{missing}}" }, inputs: {} });
+		const sent = JSON.parse(calls[0].init.body as string);
+		expect(sent.n).toBe("");
 	});
 });
 
@@ -533,7 +558,9 @@ describe("http_request — Google Places searchText, purely as config (the #95 p
 		const h = calls[0].init.headers as Headers;
 		expect(h.get("X-Goog-Api-Key")).toBe("PLACES_KEY");
 		expect(h.get("X-Goog-FieldMask")).toBe("places.id,places.displayName,places.websiteUri");
-		expect(JSON.parse(calls[0].init.body as string)).toEqual({ textQuery: "cafes in Sydney", maxResultCount: "20" });
+		// maxResultCount is a whole-placeholder value — kept as a NUMBER (#1634), the shape
+		// Google's API actually expects.
+		expect(JSON.parse(calls[0].init.body as string)).toEqual({ textQuery: "cafes in Sydney", maxResultCount: 20 });
 
 		// Mapped result — exactly the typed shape a lead-finder source step consumes.
 		expect(r.success).toBe(true);
@@ -640,6 +667,27 @@ describe("http_request — per-call write consent (#307)", () => {
 				expect(calls).toHaveLength(1);
 				vi.restoreAllMocks();
 			}
+		});
+
+		it("lets Workday's CXS job-search POST through with no consent (#1634)", async () => {
+			// Workday has no GET equivalent for its job-search endpoint either — same shape as
+			// Places above, just a different vendor's pod/tenant/site path.
+			const url = "https://acme.wd3.myworkdayjobs.com/wday/cxs/acme/External/jobs";
+			const { calls } = mockFetch(200, { total: 0, jobPostings: [] });
+			const r = await run({ method: "POST", url }, denied);
+			expect(r.success).toBe(true);
+			expect(calls).toHaveLength(1);
+		});
+
+		it("matches the Workday pattern on origin+path, not a lookalike or a mutating sibling route", () => {
+			expect(isReadShapedRequest("POST", "https://acme.wd3.myworkdayjobs.com/wday/cxs/acme/External/jobs")).toBe(true);
+			expect(isReadShapedRequest("POST", "https://acme.wd12.myworkdayjobs.com/wday/cxs/acme-corp/careers-site/jobs")).toBe(true);
+			// Not host-wide: a different Workday CXS route (e.g. applying) stays gated.
+			expect(isReadShapedRequest("POST", "https://acme.wd3.myworkdayjobs.com/wday/cxs/acme/External/jobs/apply")).toBe(false);
+			expect(isReadShapedRequest("POST", "https://acme.wd3.myworkdayjobs.com/wday/cxs/acme/External/job/R-123")).toBe(false);
+			// Lookalike host doesn't borrow the exemption.
+			expect(isReadShapedRequest("POST", "https://acme.wd3.myworkdayjobs.com.evil.example/wday/cxs/acme/External/jobs")).toBe(false);
+			expect(isReadShapedRequest("DELETE", "https://acme.wd3.myworkdayjobs.com/wday/cxs/acme/External/jobs")).toBe(false);
 		});
 
 		it("is matched on origin+path, so neither a query string nor a lookalike host can borrow it", () => {

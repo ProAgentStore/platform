@@ -471,6 +471,107 @@ describe("fan_out — pages (cursor drive + concurrency cap)", () => {
 	});
 });
 
+// ── 4a. fan_out — pages, offset/limit drive (#1634: Workday/Lever/SmartRecruiters/Phenom) ──
+describe("fan_out — pages (offset/limit drive)", () => {
+	/** Builds a query-param-driven http_request template for offset/limit paging tests. */
+	function offsetRequest() {
+		return { method: "GET", url: "https://api.test/jobs", query: { offset: "{{offset}}", limit: "{{limit}}" } };
+	}
+
+	it("stops on a short final page (20, 20, 7)", async () => {
+		const seenOffsets: string[] = [];
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (u: RequestInfo | URL) => {
+			const offset = Number(new URL(String(u)).searchParams.get("offset"));
+			seenOffsets.push(String(offset));
+			const n = offset === 0 ? 20 : offset === 20 ? 20 : 7;
+			const items = Array.from({ length: n }, (_, i) => ({ id: offset + i }));
+			return new Response(JSON.stringify({ items }), { status: 200, headers: { "Content-Type": "application/json" } });
+		});
+		const ctx = { env: fakeEnv(), connectorClient: fakeConnectorClient() } as RegistryToolCtx;
+		const r = await fanOutT.handler(ctx, {
+			mode: "pages", offsetParam: "offset", pageSize: 20, itemsPath: "data.items", maxPages: 10,
+			request: offsetRequest(),
+		});
+		expect(parse(r.content)).toMatchObject({ count: 47, pages: 3, hasMore: false });
+		expect(seenOffsets).toEqual(["0", "20", "40"]); // never asks for a 4th page
+	});
+
+	it("caps at maxPages when every page comes back full", async () => {
+		vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+			new Response(JSON.stringify({ items: Array.from({ length: 20 }, (_, i) => ({ id: i })) }), { status: 200, headers: { "Content-Type": "application/json" } }),
+		);
+		const ctx = { env: fakeEnv(), connectorClient: fakeConnectorClient() } as RegistryToolCtx;
+		const r = await fanOutT.handler(ctx, {
+			mode: "pages", offsetParam: "offset", pageSize: 20, itemsPath: "data.items", maxPages: 3,
+			request: offsetRequest(),
+		});
+		// A live source with no short page and no total reached means more COULD exist — the
+		// #640 cap-vs-exhausted distinction applies to offset mode exactly as it does to cursor mode.
+		expect(parse(r.content)).toMatchObject({ pages: 3, maxPages: 3, hasMore: true });
+	});
+
+	/**
+	 * Workday's own `total` caps at 2000 and offset >= 2000 WRAPS BACK to page 1 — so the guard
+	 * has to bind even when the source itself claims more (a tenant can report a `total` over
+	 * 2000 while still wrapping at the same offset). Never issuing offset=2000 is the proof: if
+	 * the guard were keyed off `total` alone, this run would loop onto page 1 forever.
+	 */
+	it("Workday wrap guard: never issues offset >= 2000, even when total claims more", async () => {
+		const seenOffsets: number[] = [];
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (u: RequestInfo | URL) => {
+			const offset = Number(new URL(String(u)).searchParams.get("offset"));
+			seenOffsets.push(offset);
+			const items = Array.from({ length: 50 }, (_, i) => ({ id: offset + i }));
+			return new Response(JSON.stringify({ items, total: 5000 }), { status: 200, headers: { "Content-Type": "application/json" } });
+		});
+		const ctx = { env: fakeEnv(), connectorClient: fakeConnectorClient() } as RegistryToolCtx;
+		const r = await fanOutT.handler(ctx, {
+			mode: "pages", offsetParam: "offset", pageSize: 50, totalPath: "data.total", itemsPath: "data.items", maxPages: 45,
+			request: offsetRequest(),
+		});
+		// Capped, not exhausted: the last page was full and total says more, so the sweep must say so
+		// (hasMore + offsetCap) — a capped sweep is never read as complete (#1636 expiry rule).
+		expect(parse(r.content)).toMatchObject({ pages: 40, hasMore: true, offsetCap: true }); // 0..1950 step 50
+		expect(Math.max(...seenOffsets)).toBe(1950);
+		expect(seenOffsets).not.toContain(2000);
+	});
+
+	it("stops once offset+pageSize reaches a reported total (pages at 0, 20, 40 for total 50)", async () => {
+		const seenOffsets: number[] = [];
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (u: RequestInfo | URL) => {
+			const offset = Number(new URL(String(u)).searchParams.get("offset"));
+			seenOffsets.push(offset);
+			const items = Array.from({ length: 20 }, (_, i) => ({ id: offset + i }));
+			return new Response(JSON.stringify({ items, total: 50 }), { status: 200, headers: { "Content-Type": "application/json" } });
+		});
+		const ctx = { env: fakeEnv(), connectorClient: fakeConnectorClient() } as RegistryToolCtx;
+		const r = await fanOutT.handler(ctx, {
+			mode: "pages", offsetParam: "offset", pageSize: 20, totalPath: "data.total", itemsPath: "data.items", maxPages: 10,
+			request: offsetRequest(),
+		});
+		expect(seenOffsets).toEqual([0, 20, 40]);
+		expect(parse(r.content)).toMatchObject({ pages: 3, hasMore: false });
+	});
+
+	it("reads total via a nested totalPath", async () => {
+		vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+			new Response(JSON.stringify({ items: Array.from({ length: 42 }, (_, i) => ({ id: i })), meta: { total: 42 } }), { status: 200, headers: { "Content-Type": "application/json" } }),
+		);
+		const ctx = { env: fakeEnv(), connectorClient: fakeConnectorClient() } as RegistryToolCtx;
+		const r = await fanOutT.handler(ctx, {
+			mode: "pages", offsetParam: "offset", pageSize: 42, totalPath: "data.meta.total", itemsPath: "data.items", maxPages: 10,
+			request: offsetRequest(),
+		});
+		expect(parse(r.content)).toMatchObject({ count: 42, pages: 1, hasMore: false });
+	});
+
+	it("rejects offset mode with no (or a non-positive) pageSize", async () => {
+		const ctx = { env: fakeEnv(), connectorClient: fakeConnectorClient() } as RegistryToolCtx;
+		const r = await fanOutT.handler(ctx, { mode: "pages", offsetParam: "offset", request: offsetRequest() });
+		expect(r.success).toBe(false);
+	});
+});
+
 // ── 4b. enrich (issue #115) ─────────────────────────────────────────────────────
 describe("enrich", () => {
 	it("runs a tool per item ($item template) and merges each result under `as` (via a pure tool)", async () => {

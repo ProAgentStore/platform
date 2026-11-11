@@ -353,6 +353,12 @@ function textsOf(item: unknown): string[] {
 	return out;
 }
 
+// Workday's own `total` caps at 2000 and `offset >= 2000` WRAPS back to page 1 instead of
+// erroring or emptying out (#1634). So this is a hard ceiling on top of whatever `total` a
+// source reports, not a default for when `total` is unknown — without it a paging loop that
+// trusted a wrapped page-1 response as "more data" would loop forever re-reading page 1.
+const WORKDAY_OFFSET_WRAP_CAP = 2000;
+
 // ── the catalog ───────────────────────────────────────────────────────────────
 export const STEP_TOOLS: ToolDef[] = [
 	// 1 ─ map
@@ -627,24 +633,29 @@ export const STEP_TOOLS: ToolDef[] = [
 		// author is present.
 		dispatches: ["http_request"],
 		description:
-			"Iterate a source over pages (drive an http_request pagination cursor) OR over a generated set (grid cells around a centre), and aggregate the items. mode 'grid': given center{lat,lng}, extentKm, stepKm → yields (2n+1)² cell centres (the lead-finder's grid). mode 'pages': repeatedly runs an http_request `request` template, threading the returned nextCursor into `cursorParam` until exhausted or `maxPages`. Returns the aggregated {items} (+ cells for grid).",
+			"Iterate a source over pages (drive an http_request pagination cursor OR offset) OR over a generated set (grid cells around a centre), and aggregate the items. mode 'grid': given center{lat,lng}, extentKm, stepKm → yields (2n+1)² cell centres (the lead-finder's grid). mode 'pages': repeatedly runs an http_request `request` template. Cursor-driven by default (threads the returned nextCursor into `cursorParam`); set `offsetParam` to drive offset/limit paging instead (`offsetParam`+`pageSize`[+`limitParam`,`totalPath`]) — stops on a short final page, on `totalPath` reached, on a hard 2000-offset ceiling (Workday's own cap — past it `offset` wraps back to page 1), or at `maxPages`. Returns the aggregated {items} (+ cells for grid).",
 		jsonSchema: {
 			type: "object",
 			properties: {
-				mode: { type: "string", description: '"grid" (fan out over generated cells) or "pages" (drive an http_request cursor).' },
+				mode: { type: "string", description: '"grid" (fan out over generated cells) or "pages" (drive an http_request cursor or offset).' },
 				// grid
 				center: { type: "object", description: 'grid: {"lat":-33.87,"lng":151.21} centre of the grid.' },
 				extentKm: { type: "number", description: "grid: half-width of the grid in km." },
 				stepKm: { type: "number", description: "grid: spacing between cell centres in km." },
-				// pages
+				// pages — cursor mode (default)
 				request: { type: "object", description: "pages: an http_request input object; run once per page." },
-				cursorParam: { type: "string", description: "pages: which inputs key receives the previous page's nextCursor." },
+				cursorParam: { type: "string", description: "pages (cursor mode): which inputs key receives the previous page's nextCursor." },
 				itemsPath: { type: "string", description: 'pages: dotted path into each response for the page items (default "data").' },
 				maxPages: { type: "number", description: "pages: cap on pages fetched (default 5, max 50)." },
+				// pages — offset mode (set offsetParam to switch modes)
+				offsetParam: { type: "string", description: 'pages (offset mode): which inputs key receives the running offset, e.g. "offset" (Workday/SmartRecruiters), "skip" (Lever), "from" (Phenom). Setting this switches the step from cursor mode to offset mode.' },
+				pageSize: { type: "number", description: "pages (offset mode): page size sent as `limitParam`, and offset advances by this each page. Required when offsetParam is set." },
+				limitParam: { type: "string", description: 'pages (offset mode): which inputs key receives `pageSize`, e.g. "limit" (default), "size" (Phenom).' },
+				totalPath: { type: "string", description: "pages (offset mode): dotted path into each response for the source's total item count — stops once offset+pageSize reaches it." },
 				// No `concurrency` knob: it was advertised here and read into a local nothing used.
-				// `pages` is inherently sequential (each request needs the previous cursor) and `grid`
-				// only generates cell centres, so neither mode has anything to run in parallel. A number
-				// the model can set that changes nothing reads as a throughput control someone tuned.
+				// `pages` is inherently sequential (each request needs the previous cursor/offset) and
+				// `grid` only generates cell centres, so neither mode has anything to run in parallel. A
+				// number the model can set that changes nothing reads as a throughput control someone tuned.
 			},
 			required: [],
 		},
@@ -660,16 +671,69 @@ export const STEP_TOOLS: ToolDef[] = [
 				return ok(JSON.stringify({ mode, cells, items: cells, count: cells.length }, null, 2));
 			}
 
-			// pages: drive http_request's nextCursor. Runs sequentially — each page needs the
-			// previous page's cursor, so there is nothing here to run in parallel. Use `enrich`
-			// when per-item calls should fan out; that step really does cap concurrency.
+			// pages: drive http_request's nextCursor OR an offset/limit window. Runs sequentially —
+			// each page needs the previous page's cursor/offset, so there is nothing here to run in
+			// parallel. Use `enrich` when per-item calls should fan out; that step really does cap
+			// concurrency.
 			const reqTemplate = isRecord(input.request) ? { ...(input.request as Record<string, unknown>) } : null;
 			if (!reqTemplate) return fail("pages mode needs a `request` (an http_request input).");
 			if (!ctx.connectorClient) return fail("pages mode needs a connector-enabled context.");
 			const { runRegistryTool } = await import("./tool-registry.js");
-			const cursorParam = typeof input.cursorParam === "string" ? input.cursorParam : "";
 			const itemsPath = typeof input.itemsPath === "string" && input.itemsPath ? input.itemsPath : "data";
 			const maxPages = Math.min(Number(input.maxPages) || 5, 50);
+			const offsetParam = typeof input.offsetParam === "string" ? input.offsetParam : "";
+
+			// ── offset/limit mode (#1634 — Workday, Lever, SmartRecruiters, Phenom-style feeds) ──
+			if (offsetParam) {
+				const pageSize = Number(input.pageSize);
+				if (!Number.isFinite(pageSize) || pageSize <= 0) return fail("offset paging needs a positive `pageSize`.");
+				const limitParam = typeof input.limitParam === "string" && input.limitParam ? input.limitParam : "limit";
+				const totalPath = typeof input.totalPath === "string" ? input.totalPath : "";
+				const aggregated: unknown[] = [];
+				let offset = 0;
+				let pages = 0;
+				let hasMore = false;
+				let offsetCap = false;
+				for (; pages < maxPages; pages++) {
+					const inputs = isRecord(reqTemplate.inputs) ? { ...(reqTemplate.inputs as Record<string, unknown>) } : {};
+					inputs[offsetParam] = offset;
+					inputs[limitParam] = pageSize;
+					const pageReq = { ...reqTemplate, inputs };
+					const r = await runRegistryTool("http_request", ctx, pageReq);
+					if (!r.success) return fail(`page ${pages + 1}: ${r.content}`);
+					const parsed = JSON.parse(unfenceUntrusted(r.content)) as Record<string, unknown>;
+					const pageItems = getPath(parsed, itemsPath);
+					const itemsArr = Array.isArray(pageItems) ? pageItems : pageItems !== undefined && pageItems !== null ? [pageItems] : [];
+					aggregated.push(...itemsArr);
+
+					// Stop at the SMALLER of the source's own `total` and the wrap cap, never at
+					// `total` alone: Workday's `total` can itself report up to 2000 while actually
+					// wrapping at offset 2000, and a source with no `totalPath` configured must still
+					// never be driven past the cap.
+					const rawTotal = totalPath ? Number(getPath(parsed, totalPath)) : NaN;
+					const nextOffset = offset + pageSize;
+					offset = nextOffset;
+					if (itemsArr.length < pageSize || (Number.isFinite(rawTotal) && rawTotal < WORKDAY_OFFSET_WRAP_CAP && nextOffset >= rawTotal)) {
+						hasMore = false; // exhausted: a short page, or the source's own total reached below the cap
+						pages++;
+						break;
+					}
+					if (nextOffset >= WORKDAY_OFFSET_WRAP_CAP) {
+						// A full page at the ceiling: the source may hold more, but no offset can reach it.
+						// Reported as NOT exhausted (hasMore + offsetCap), never as a complete sweep, so the
+						// run says it was capped and nothing downstream treats an absent posting as gone.
+						hasMore = true;
+						offsetCap = true;
+						pages++;
+						break;
+					}
+					hasMore = true;
+				}
+				return ok(JSON.stringify({ mode, items: aggregated, count: aggregated.length, pages, maxPages, hasMore, ...(offsetCap ? { offsetCap } : {}) }, null, 2));
+			}
+
+			// ── cursor mode (default, unchanged) ──
+			const cursorParam = typeof input.cursorParam === "string" ? input.cursorParam : "";
 			const aggregated: unknown[] = [];
 			let cursor: unknown ;
 			let pages = 0;
