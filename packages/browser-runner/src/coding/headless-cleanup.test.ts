@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CleanupManager, GENTLE_BEHAVIOURS, HARSH_BEHAVIOURS, sessionTmpDir } from "./cleanup.js";
+import { CleanupManager, GENTLE_BEHAVIOURS, HARSH_BEHAVIOURS, socketSafeTmpDir } from "./cleanup.js";
 import { HeadlessSession } from "./headless.js";
 
 /**
@@ -195,7 +195,9 @@ describe.skipIf(process.platform === "win32")("post-run cleanup against real pro
 		await until(() => existsSync(f.env), 8000, "the engine to report its environment");
 		const seen = JSON.parse(readFileSync(f.env, "utf8")) as { session: string; tmp: string };
 		expect(seen.session).toBe("env-1");
-		expect(seen.tmp).toBe(sessionTmpDir((cleanup as unknown as { opts: { baseDir: string } }).opts.baseDir, "env-1"));
+		// The engine's own exported TMPDIR is the socket-safe dir (#1565 fix), not the long
+		// content dir `sessionTmpDir` tracks for cleanup bookkeeping — see the comment on `engineEnv`.
+		expect(seen.tmp).toBe(socketSafeTmpDir((cleanup as unknown as { opts: { baseDir: string } }).opts.baseDir, "env-1"));
 		expect(existsSync(seen.tmp)).toBe(true);
 		s.stop();
 		await cleanup.endSession("env-1", new Set(), []);

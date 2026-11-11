@@ -1,9 +1,11 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import net from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	CleanupManager,
+	createSocketSafeTmp,
 	DEFAULT_CLEANUP_POLICY,
 	descendantsOf,
 	GENTLE_BEHAVIOURS,
@@ -19,7 +21,9 @@ import {
 	pruneCaches,
 	removeNewWorktrees,
 	removeSessionTmp,
+	removeSocketSafeTmp,
 	sessionTmpDir,
+	socketSafeTmpDir,
 	type SweepContext,
 	sweepOldSessionTmp,
 	type CleanupPolicy,
@@ -389,6 +393,400 @@ describe("4. per-run temp folders and worktrees", () => {
 		expect(out).toEqual({ removed: ["/w/new-clean"], kept: ["/w/new-dirty"] });
 		expect(calls.some((a) => a.includes("--force"))).toBe(false); // uncommitted work is never forced away
 		expect(listWorktrees("/w/main", git)).toContain("/w/pre");
+	});
+});
+
+// #1565: tsx's own IPC pipe, bound through a Unix domain socket under `$TMPDIR`, hit a REAL
+// `EADDRINUSE` in `pnpm -w test:full` — reproduced directly: `sessionTmpDir` under a realistic long
+// `baseDir` already measures at or past macOS's 104-byte `sockaddr_un.sun_path`, so any socket-using
+// tool an engine spawns (tsx, esbuild, Vite, …) that appends its own subdirectory and filename on top
+// of `TMPDIR` silently collides — `bind()` returns `EADDRINUSE` against the kernel's truncated prefix,
+// not `ENAMETOOLONG`, and on the very FIRST bind, no live listener or stale socket required at all.
+//
+// `/tmp` is shared machine-wide: every socket-safe dir is named from `(uid, baseDir, sessionId)`, not
+// the session id alone, and ownership (uid + mode + "not a symlink") is verified on every use — a
+// short, predictable name is not by itself proof of who owns the path at that name.
+describe("4b. the TMPDIR an engine is given stays short enough for a Unix domain socket", () => {
+	// A deliberately long, realistic `baseDir` — same shape as `~/.config/proagentstore/browser-runner`
+	// under a long username. On the real machine that hit this, `sessionTmpDir` alone measured 96
+	// bytes (not independently at the 104-byte limit) — it was tsx's OWN `tsx-<euid>` subdirectory,
+	// stacked on top, that reached exactly 104 before any filename; the synthetic id below is
+	// deliberately longer than a real `csess_<uuid>` so `sessionTmpDir` alone clears 100 in this test.
+	const LONG_BASE = join("/tmp", "pags-cleanup-repro", "home", "a-fairly-long-real-username", ".config", "proagentstore", "browser-runner");
+	const OTHER_BASE = join("/tmp", "pags-cleanup-repro", "home", "a-different-runner-install", ".config", "proagentstore", "browser-runner");
+	const LONG_SESSION_ID = `csess_${"a1b2c3d4-".repeat(4)}end`; // well past the real 36-char uuid
+
+	const manager = (baseDir: string) => new CleanupManager({ baseDir, reposBaseDir: join(baseDir, "repos"), ops: noOps(), git: gitNone, log: () => undefined, registerExitHook: false });
+
+	const allocatedDirs: string[] = [];
+	afterEach(() => {
+		for (const d of allocatedDirs.splice(0)) rmSync(d, { recursive: true, force: true });
+	});
+
+	it("sessionTmpDir alone is long enough to prove this isn't a hypothetical", () => {
+		// The exact failure mode measured on a real machine: the content dir by itself at or past the limit.
+		expect(Buffer.byteLength(sessionTmpDir(LONG_BASE, LONG_SESSION_ID))).toBeGreaterThan(100);
+	});
+
+	it("socketSafeTmpDir stays short regardless of how long baseDir/sessionId are, with real headroom for a nested tool", () => {
+		const dir = socketSafeTmpDir(LONG_BASE, LONG_SESSION_ID);
+		// Headroom budget: tsx's own nested usage alone is `tsx-<uid>/<pid>.pipe`, ~20-25 bytes; leave room for more.
+		expect(Buffer.byteLength(dir)).toBeLessThan(50);
+		expect(dir.startsWith("/tmp/")).toBe(true);
+	});
+
+	it("different session ids under the SAME base get different socket-safe dirs — no cross-session collision", () => {
+		expect(socketSafeTmpDir(LONG_BASE, "s1")).not.toBe(socketSafeTmpDir(LONG_BASE, "s2"));
+		expect(socketSafeTmpDir(LONG_BASE, LONG_SESSION_ID)).not.toBe(socketSafeTmpDir(LONG_BASE, `${LONG_SESSION_ID}x`));
+	});
+
+	it("the SAME session id under two different runner/base identities gets two different dirs — no cross-runner collision", () => {
+		// Two runner installations (or two accounts) could independently mint the exact same session
+		// id string; without baseDir folded into the name, they'd compute the same /tmp leaf.
+		const a = socketSafeTmpDir(LONG_BASE, LONG_SESSION_ID);
+		const b = socketSafeTmpDir(OTHER_BASE, LONG_SESSION_ID);
+		expect(a).not.toBe(b);
+	});
+
+	it("engineEnv exports the socket-safe dir, not the long content dir, as TMPDIR/TMP/TEMP", () => {
+		const m = manager(LONG_BASE);
+		const env = m.engineEnv({ PATH: "/usr/bin" }, LONG_SESSION_ID, join(LONG_BASE, "repos", "x"));
+		allocatedDirs.push(env.TMPDIR as string);
+		expect(env.TMPDIR).toBe(socketSafeTmpDir(LONG_BASE, LONG_SESSION_ID));
+		expect(env.TMP).toBe(env.TMPDIR);
+		expect(env.TEMP).toBe(env.TMPDIR);
+		expect(Buffer.byteLength(env.TMPDIR as string)).toBeLessThan(50);
+		expect(existsSync(env.TMPDIR as string)).toBe(true); // created, not just computed — a child can write into it immediately
+	});
+
+	it("refuses a pre-existing path at that name owned by someone else, and does NOT fall back to the long unsafe path", () => {
+		const dir = socketSafeTmpDir(LONG_BASE, LONG_SESSION_ID);
+		mkdirSync(dirname(dir), { recursive: true });
+		mkdirSync(dir, { mode: 0o777 }); // "someone else's" stand-in: wide-open mode, as a planted dir would be
+		allocatedDirs.push(dir);
+		const m = manager(LONG_BASE);
+		const env = m.engineEnv({ PATH: "/usr/bin" }, LONG_SESSION_ID, join(LONG_BASE, "repos", "x"));
+		// Refused — and critically, NOT silently handed the long content dir as a fallback.
+		expect(env.TMPDIR).toBeUndefined();
+		expect(env.TMP).toBeUndefined();
+		expect(env.TEMP).toBeUndefined();
+	});
+
+	it("refuses a pre-existing SYMLINK at that name, and never follows or deletes through it", () => {
+		const dir = socketSafeTmpDir(LONG_BASE, LONG_SESSION_ID);
+		mkdirSync(dirname(dir), { recursive: true });
+		const trapTarget = mkdtempSync(join(tmpdir(), "pags-symlink-trap-"));
+		writeFileSync(join(trapTarget, "do-not-delete-me"), "x");
+		symlinkSync(trapTarget, dir);
+		allocatedDirs.push(dir, trapTarget);
+		const m = manager(LONG_BASE);
+		const env = m.engineEnv({}, LONG_SESSION_ID, join(LONG_BASE, "repos", "x"));
+		expect(env.TMPDIR).toBeUndefined(); // refused, not followed
+		// removeSocketSafeTmp must also refuse to recurse through the symlink, even if called directly.
+		expect(removeSocketSafeTmp(LONG_BASE, LONG_SESSION_ID)).toBe(false);
+		expect(existsSync(join(trapTarget, "do-not-delete-me"))).toBe(true);
+	});
+
+	it("a real Unix domain socket binds inside the exported TMPDIR, nested exactly as tsx nests its own IPC pipe — this is what actually failed before the fix", async () => {
+		const m = manager(LONG_BASE);
+		const env = m.engineEnv({}, LONG_SESSION_ID, join(LONG_BASE, "repos", "x"));
+		allocatedDirs.push(env.TMPDIR as string);
+		// Mirrors tsx's own `getPipePath`: `${TMPDIR}/tsx-<euid>/<pid>.pipe`.
+		const nested = join(env.TMPDIR as string, "tsx-501", "92237.pipe");
+		mkdirSync(dirname(nested), { recursive: true });
+		const server = net.createServer();
+		await new Promise<void>((resolve, reject) => {
+			server.on("error", reject);
+			server.listen(nested, resolve);
+		});
+		expect(Buffer.byteLength(nested)).toBeLessThan(100); // under the real sun_path budget, with margin
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+
+	it("parallel sessions each get a DISTINCT dir that binds without colliding — fixed filenames, so only directory isolation can prevent the collision", async () => {
+		const ids = Array.from({ length: 8 }, (_, i) => `${LONG_SESSION_ID}-parallel-${i}`);
+		const m = manager(LONG_BASE);
+		const dirs = ids.map((id) => socketSafeTmpDir(LONG_BASE, id));
+		expect(new Set(dirs).size).toBe(ids.length); // pairwise distinct, proven directly — not inferred from bind success alone
+		let servers: net.Server[] = [];
+		try {
+			servers = await Promise.all(
+				ids.map(async (id) => {
+					const env = m.engineEnv({}, id, join(LONG_BASE, "repos", "x"));
+					allocatedDirs.push(env.TMPDIR as string);
+					// Same fixed filename in every iteration: a random name could mask a directory-isolation bug.
+					const nested = join(env.TMPDIR as string, "tsx-501", "92237.pipe");
+					mkdirSync(dirname(nested), { recursive: true });
+					const server = net.createServer();
+					await new Promise<void>((resolve, reject) => {
+						server.on("error", reject);
+						server.listen(nested, resolve);
+					});
+					return server;
+				}),
+			);
+			expect(servers).toHaveLength(ids.length);
+		} finally {
+			await Promise.all(servers.map((s) => new Promise<void>((resolve) => s.close(() => resolve()))));
+		}
+	});
+
+	it("removeSocketSafeTmp only ever removes its own leaf under /tmp, and endSession cleans it up", async () => {
+		// The leaf is a hash of (uid, baseDir, id), not the raw id, so there is no path-escape vector to
+		// defend against the way `removeSessionTmp` does — a weird id just hashes to a different, still-safe leaf.
+		expect(removeSocketSafeTmp(LONG_BASE, "../etc")).toBe(true); // nothing exists there yet; rm({force:true}) is a no-op success
+		expect(dirname(socketSafeTmpDir(LONG_BASE, "../etc"))).toBe("/tmp");
+		const m = manager(LONG_BASE);
+		const env = m.engineEnv({}, LONG_SESSION_ID, join(LONG_BASE, "repos", "x"));
+		expect(existsSync(env.TMPDIR as string)).toBe(true);
+		await m.endSession(LONG_SESSION_ID, new Set(), []);
+		expect(existsSync(env.TMPDIR as string)).toBe(false);
+	});
+
+	it("a long-lived but still-LIVE session's socket-safe dir survives a harsh sweep regardless of age", async () => {
+		const m = manager(LONG_BASE);
+		const env = m.engineEnv({}, LONG_SESSION_ID, join(LONG_BASE, "repos", "x"));
+		const dir = env.TMPDIR as string;
+		allocatedDirs.push(dir);
+		const old = (Date.now() - 30 * 3600_000) / 1000;
+		utimesSync(dir, old, old); // far older than the 24h harsh threshold
+		m.setPolicy(HARSH);
+		// The session is still live (named in liveSessionIds) at every call site that matters for a real sweep.
+		await m.runPass("test", new Set([LONG_SESSION_ID]), []);
+		expect(existsSync(dir)).toBe(true);
+	});
+
+	it("a dir this manager never allocated (a different runner's, or planted directly) is never touched by a sweep", async () => {
+		const foreign = socketSafeTmpDir(OTHER_BASE, "foreign-session");
+		mkdirSync(foreign, { recursive: true, mode: 0o700 });
+		allocatedDirs.push(foreign);
+		const old = (Date.now() - 30 * 3600_000) / 1000;
+		utimesSync(foreign, old, old);
+		const m = manager(LONG_BASE); // a DIFFERENT manager — never recorded allocating `foreign`
+		m.setPolicy(HARSH);
+		await m.runPass("test", new Set(), []);
+		// No global /tmp scan: a path this manager never recorded is never a sweep candidate, regardless of age.
+		expect(existsSync(foreign)).toBe(true);
+	});
+
+	it("an ended (no-longer-live), old socket-safe dir IS swept, since nothing else owns cleaning it up", async () => {
+		// SAME manager throughout, deliberately: it genuinely tracked this dir via its own `engineEnv`
+		// call, so this exercises the sweep's real path. (An earlier version of this test simulated "a
+		// crash that skipped endSession" by manually re-creating the directory and feeding it to a
+		// SECOND, unrelated manager instance via `engineEnv` — i.e. relying on that second call silently
+		// ADOPTING a pre-existing path. That adoption is exactly what the atomic, non-recursive
+		// `createSocketSafeTmp` now refuses, so a fresh manager can no longer rediscover an orphan this
+		// way; see the fresh-manager/sentinel test above for proof of that refusal. What "a crash that
+		// skipped endSession" actually needs here is simpler: the SAME manager, never told to end the
+		// session, but the caller's own liveness answer — `liveSessionIds` — says it is no longer live.)
+		const m = manager(LONG_BASE);
+		const env = m.engineEnv({}, LONG_SESSION_ID, join(LONG_BASE, "repos", "x"));
+		const dir = env.TMPDIR as string;
+		allocatedDirs.push(dir);
+		const old = (Date.now() - 30 * 3600_000) / 1000;
+		utimesSync(dir, old, old);
+		m.setPolicy(HARSH);
+		await m.runPass("test", new Set(), []); // NOT in liveSessionIds: this session has ended from the caller's point of view
+		expect(existsSync(dir)).toBe(false);
+	});
+
+	// #1411-adjacent review: four corrections to the fix above, each regressed here against its own failure mode.
+
+	it("a refusal strips an INHERITED unsafe TMPDIR from base, not just omits setting a new one", () => {
+		const dir = socketSafeTmpDir(LONG_BASE, LONG_SESSION_ID);
+		mkdirSync(dirname(dir), { recursive: true });
+		mkdirSync(dir, { mode: 0o777 }); // forces the refusal path, same as the "owned by someone else" test above
+		allocatedDirs.push(dir);
+		const m = manager(LONG_BASE);
+		// `base` stands in for this runner's OWN spawn env, which can itself already carry a
+		// session-scoped override inherited from whatever started the runner process — exactly the
+		// over-length kind of value this whole fix exists to keep an engine from ever seeing.
+		const inherited = sessionTmpDir(LONG_BASE, "some-other-already-running-session");
+		const env = m.engineEnv({ TMPDIR: inherited, TMP: inherited, TEMP: inherited, PATH: "/usr/bin" }, LONG_SESSION_ID, join(LONG_BASE, "repos", "x"));
+		expect(env.TMPDIR).toBeUndefined();
+		expect(env.TMP).toBeUndefined();
+		expect(env.TEMP).toBeUndefined();
+		expect(env.PATH).toBe("/usr/bin"); // only the three temp vars are stripped, nothing else in base
+	});
+
+	it("the hash tuple cannot be forged by a delimiter-boundary collision — two different (baseDir, sessionId) pairs that concatenate identically under a space join still hash differently", () => {
+		// Old bug: `${uid} ${baseDir} ${sessionId}` for ("/a b", "c") and ("/a", "b c") both produce
+		// the literal string "<uid> /a b c" — a plain delimiter join cannot tell the two apart.
+		const a = socketSafeTmpDir("/a b", "c");
+		const b = socketSafeTmpDir("/a", "b c");
+		expect(a).not.toBe(b);
+	});
+
+	it("a literal NUL byte in a session id does not collide with a differently-NUL-placed id — proves the encoding never embeds a raw byte", () => {
+		const a = socketSafeTmpDir(LONG_BASE, "left\0right");
+		const b = socketSafeTmpDir(LONG_BASE, "lef\0tright");
+		expect(a).not.toBe(b);
+	});
+
+	describe("on win32, the whole socket-safe redirection is inert — Windows named pipes were never bound by sun_path", () => {
+		const realPlatform = process.platform;
+		beforeEach(() => Object.defineProperty(process, "platform", { value: "win32", configurable: true }));
+		afterEach(() => Object.defineProperty(process, "platform", { value: realPlatform, configurable: true }));
+
+		it("createSocketSafeTmp refuses outright rather than mkdir a meaningless /tmp-joined path", () => {
+			expect(createSocketSafeTmp(LONG_BASE, LONG_SESSION_ID)).toBeNull();
+		});
+
+		it("engineEnv exports the ORIGINAL long content dir unchanged — pre-fix behaviour, since nothing was ever broken here", () => {
+			const m = manager(LONG_BASE);
+			const env = m.engineEnv({}, LONG_SESSION_ID, join(LONG_BASE, "repos", "x"));
+			allocatedDirs.push(env.TMPDIR as string);
+			expect(env.TMPDIR).toBe(sessionTmpDir(LONG_BASE, LONG_SESSION_ID));
+			expect(env.TMP).toBe(env.TMPDIR);
+			expect(env.TEMP).toBe(env.TMPDIR);
+		});
+	});
+
+	it("endSession never removes an arbitrary same-uid pre-existing private directory that happens to sit at the hash path — only a dir THIS manager actually tracked allocating", async () => {
+		const neverAllocatedId = `${LONG_SESSION_ID}-never-called-engineEnv`;
+		const coincidence = socketSafeTmpDir(LONG_BASE, neverAllocatedId);
+		// Stands in for an unrelated private directory of the SAME uid that happens to sit at this
+		// hash's path — passes every ownership check `isOwnedSafeDir` runs, but this manager never
+		// allocated it via `engineEnv`, so it is not this session's socket-safe dir to remove.
+		mkdirSync(coincidence, { recursive: true, mode: 0o700 });
+		writeFileSync(join(coincidence, "not-ours"), "x");
+		allocatedDirs.push(coincidence);
+		const m = manager(LONG_BASE);
+		m.startSession(neverAllocatedId, join(LONG_BASE, "repos", "x")); // tracks the session; never calls engineEnv for it
+		await m.endSession(neverAllocatedId, new Set(), []);
+		expect(existsSync(coincidence)).toBe(true);
+		expect(existsSync(join(coincidence, "not-ours"))).toBe(true);
+	});
+
+	it("a precreated same-uid 0700 sentinel is refused by engineEnv (not adopted), and survives endSession AND a harsh sweep intact", async () => {
+		const sentinelId = `${LONG_SESSION_ID}-sentinel`;
+		const sentinel = socketSafeTmpDir(LONG_BASE, sentinelId);
+		// Planted BEFORE engineEnv ever runs — same uid, mode 0700, a real directory: exactly the
+		// shape that passed `isOwnedSafeDir` under the old `{recursive:true}` mkdir and got silently
+		// adopted. The atomic non-recursive mkdir + EEXIST refusal must now reject it on sight.
+		mkdirSync(sentinel, { recursive: true, mode: 0o700 });
+		writeFileSync(join(sentinel, "sentinel-marker"), "do not touch");
+		allocatedDirs.push(sentinel);
+		const m = manager(LONG_BASE);
+		const env = m.engineEnv({}, sentinelId, join(LONG_BASE, "repos", "x"));
+		expect(env.TMPDIR).toBeUndefined(); // refused, not adopted
+		expect(existsSync(join(sentinel, "sentinel-marker"))).toBe(true); // untouched by the refusal itself
+		await m.endSession(sentinelId, new Set(), []);
+		expect(existsSync(join(sentinel, "sentinel-marker"))).toBe(true); // never tracked, so endSession leaves it alone
+		m.setPolicy(HARSH);
+		await m.runPass("test", new Set(), []);
+		expect(existsSync(join(sentinel, "sentinel-marker"))).toBe(true); // never tracked, so the sweep leaves it alone too
+	});
+
+	it("preserves repeated legitimate engineEnv calls for the same session — the second call reuses the tracked dir instead of refusing on its own prior allocation", () => {
+		const m = manager(LONG_BASE);
+		const first = m.engineEnv({}, LONG_SESSION_ID, join(LONG_BASE, "repos", "x"));
+		allocatedDirs.push(first.TMPDIR as string);
+		expect(first.TMPDIR).toBeDefined();
+		const second = m.engineEnv({}, LONG_SESSION_ID, join(LONG_BASE, "repos", "x"));
+		expect(second.TMPDIR).toBe(first.TMPDIR); // same dir, not a refusal from colliding with its own prior mkdir
+		expect(existsSync(second.TMPDIR as string)).toBe(true);
+	});
+
+	// #1411-adjacent review, second pass: the path string alone is not proof of identity — `/tmp` is
+	// world-writable, so the tracked path could be removed and replaced by something else between
+	// allocation and a later reuse or removal. Both must detect the swap and treat it as "not ours",
+	// never silently reuse or delete the replacement.
+
+	it("a REUSE after the tracked path was swapped out from under it detects the swap and refuses, rather than handing the engine someone else's directory", () => {
+		const m = manager(LONG_BASE);
+		const first = m.engineEnv({}, LONG_SESSION_ID, join(LONG_BASE, "repos", "x"));
+		const dir = first.TMPDIR as string;
+		allocatedDirs.push(dir);
+		// Swap: remove the directory this manager created and put a DIFFERENT one at the exact same
+		// path — same uid, same mode, same name; only the inode differs. Stands in for anything else
+		// writing to the shared, world-writable /tmp between allocation and the next engineEnv call.
+		rmSync(dir, { recursive: true, force: true });
+		mkdirSync(dir, { mode: 0o700 });
+		writeFileSync(join(dir, "not-the-original"), "x");
+		const second = m.engineEnv({}, LONG_SESSION_ID, join(LONG_BASE, "repos", "x"));
+		// Refused, not handed the swapped-in replacement: the identity check fails, falls through to a
+		// fresh create attempt, which finds the replacement occupying the path and refuses on EEXIST.
+		expect(second.TMPDIR).toBeUndefined();
+		expect(existsSync(join(dir, "not-the-original"))).toBe(true); // refusal never touches the replacement
+	});
+
+	it("a REMOVAL after the tracked path was swapped out from under it detects the swap and leaves the replacement alone — through both endSession and the sweep", async () => {
+		// Distinct session ids per sub-case: each hashes to its own path, so one case's deliberately
+		// un-removed swapped leftover can never collide with the other's fresh allocation.
+		const swapAndVerify = async (sessionId: string, end: (m: CleanupManager) => Promise<void>) => {
+			const m = manager(LONG_BASE);
+			const first = m.engineEnv({}, sessionId, join(LONG_BASE, "repos", "x"));
+			const dir = first.TMPDIR as string;
+			rmSync(dir, { recursive: true, force: true });
+			mkdirSync(dir, { mode: 0o700 });
+			writeFileSync(join(dir, "not-the-original"), "x");
+			allocatedDirs.push(dir);
+			await end(m);
+			expect(existsSync(join(dir, "not-the-original"))).toBe(true); // the replacement, never removed
+		};
+		const endSessionId = `${LONG_SESSION_ID}-swap-endsession`;
+		const sweepSessionId = `${LONG_SESSION_ID}-swap-sweep`;
+		await swapAndVerify(endSessionId, (m) => m.endSession(endSessionId, new Set(), []));
+		await swapAndVerify(sweepSessionId, async (m) => {
+			m.setPolicy(HARSH);
+			const dir = socketSafeTmpDir(LONG_BASE, sweepSessionId);
+			const old = (Date.now() - 30 * 3600_000) / 1000;
+			utimesSync(dir, old, old); // artificially old too — proves the identity check, not the age guard, is what saves it
+			await m.runPass("test", new Set(), []);
+		});
+	});
+
+	// #1411-adjacent review, third pass: two narrower gaps in the identity check itself.
+
+	it("the SAME inode, widened to group/other access in place since creation, is rejected exactly like a swapped directory — a dev+ino match alone is not enough", async () => {
+		const chmodId = `${LONG_SESSION_ID}-chmod-reuse`;
+		const m = manager(LONG_BASE);
+		const first = m.engineEnv({}, chmodId, join(LONG_BASE, "repos", "x"));
+		const dir = first.TMPDIR as string;
+		allocatedDirs.push(dir);
+		chmodSync(dir, 0o707); // same inode — dev/ino are untouched by chmod — now world-accessible
+		const second = m.engineEnv({}, chmodId, join(LONG_BASE, "repos", "x"));
+		expect(second.TMPDIR).toBeUndefined(); // not reused: EEXIST on the fresh attempt refuses it
+		expect(existsSync(dir)).toBe(true); // refusal, not a removal — the (now-insecure) directory is left exactly as found
+	});
+
+	it("the SAME inode, widened in place, is never removed by endSession either — only dropped from tracking", async () => {
+		const chmodId = `${LONG_SESSION_ID}-chmod-remove`;
+		const m = manager(LONG_BASE);
+		const first = m.engineEnv({}, chmodId, join(LONG_BASE, "repos", "x"));
+		const dir = first.TMPDIR as string;
+		allocatedDirs.push(dir);
+		chmodSync(dir, 0o707);
+		await m.endSession(chmodId, new Set(), []);
+		expect(existsSync(dir)).toBe(true); // left alone, not deleted, despite having been tracked a moment ago
+	});
+
+	it("a directory that vanishes between createSocketSafeTmp's own mkdir and its stat is refused cleanly — never throws into whatever spawns the engine off the result", () => {
+		const vanishId = `${LONG_SESSION_ID}-vanish`;
+		const dir = socketSafeTmpDir(LONG_BASE, vanishId);
+		const lstatThatVanishes: typeof lstatSync = () => {
+			rmSync(dir, { recursive: true, force: true }); // simulates something else deleting it in the gap
+			const err = new Error("ENOENT") as NodeJS.ErrnoException;
+			err.code = "ENOENT";
+			throw err;
+		};
+		expect(() => createSocketSafeTmp(LONG_BASE, vanishId, { lstat: lstatThatVanishes })).not.toThrow();
+		expect(createSocketSafeTmp(LONG_BASE, vanishId, { lstat: lstatThatVanishes })).toBeNull();
+	});
+
+	it("engineEnv itself never throws when the directory vanishes right after creation — it clears TMPDIR, same as any other refusal", () => {
+		// engineEnv doesn't take an injectable lstat (that is createSocketSafeTmp's own concern,
+		// proven directly above) — this proves the OUTER contract: a session whose allocation attempt
+		// lands on a path that a concurrent deletion wins the race for still gets a clean env back.
+		const vanishId = `${LONG_SESSION_ID}-vanish-outer`;
+		const dir = socketSafeTmpDir(LONG_BASE, vanishId);
+		rmSync(dir, { recursive: true, force: true }); // nothing there yet; the allocation itself still succeeds fresh
+		const m = manager(LONG_BASE);
+		expect(() => m.engineEnv({}, vanishId, join(LONG_BASE, "repos", "x"))).not.toThrow();
+		const env = m.engineEnv({}, vanishId, join(LONG_BASE, "repos", "x"));
+		allocatedDirs.push(env.TMPDIR as string);
+		expect(env.TMPDIR).toBeDefined(); // the ordinary case still works — this test is a non-throw smoke check, not a race
 	});
 });
 

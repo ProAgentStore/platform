@@ -25,11 +25,27 @@
  * above are pure functions with tests that name the process each mode must and must not kill.
  */
 import { execFileSync, type ChildProcess } from "node:child_process";
-import { readFileSync, statfsSync } from "node:fs";
+import { lstatSync, readFileSync, statfsSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { listPlaywrightBrowsers, reapOrphanedPlaywrightBrowsers, sweepStalePlaywrightProfiles } from "../reaper.js";
-import { createSessionTmp, DISK_PRUNE_THRESHOLD, diskUsedFraction, freeBytes, type Git, listWorktrees, pruneCaches, realGit, removeNewWorktrees, removeSessionTmp, sweepOldSessionTmp } from "./cleanup-fs.js";
+import {
+	createSessionTmp,
+	createSocketSafeTmp,
+	DISK_PRUNE_THRESHOLD,
+	diskUsedFraction,
+	freeBytes,
+	type Git,
+	isOwnedSafeDir,
+	listWorktrees,
+	pruneCaches,
+	realGit,
+	removeNewWorktrees,
+	removeSessionTmp,
+	removeSocketSafeTmp,
+	socketSafeTmpAgeMs,
+	sweepOldSessionTmp,
+} from "./cleanup-fs.js";
 
 // ── Policy ──────────────────────────────────────────────────────────────────────────────────
 
@@ -417,12 +433,44 @@ export interface CleanupManagerOptions {
 }
 
 /**
+ * Does the path currently on disk still refer to the exact directory this manager created — same
+ * device and inode, not merely the same string — AND is it still in the state that made it safe to
+ * trust in the first place? `/tmp` is world-writable: between allocation and a later reuse or
+ * removal, the path could have been deleted and replaced by something else entirely (another
+ * same-uid 0700 directory passes `isOwnedSafeDir` just as well as the original). The dev+ino check
+ * alone would miss a narrower case: the SAME inode, still ours, but `chmod`'d wider in place since
+ * creation — nothing about an inode number changes when its mode does. Re-running `isOwnedSafeDir`
+ * here, not just the identity check, is what catches that: a widened mode is refused exactly as a
+ * swapped directory is, never silently re-trusted because "it's the same object we made."
+ *
+ * A mismatch, however it happened — gone, replaced, or merely loosened — means "not ours any more
+ * in the sense that matters" — never "ours, so delete (or hand to an engine as) whatever is there now."
+ */
+function socketSafeIdentityMatches(tracked: { dev: number; ino: number }, path: string): boolean {
+	try {
+		const st = lstatSync(path);
+		return st.dev === tracked.dev && st.ino === tracked.ino && isOwnedSafeDir(path);
+	} catch {
+		return false;
+	}
+}
+
+/**
  * Owns the policy and the per-session bookkeeping, and runs the sweeps. One per runner. Everything it
  * does is best-effort: cleanup that fails costs tidiness, never a run.
  */
 export class CleanupManager {
 	policy: CleanupPolicy = DEFAULT_CLEANUP_POLICY;
 	private readonly tracked = new Map<string, Tracked>();
+	/**
+	 * Sessions this manager has allocated a socket-safe TMPDIR for — the sweep's only universe; it
+	 * never scans `/tmp` itself. Carries the `{dev, ino}` captured at creation, not just the path
+	 * string: `/tmp` is world-writable, so the path alone could be removed and replaced by something
+	 * else between allocation and a later reuse or removal. Every read of this map re-verifies the
+	 * identity against what is CURRENTLY on disk — see `socketSafeIdentityMatches` — so a replaced
+	 * path is neither reused as ours nor deleted as ours; it is treated as gone.
+	 */
+	private readonly socketSafeDirs = new Map<string, { dir: string; dev: number; ino: number }>();
 	private readonly endedGroups = new Map<number, string>();
 	private lastOrphans: Orphan[] = [];
 	private lastPass: CleanupReport | null = null;
@@ -485,10 +533,62 @@ export class CleanupManager {
 	/**
 	 * The env an engine process is spawned with: the base env plus the session marker (so a leftover can be
 	 * proven ours) and a per-run TMPDIR (so the run's scratch files are deleted with it).
+	 *
+	 * The exported TMPDIR is the socket-safe dir (`socketSafeTmpDir`), not `tmpDir` itself — `tmpDir` is
+	 * nested under the user's home-based config dir and can already be at or past what a Unix domain
+	 * socket path can hold before any tool the engine spawns appends its own subdirectory and filename
+	 * (see the comment on `socketSafeTmpDir`). `tmpDir` still exists and is still what cleanup/sweep track.
+	 *
+	 * Windows is untouched: it never had this problem (named pipes aren't `sun_path`-bound), so it keeps
+	 * exporting `tmpDir` exactly as before the #1565 fix — no POSIX `/tmp` is ever computed or
+	 * created for it.
+	 *
+	 * On a POSIX refusal (unwritable `/tmp`, or a pre-existing path at that name that fails the ownership/
+	 * symlink check — see `createSocketSafeTmp`), this does NOT fall back to `tmpDir`: that would silently
+	 * re-export the exact over-length path the socket-safe dir exists to avoid, including in precisely the
+	 * case where the refusal was itself catching something planted at that path. It explicitly DELETES any
+	 * inherited `TMPDIR`/`TMP`/`TEMP` from `base` rather than just omitting new ones — `base` is this
+	 * runner's own spawn env, which can itself already carry an unsafe, session-scoped override inherited
+	 * from whatever started the runner process; spreading `...base` unchanged would silently let that
+	 * leak through, exactly the failure this whole fix exists to close.
+	 *
+	 * `createSocketSafeTmp` creates its directory with a non-recursive, atomic `mkdir` and refuses on
+	 * `EEXIST` — it never adopts a path merely found already there, however innocuous it looks (see
+	 * its own comment). That means a SECOND `engineEnv` call for a session this instance already holds
+	 * one for would otherwise refuse too, even though it is a perfectly legitimate repeat allocation —
+	 * so that case is short-circuited here, reusing the tracked value directly without touching the
+	 * filesystem again. The reuse itself re-verifies `{dev, ino}` against what is CURRENTLY on disk
+	 * (`socketSafeIdentityMatches`): the path string alone is not proof it is still the same directory
+	 * this manager created — `/tmp` is world-writable, so it could have been removed and replaced
+	 * since. A mismatch drops the stale tracking entry and falls through to a fresh `createSocketSafeTmp`
+	 * attempt, which — finding something else now occupying that exact path — correctly refuses rather
+	 * than adopting the replacement.
 	 */
 	engineEnv(base: NodeJS.ProcessEnv, sessionId: string, workDir: string): NodeJS.ProcessEnv {
 		const { tmpDir } = this.startSession(sessionId, workDir);
-		return { ...base, PAGS_SESSION_ID: sessionId, ...(tmpDir ? { TMPDIR: tmpDir, TMP: tmpDir, TEMP: tmpDir } : {}) };
+		if (!tmpDir) return { ...base, PAGS_SESSION_ID: sessionId };
+		if (process.platform === "win32") return { ...base, PAGS_SESSION_ID: sessionId, TMPDIR: tmpDir, TMP: tmpDir, TEMP: tmpDir };
+		const already = this.socketSafeDirs.get(sessionId);
+		if (already && socketSafeIdentityMatches(already, already.dir)) {
+			return { ...base, PAGS_SESSION_ID: sessionId, TMPDIR: already.dir, TMP: already.dir, TEMP: already.dir };
+		}
+		if (already) this.socketSafeDirs.delete(sessionId); // the path was replaced under us — stop trusting it
+		// `createSocketSafeTmp` captures `{dev, ino}` in the SAME stat it uses to verify the directory
+		// it just made — not a separate stat here, which would reopen exactly the "vanished in the gap
+		// between two calls" window this is designed to close. It never throws (disappearance between
+		// its own mkdir and stat is refused internally): a refusal here is always "unavailable," never
+		// an exception reaching into the engine spawn this result feeds.
+		const safe = createSocketSafeTmp(this.opts.baseDir, sessionId);
+		if (!safe) {
+			this.log(`[runner] socket-safe TMPDIR unavailable for session ${sessionId}; clearing TMPDIR rather than exporting a path too long for a Unix socket`);
+			const clean: NodeJS.ProcessEnv = { ...base, PAGS_SESSION_ID: sessionId };
+			delete clean.TMPDIR;
+			delete clean.TMP;
+			delete clean.TEMP;
+			return clean;
+		}
+		this.socketSafeDirs.set(sessionId, safe);
+		return { ...base, PAGS_SESSION_ID: sessionId, TMPDIR: safe.dir, TMP: safe.dir, TEMP: safe.dir };
 	}
 
 	/** Spawn options every engine process shares: its own process group (POSIX), so what it starts can be ended with it. */
@@ -524,6 +624,20 @@ export class CleanupManager {
 			if (b.browserCleanup) report.browsersReaped += this.browsers();
 			if (b.tempCleanup) {
 				if (removeSessionTmp(this.opts.baseDir, sessionId)) report.tempFoldersRemoved++;
+				// Only a dir THIS manager actually recorded allocating (via `engineEnv`) is ever removed
+				// here. `socketSafeTmpDir`'s path is a deterministic hash of (uid, baseDir, sessionId) —
+				// computing it and finding something already there that happens to pass the ownership
+				// check is not proof this session created it; it could be an unrelated private directory
+				// of the same uid that a hash coincidence (or a session that never called `engineEnv`,
+				// e.g. cleanup enabled but the engine never started) would otherwise delete unasked.
+				// The `{dev, ino}` re-check guards the remaining gap: even a TRACKED entry's path could
+				// have been removed and replaced by something else since allocation — removing THAT
+				// would delete a directory this manager never actually created.
+				const tracked = this.socketSafeDirs.get(sessionId);
+				if (tracked) {
+					if (socketSafeIdentityMatches(tracked, tracked.dir)) removeSocketSafeTmp(this.opts.baseDir, sessionId);
+					this.socketSafeDirs.delete(sessionId);
+				}
 				if (t) {
 					const wt = removeNewWorktrees(t.workDir, t.worktreesBefore, this.git);
 					report.worktreesRemoved += wt.removed.length;
@@ -577,11 +691,43 @@ export class CleanupManager {
 		if (this.lastOrphans.length) this.log(`[runner] ${this.lastOrphans.length} leftover process(es) found and NOT touched (${this.policy.mode} mode): ${this.lastOrphans.slice(0, 5).map((o) => o.pid).join(", ")}`);
 	}
 
+	/**
+	 * Sweeps only the sessions THIS manager instance recorded allocating a socket-safe dir for
+	 * (`engineEnv`) — deliberately never a scan of `/tmp` itself. `/tmp` is shared across every local
+	 * user and every runner installation on the machine; a scan keyed on a name pattern would act on
+	 * paths this runner never created, including another runner's still-live session. `liveSessionIds`
+	 * is the same externally-supplied "actually still running" set each call site already uses for the
+	 * content-dir sweep (`sweepOldSessionTmp`) — NOT `this.tracked`, which only means "has not called
+	 * `endSession` yet" and would wrongly protect forever a session that crashed without one.
+	 *
+	 * Re-verifies `{dev, ino}` before removing anything: the tracked path could have been removed
+	 * and replaced since allocation (see `socketSafeIdentityMatches`) — a sweep is exactly the kind
+	 * of delayed, timer-driven pass where that window is widest. A mismatch drops the stale tracking
+	 * entry without touching whatever now occupies the path.
+	 */
+	private sweepSocketSafeDirs(olderThanMs: number, liveSessionIds: ReadonlySet<string>): void {
+		for (const [sessionId, tracked] of [...this.socketSafeDirs]) {
+			if (liveSessionIds.has(sessionId)) continue;
+			if (!socketSafeIdentityMatches(tracked, tracked.dir)) {
+				this.socketSafeDirs.delete(sessionId); // gone, or replaced — either way, nothing left to track
+				continue;
+			}
+			const age = socketSafeTmpAgeMs(this.opts.baseDir, sessionId, this.now());
+			if (age === null || age < olderThanMs) continue;
+			removeSocketSafeTmp(this.opts.baseDir, sessionId);
+			this.socketSafeDirs.delete(sessionId);
+		}
+	}
+
 	/** Harsh's 15-minute tick. */
 	private async timedSweep(): Promise<void> {
 		const report = this.blank("timer");
 		if (this.policy.behaviours.browserCleanup) report.browsersReaped += this.browsers();
-		if (this.policy.behaviours.tempCleanup && this.policy.mode === "harsh") report.tempFoldersRemoved += sweepOldSessionTmp(this.opts.baseDir, 24 * 3600_000, new Set(this.tracked.keys()), this.now()).length;
+		if (this.policy.behaviours.tempCleanup && this.policy.mode === "harsh") {
+			const live = new Set(this.tracked.keys());
+			report.tempFoldersRemoved += sweepOldSessionTmp(this.opts.baseDir, 24 * 3600_000, live, this.now()).length;
+			this.sweepSocketSafeDirs(24 * 3600_000, live);
+		}
 		this.lastPass = report;
 	}
 
@@ -607,7 +753,11 @@ export class CleanupManager {
 		const b = this.policy.behaviours;
 		if (b.leftoverSweep) await this.sweepInto(report, liveSessionIds, liveRoots);
 		if (b.browserCleanup) report.browsersReaped += this.browsers();
-		if (b.tempCleanup) report.tempFoldersRemoved += sweepOldSessionTmp(this.opts.baseDir, this.policy.mode === "harsh" ? 24 * 3600_000 : 7 * 24 * 3600_000, liveSessionIds, this.now()).length;
+		if (b.tempCleanup) {
+			const maxAge = this.policy.mode === "harsh" ? 24 * 3600_000 : 7 * 24 * 3600_000;
+			report.tempFoldersRemoved += sweepOldSessionTmp(this.opts.baseDir, maxAge, liveSessionIds, this.now()).length;
+			this.sweepSocketSafeDirs(maxAge, liveSessionIds);
+		}
 		if (b.cachePruning) await this.prune(reason, liveSessionIds, report);
 		const after = freeBytes(this.opts.reposBaseDir, this.opts.statfs) ?? freeBytes(homedir(), this.opts.statfs);
 		report.freedBytes = before !== null && after !== null ? Math.max(0, after - before) : null;
