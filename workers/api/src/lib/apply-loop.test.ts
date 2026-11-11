@@ -4,7 +4,7 @@ import { dryRunBlockReason, runApplyLoop, toolCallToDecision, type ApplyDeps, ty
 const JOB: ApplyJob = {
 	url: "https://jobs.example.com/123",
 	resumePath: "/tmp/resume.pdf",
-	candidate: { fullName: "Sergey Ivochkin", email: "sergey@example.com" },
+	candidate: { fullName: "Owner Name", email: "other@example.com" },
 };
 
 function scriptedDeps(snapshots: PageSnapshot[], decisions: ApplyDecision[]): { deps: ApplyDeps; acted: BrowserAction[] } {
@@ -57,9 +57,9 @@ describe("runApplyLoop captcha suppression", () => {
 describe("runApplyLoop", () => {
 	it("drives type → upload → submit → finish(submitted)", async () => {
 		const { deps, acted } = scriptedDeps(
-			[page("- textbox \"Full name\""), page("- textbox \"Full name\": Sergey"), page("- button \"Submit\""), page("Application received")],
+			[page("- textbox \"Full name\""), page("- textbox \"Full name\": Owner"), page("- button \"Submit\""), page("Application received")],
 			[
-				{ action: { action: "type", role: "textbox", name: "Full name", text: "Sergey Ivochkin" } },
+				{ action: { action: "type", role: "textbox", name: "Full name", text: "Owner Name" } },
 				{ action: { action: "upload", name: "Resume", file: JOB.resumePath } },
 				{ action: { action: "click", role: "button", name: "Submit" } },
 				{ finish: { status: "submitted", detail: "Application received" } },
@@ -139,7 +139,7 @@ describe("runApplyLoop", () => {
 		const { deps, acted } = scriptedDeps(
 			[page('- textbox "Name"'), page('- button "Apply"')],
 			[
-				{ action: { action: "type", role: "textbox", name: "Name", text: "Sergey" } },
+				{ action: { action: "type", role: "textbox", name: "Name", text: "Owner" } },
 				{ action: { action: "click", role: "button", name: "Apply" } },
 			],
 		);
@@ -152,7 +152,7 @@ describe("runApplyLoop", () => {
 		const { deps, acted } = scriptedDeps(
 			[page('- textbox "Name"'), page('- button "Send"')],
 			[
-				{ action: { action: "type", role: "textbox", name: "Name", text: "Sergey" } },
+				{ action: { action: "type", role: "textbox", name: "Name", text: "Owner" } },
 				{ action: { action: "click", role: "button", name: "Send" } }, // old guard only matched /apply/i → bypass
 			],
 		);
@@ -198,7 +198,7 @@ describe("runApplyLoop", () => {
 	it("carries `filled` out on a handoff so the workflow can thread it to the next round", async () => {
 		const { deps } = scriptedDeps(
 			[page('- textbox "Name"'), page('- button "Verify you are human"', "captcha")],
-			[{ action: { action: "type", role: "textbox", name: "Name", text: "Sergey" } }],
+			[{ action: { action: "type", role: "textbox", name: "Name", text: "Owner" } }],
 		);
 		const result = await runApplyLoop(deps, JOB, { maxSteps: 5 });
 		expect(result.outcome).toBe("captcha");
@@ -207,9 +207,9 @@ describe("runApplyLoop", () => {
 
 	it("dry-run BLOCKS an Enter keypress once filled (submits a focused form)", async () => {
 		const { deps, acted } = scriptedDeps(
-			[page('- textbox "Name"'), page('- textbox "Name": Sergey')],
+			[page('- textbox "Name"'), page('- textbox "Name": Owner')],
 			[
-				{ action: { action: "type", role: "textbox", name: "Name", text: "Sergey" } },
+				{ action: { action: "type", role: "textbox", name: "Name", text: "Owner" } },
 				{ action: { action: "key", key: "Enter" } },
 			],
 		);
@@ -224,7 +224,7 @@ describe("runApplyLoop", () => {
 		// form) slipped past — a REAL submit during a dry run. Enter (not after an arrow) must
 		// block regardless of prior fills.
 		const { deps, acted } = scriptedDeps(
-			[page('- textbox "Name": Sergey')],
+			[page('- textbox "Name": Owner')],
 			[{ action: { action: "key", key: "Enter" } }],
 		);
 		const result = await runApplyLoop(deps, { ...JOB, dryRun: true }, { maxSteps: 5 });
@@ -429,8 +429,8 @@ describe("runApplyLoop write-back feedback", () => {
 		const logs: string[][] = [];
 		const snaps = [page('- textbox "Mobile Phone"'), page('- textbox "Mobile Phone"'), page('- button "Submit"'), page("done")];
 		const decisions: ApplyDecision[] = [
-			{ action: { action: "type", role: "textbox", name: "Mobile Phone", text: "404453580" } },
-			{ action: { action: "type", role: "textbox", name: "Mobile Phone", text: "+61404453580" } },
+			{ action: { action: "type", role: "textbox", name: "Mobile Phone", text: "400123456" } },
+			{ action: { action: "type", role: "textbox", name: "Mobile Phone", text: "+61400123456" } },
 			{ finish: { status: "submitted", detail: "ok" } },
 		];
 		const deps: ApplyDeps = {

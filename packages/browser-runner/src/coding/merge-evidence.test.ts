@@ -14,7 +14,7 @@ const NOW = Date.parse("2026-10-25T10:00:30Z");
 const OUT = "✓ Merged pull request #42 (feat: thing)";
 
 type Fixture = { list?: unknown; pull?: Record<string, unknown> | null; repo?: Record<string, unknown> | null; user?: Record<string, unknown> | null; commit?: Record<string, unknown> | null; view?: string };
-const pull = (extra: Record<string, unknown> = {}) => ({ merged: true, merged_at: "2026-10-25T10:00:10Z", merged_by: { login: "serge" }, merge_commit_sha: AFTER, base: { ref: "main", repo: { full_name: "acme/app" } }, head: { sha: "c".repeat(40) }, commits: 3, ...extra });
+const pull = (extra: Record<string, unknown> = {}) => ({ merged: true, merged_at: "2026-10-25T10:00:10Z", merged_by: { login: "owner" }, merge_commit_sha: AFTER, base: { ref: "main", repo: { full_name: "acme/app" } }, head: { sha: "c".repeat(40) }, commits: 3, ...extra });
 /** `n` rebased commits on BEFORE, as `commits?sha=<result>&per_page=n+1` lists them: newest (the result) first, the prior tip last. */
 const rebased = (n: number) => [...Array.from({ length: n }, (_x, i) => ({ sha: i === 0 ? AFTER : String(n - i).repeat(40), parents: [{ sha: i === n - 1 ? BEFORE : String(n - i - 1).repeat(40) }] })).map((e, i) => (i === 0 ? { ...e, parents: [{ sha: n === 1 ? BEFORE : String(n - 1).repeat(40) }] } : e)), { sha: BEFORE, parents: [{ sha: "9".repeat(40) }] }];
 const commit = (parents: string[]) => ({ sha: AFTER, parents: parents.map((sha) => ({ sha })) });
@@ -31,7 +31,7 @@ function gh(f: Fixture = {}) {
 		if (/api repos\/[^/]+\/[^/]+\/pulls\/\d+/.test(path)) return reply(f.pull === undefined ? pull() : f.pull);
 		if (/api repos\/[^/]+\/[^/]+\/commits\//.test(path)) return reply(f.commit === undefined ? commit([BEFORE]) : f.commit);
 		if (/^api repos\/[^/]+\/[^/]+$/.test(path)) return reply(f.repo === undefined ? { default_branch: "main" } : f.repo);
-		if (path === "api user") return reply(f.user === undefined ? { login: "serge" } : f.user);
+		if (path === "api user") return reply(f.user === undefined ? { login: "owner" } : f.user);
 		return { code: 1, stdout: "" };
 	};
 	return { run, calls };
@@ -56,7 +56,7 @@ describe("a completed synchronous merge carries GitHub's evidence (#1350)", () =
 		["rebase", "--rebase", ["2".repeat(40)]],
 	])("%s: before is the prior branch tip, after is GitHub's merge commit", async (method, flag, parents) => {
 		const found = await collectMergeEvidence(gh({ commit: commit(parents as string[]) }).run, act(`gh pr merge 42 ${flag}`), OUT, NOW);
-		expect(found).toEqual({ merge: { v: MERGE_CONTRACT_VERSION, repo: "acme/app", pr: 42, baseRef: "main", method, beforeSha: BEFORE, afterSha: AFTER, mergedAt: "2026-10-25T10:00:10Z", mergedBy: "serge", actor: "serge" } });
+		expect(found).toEqual({ merge: { v: MERGE_CONTRACT_VERSION, repo: "acme/app", pr: 42, baseRef: "main", method, beforeSha: BEFORE, afterSha: AFTER, mergedAt: "2026-10-25T10:00:10Z", mergedBy: "owner", actor: "owner" } });
 	});
 	it("a rebase takes its prior tip from the foot of the PR's rebased commits, not from the result's parent", async () => {
 		const found = await collectMergeEvidence(gh({ commit: commit(["2".repeat(40)]), pull: pull({ commits: 3 }) }).run, act("gh pr merge 42 --rebase"), OUT, NOW);

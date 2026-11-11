@@ -68,7 +68,7 @@ export async function readSpecialInstructions(env: Env, instanceId: string, user
  * mocks from taking effect. Left as its own follow-up if `/message` or `/restart` turn up the same
  * renamed-machine failure.
  *
- * Measured before the #532 fix: session `csess_c960d431…` stamped to `Sergeys-Mac-mini.local`, resolved
+ * Measured before the #532 fix: session `csess_c960d431…` stamped to `runner-host.local`, resolved
  * here for ten hours across the machine being off, and `/capture` answered `runnerConnected: true`
  * off the row every time.
  */

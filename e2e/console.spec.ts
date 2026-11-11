@@ -82,8 +82,8 @@ interface OpsMockOptions {
  * and an email is one unbreakable token: it is the thing that overflowed.
  */
 const DEFAULT_CONNECTORS = [
-	{ id: "gmail", label: "Gmail", auth: "oauth", grantModel: "user", configured: true, connected: true, account: "sergey.ivochkin@rocketlab.com.au", connectedAt: "2026-07-01T00:00:00Z", reach: null, flow: { start: "/v1/email/google/start", disconnect: "/v1/email/google" } },
-	{ id: "google_drive", label: "Google Drive", auth: "oauth", grantModel: "instance-resource", configured: true, connected: true, account: "sergey.ivochkin@rocketlab.com.au", connectedAt: "2026-07-01T00:00:00Z", reach: { grants: 3, instances: 2 }, flow: { start: "/v1/drive/google/start", disconnect: "/v1/drive/google" } },
+	{ id: "gmail", label: "Gmail", auth: "oauth", grantModel: "user", configured: true, connected: true, account: "owner@example.com", connectedAt: "2026-07-01T00:00:00Z", reach: null, flow: { start: "/v1/email/google/start", disconnect: "/v1/email/google" } },
+	{ id: "google_drive", label: "Google Drive", auth: "oauth", grantModel: "instance-resource", configured: true, connected: true, account: "owner@example.com", connectedAt: "2026-07-01T00:00:00Z", reach: { grants: 3, instances: 2 }, flow: { start: "/v1/drive/google/start", disconnect: "/v1/drive/google" } },
 	{ id: "zoho_workdrive", label: "Zoho WorkDrive", auth: "oauth", grantModel: "instance-resource", configured: true, connected: false, account: null, connectedAt: null, reach: null, flow: { start: "/v1/workdrive/zoho/start", disconnect: "/v1/workdrive/zoho" } },
 ];
 
@@ -3787,7 +3787,7 @@ test.describe("mobile — no horizontal overflow (regression guard for the missi
 			// plus `min-width:auto` means the BOX is never narrower than the text, so the box escapes.
 			span.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0";
 			span.className = "e2e-393-probe";
-			span.textContent = "Sergeys-MacBook-Air.local";
+			span.textContent = "runner-host-b.local";
 			row.appendChild(span);
 			card.appendChild(row);
 			document.querySelector("main")?.appendChild(card);
@@ -4171,8 +4171,8 @@ test.describe("mobile — Profile with real-shaped account data", () => {
 	const realistic = {
 		user: {
 			id: "9f1c2b84-6d3e-4a55-9c07-2f8ab41d7e63",
-			login: "serge-ivo-development",
-			display_name: "Serge Ivochkin (ProAgentStore)",
+			login: "owner-login-dev",
+			display_name: "Owner Name (ProAgentStore)",
 			roles: ["user", "creator", "admin"],
 		},
 		profile: {
@@ -4186,7 +4186,7 @@ test.describe("mobile — Profile with real-shaped account data", () => {
 				{ key: "salary", label: "Salary expectation (annual)", group: "job", private: true },
 			],
 			profile: {
-				full_name: "Serge Ivochkin",
+				full_name: "Owner Name",
 				phone: "+61 400 000 000",
 				city: "Sydney",
 				country: "Australia",
@@ -4372,9 +4372,9 @@ test.describe("mobile — Profile with real-shaped account data", () => {
  */
 test.describe("mobile — Preferences with a connected account (#333)", () => {
 	const connected = {
-		user: { githubLinked: "serge-ivo-development" },
+		user: { githubLinked: "owner-login-dev" },
 		connectors: DEFAULT_CONNECTORS.map((c) =>
-			c.account ? { ...c, account: "sergey.ivochkin+proagentstore.console@rocketlab.com.au" } : c,
+			c.account ? { ...c, account: "owner+console@example.com" } : c,
 		),
 	};
 
@@ -4390,7 +4390,7 @@ test.describe("mobile — Preferences with a connected account (#333)", () => {
 			// Every section rendered, named one by one. The point of this block is that the two the
 			// old fixture skipped are the two that matter, so "the page loaded" is not the check.
 			await expect(page.getByRole("heading", { name: "Connections" })).toBeVisible();
-			await expect(page.getByText("sergey.ivochkin+proagentstore.console@rocketlab.com.au").first()).toBeVisible();
+			await expect(page.getByText("owner+console@example.com").first()).toBeVisible();
 			await expect(page.getByRole("button", { name: "Connect Zoho WorkDrive" })).toBeVisible();
 			await expect(page.getByRole("heading", { name: "Notifications" })).toBeVisible();
 			await expect(page.getByRole("heading", { name: "Appearance" })).toBeVisible();
@@ -4442,7 +4442,7 @@ test.describe("mobile — Preferences in WebKit (#384)", () => {
 	test.use({ timezoneId: "America/North_Dakota/New_Salem" });
 
 	const connected = {
-		user: { githubLinked: "serge-ivo-development" },
+		user: { githubLinked: "owner-login-dev" },
 		connectors: DEFAULT_CONNECTORS,
 	};
 
@@ -6029,7 +6029,7 @@ test.describe("mobile — a repo row dates its verdict and can re-take it (#440)
 				// saying so rather than returning early in silence.
 				return json({
 					repos: [REPO],
-					recheck: { ran: false, checked: 0, reason: "This agent is pinned to Sergeys-Mac-mini.local, which isn't connected." },
+					recheck: { ran: false, checked: 0, reason: "This agent is pinned to runner-host.local, which isn't connected." },
 				});
 			}
 			if (url.includes("/engines")) return json({ engines: [], defaultEngineId: "claude" });
@@ -6055,7 +6055,7 @@ test.describe("mobile — a repo row dates its verdict and can re-take it (#440)
 			// platform looked and it is broken" and "nobody has looked since Monday".
 			const notice = page.getByTestId("repos-stale-notice");
 			await expect(notice).toBeVisible();
-			await expect(notice).toContainText("Sergeys-Mac-mini.local");
+			await expect(notice).toContainText("runner-host.local");
 
 			// WCAG 2.5.8 Target Size (Minimum) — the same 24px floor #389/#431 assert on this
 			// surface. The control is deliberately not a boxed button (the control-shapes ratchet
@@ -6260,7 +6260,7 @@ test.describe("mobile — the Co-pilot Copy button clears the timestamp (#445)",
  * hostname, which is one unbreakable token on a 320px tile.
  */
 test.describe("mobile — the Runner card separates connected from attached (#531)", () => {
-	const PIN = "Sergeys-Mac-mini.local";
+	const PIN = "runner-host.local";
 	const LIVE = "RLs-MacBook-Air.local";
 
 	/** Pinned to a machine that is down; a second machine holds this agent's live socket. */
@@ -6601,7 +6601,7 @@ test.describe("mobile — the engine's refusal is a sentence, not a line in the 
 			capabilities: { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION", surfaceOptions: { coding: { repos: "single" } } },
 		},
 	];
-	const REPO = { id: "repo-1", name: "aipa", githubRepo: "serge-ivo/aipa", provider: "github", cloneStatus: "ready" };
+	const REPO = { id: "repo-1", name: "aipa", githubRepo: "owner-login/aipa", provider: "github", cloneStatus: "ready" };
 	const LIVE = { id: "csess-1", repoId: "repo-1", clientType: "codex", status: "active", launchCommand: "codex exec --sandbox danger-full-access" };
 	const REFUSAL = "Not inside a trusted directory and --skip-git-repo-check was not specified.";
 	/** The pane exactly as production returned it, three refused turns deep. */
@@ -6702,7 +6702,7 @@ test.describe("mobile — the engine's refusal is a sentence, not a line in the 
  */
 test.describe("mobile — the Coding banner names the machine, not a command (#537)", () => {
 	const STAMPED = "RLs-MacBook-Air.local";
-	const LIVE = "Sergeys-Mac-mini.local";
+	const LIVE = "runner-host.local";
 	const SENTENCE =
 		`This session is running on ${STAMPED}, which isn't connected. ${LIVE} is connected — ` +
 		`open the session again to move it to ${LIVE}, or start the runner on ${STAMPED}.`;
@@ -7235,14 +7235,14 @@ test.describe("Permissions — which account this agent uses (#736; its own tab 
 		connector: "gmail",
 		label: "Gmail",
 		accounts: [
-			{ accountId: "sivochkin@gmail.com", label: "sivochkin@gmail.com", connectedAt: null },
-			{ accountId: "serge.pro.job@gmail.com", label: "serge.pro.job@gmail.com", connectedAt: null },
+			{ accountId: "owner-b@example.com", label: "owner-b@example.com", connectedAt: null },
+			{ accountId: "owner@example.com", label: "owner@example.com", connectedAt: null },
 		],
 		pinned: null,
 		resolves: null,
 		blocked: {
 			reason: "ambiguous",
-			message: "You have 2 Gmail accounts connected and this agent is not set to use one of them: sivochkin@gmail.com, serge.pro.job@gmail.com. Choose which account this agent should use in its Settings — nothing is sent or read until you do.",
+			message: "You have 2 Gmail accounts connected and this agent is not set to use one of them: owner-b@example.com, owner@example.com. Choose which account this agent should use in its Settings — nothing is sent or read until you do.",
 		},
 	}];
 
@@ -7262,13 +7262,13 @@ test.describe("Permissions — which account this agent uses (#736; its own tab 
 		await expect(picker(page)).toBeVisible();
 		await expect(select(page)).toHaveCount(1);
 
-		await select(page).selectOption("serge.pro.job@gmail.com");
+		await select(page).selectOption("owner@example.com");
 
 		await expect.poll(() => mock.connectorAccountPins).toEqual([
-			{ connector: "gmail", accountId: "serge.pro.job@gmail.com" },
+			{ connector: "gmail", accountId: "owner@example.com" },
 		]);
 		// AC4 — the re-read shows the server's verdict, not a local guess at it.
-		await expect(picker(page)).toContainText("This agent uses serge.pro.job@gmail.com.");
+		await expect(picker(page)).toContainText("This agent uses owner@example.com.");
 	});
 
 	/**
@@ -7281,7 +7281,7 @@ test.describe("Permissions — which account this agent uses (#736; its own tab 
 	test("an ambiguous connector says so, quoting the API", async ({ page }) => {
 		await openSettings(page);
 		await expect(picker(page)).toContainText("nothing is sent or read until you do");
-		await expect(picker(page)).toContainText("sivochkin@gmail.com, serge.pro.job@gmail.com");
+		await expect(picker(page)).toContainText("owner-b@example.com, owner@example.com");
 	});
 
 	/** AC3 — the one-account world, which is almost everyone, sees no change whatsoever. */
@@ -7300,8 +7300,8 @@ test.describe("Permissions — which account this agent uses (#736; its own tab 
 	 */
 	test("clearing the choice is honest about costing the agent its access", async ({ page }) => {
 		const mock = await openSettings(page);
-		await select(page).selectOption("sivochkin@gmail.com");
-		await expect(picker(page)).toContainText("This agent uses sivochkin@gmail.com.");
+		await select(page).selectOption("owner-b@example.com");
+		await expect(picker(page)).toContainText("This agent uses owner-b@example.com.");
 
 		await expect(select(page).locator("option").first()).toHaveText("Not chosen — every call refuses");
 		await select(page).selectOption("");

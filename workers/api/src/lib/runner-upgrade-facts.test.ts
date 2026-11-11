@@ -12,7 +12,7 @@ vi.mock("./runner-client.js", () => ({ getRunnerConn }));
 import { runnerUpgradeFacts } from "./runner-upgrade.js";
 import type { Env } from "../types.js";
 
-const MINI = "Sergeys-Mac-mini.local";
+const MINI = "runner-host.local";
 const AIR = "RLs-MacBook-Air";
 const opts = { what: "search this repository", minCli: "0.4.49" };
 

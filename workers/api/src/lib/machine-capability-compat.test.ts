@@ -95,9 +95,9 @@ describe("the schema keeps the record bounded and private (#1312)", () => {
 			cpuCount: 99999,
 			memoryGb: -5,
 			nodeVersion: "/usr/local/bin/node",
-			username: "serge",
+			username: "owner",
 			env: { TOKEN: "sk-secret" },
-			playwright: { version: "1.60.0", probes: [{ browser: "webkit", success: false, error: `no exec at /Users/serge/.cache/ms-playwright/x ${"y".repeat(500)}`, durationMs: 5 }, { browser: "netscape", success: true }, { browser: "webkit", success: true }] },
+			playwright: { version: "1.60.0", probes: [{ browser: "webkit", success: false, error: `no exec at /Users/former/.cache/ms-playwright/x ${"y".repeat(500)}`, durationMs: 5 }, { browser: "netscape", success: true }, { browser: "webkit", success: true }] },
 			inventory: Array.from({ length: 80 }, (_, i) => ({ name: `tool${i}`, version: "1.0.0" })).concat([{ name: "../../etc/passwd", version: "1" }, { name: "ok", version: "C:\\Users\\bob" }]),
 		});
 		expect(parsed).not.toBeNull();
@@ -111,7 +111,7 @@ describe("the schema keeps the record bounded and private (#1312)", () => {
 		expect(parsed.playwright.probes[0].error?.length).toBeLessThanOrEqual(200);
 		expect(parsed.inventory).toHaveLength(40);
 		expect(parsed.inventory.some((i) => i.name.includes("/") || i.name === "ok")).toBe(false);
-		expect(JSON.stringify(parsed)).not.toMatch(/serge|sk-secret|TOKEN|username|\/Users/);
+		expect(JSON.stringify(parsed)).not.toMatch(/owner|sk-secret|TOKEN|username|\/Users/);
 	});
 	it("rejects what is not a capability record", () => {
 		for (const bad of [null, "x", 5, [], {}, { os: {} }, { os: { name: "", arch: "" } }]) expect(parseMachineCapabilities(bad)).toBeNull();

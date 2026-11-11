@@ -243,11 +243,11 @@ describe("full tool authority and document provenance", () => {
 	it("stages approved documents with their extension, and rechecks original and staged bytes on every use", () => {
 		const dir = mkdtempSync(join(tmpdir(), "full-docs-"));
 		try {
-			const named = documentFileName("resume", { job: { title: "Project Delivery Manager" }, ownerFacts: { identity: { firstName: "Sergey", lastName: "Ivochkin" } } } as never); const original = join(dir, named); writeFileSync(original, "PDF bytes");
+			const named = documentFileName("resume", { job: { title: "Project Delivery Manager" }, ownerFacts: { identity: { firstName: "Owner", lastName: "Name" } } } as never); const original = join(dir, named); writeFileSync(original, "PDF bytes");
 			const sha256 = createHash("sha256").update("PDF bytes").digest("hex"); let changed = false;
 			const paths = fullArtifactPaths(() => changed ? { error: "Original changed" } : { path: original, sha256 }, [{ kind: "resume", path: "~/source.pdf", sha256 }], dir);
 			const staged = paths("resume"); if ("error" in staged) throw new Error(staged.error);
-			expect(basename(staged.path)).toBe(named); expect(named).toBe("Sergey-Ivochkin-Resume-Project-Delivery-Manager.pdf"); expect(readFileSync(staged.path, "utf8")).toBe("PDF bytes");
+			expect(basename(staged.path)).toBe(named); expect(named).toBe("Owner-Name-Resume-Project-Delivery-Manager.pdf"); expect(readFileSync(staged.path, "utf8")).toBe("PDF bytes");
 			changed = true; expect(paths("resume")).toEqual({ error: "Original changed" }); changed = false;
 			writeFileSync(staged.path, "changed"); expect(paths("resume")).toMatchObject({ error: expect.stringContaining("changed") });
 		} finally { rmSync(dir, { recursive: true, force: true }); }

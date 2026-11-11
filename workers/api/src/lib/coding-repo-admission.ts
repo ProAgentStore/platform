@@ -5,7 +5,7 @@
  * subdirectory and no `.git`; #405's machinery had measured that and written it to the row —
  *
  *   clone_status = "needs_attention"
- *   clone_error  = "The configured checkout `/Users/serge-ivo/dev/aipa` has files but is not
+ *   clone_error  = "The configured checkout `/Users/owner-login/dev/aipa` has files but is not
  *                   inside a git working tree — it is a plain folder, not a clone of a repository."
  *
  * — twenty seconds after the run's last instruction, and fifteen minutes before that run gave up.

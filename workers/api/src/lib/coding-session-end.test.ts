@@ -1,7 +1,7 @@
 /**
  * `endCodingSession` resolving a renamed machine's STAMP (#1541).
  *
- * The live incident: a session stamped to `Sergeys-Mac-mini.local` outlived that hostname — the
+ * The live incident: a session stamped to `runner-host.local` outlived that hostname — the
  * same physical machine now answers as `Macmini.modem` — so the exact-name lookup `getRunnerConn`
  * always used found nothing live, `/coding/end` was never dispatched, and the direct-turn claim it
  * held stayed `stop_not_confirmed` forever, blocking the repo's queue even with the real machine
@@ -61,7 +61,7 @@ function node(runnerNode: string, opts: { machineId?: string | null; instanceId?
 function session(id: string, opts: { runnerNode?: string | null; turnId?: string | null; repo?: string } = {}) {
 	d1.exec(
 		`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, status, client_type, runner_node, direct_turn_id, direct_turn_at, updated_at)
-		 VALUES ('${id}', '${INST}', '${opts.repo ?? "r1"}', '${UID}', 'active', 'claude', ${opts.runnerNode === null ? "NULL" : `'${opts.runnerNode ?? "Sergeys-Mac-mini.local"}'`}, ${opts.turnId === null ? "NULL" : `'${opts.turnId ?? "dt-1"}'`}, ${opts.turnId === null ? "NULL" : Date.now()}, datetime('now'))`,
+		 VALUES ('${id}', '${INST}', '${opts.repo ?? "r1"}', '${UID}', 'active', 'claude', ${opts.runnerNode === null ? "NULL" : `'${opts.runnerNode ?? "runner-host.local"}'`}, ${opts.turnId === null ? "NULL" : `'${opts.turnId ?? "dt-1"}'`}, ${opts.turnId === null ? "NULL" : Date.now()}, datetime('now'))`,
 	);
 }
 
@@ -77,7 +77,7 @@ afterEach(() => d1.close());
 
 describe("renamed original machine (#1541)", () => {
 	it("resolves the live alias, stops the engine, and releases the queue-blocking claim", async () => {
-		node("Sergeys-Mac-mini.local", { machineId: "mac-mini-id" });
+		node("runner-host.local", { machineId: "mac-mini-id" });
 		node("Macmini.modem", { machineId: "mac-mini-id" });
 		session("s1");
 		const { relay, dispatched } = buildRelay({ [relayNameForInstance(INST, "Macmini.modem")]: { status: 200, body: { ok: true } } });
@@ -95,7 +95,7 @@ describe("renamed original machine (#1541)", () => {
 
 describe("a different machine being live is never mistaken for the stamped one (#1541)", () => {
 	it("an unrelated live machine (no shared machine_id) leaves the claim unconfirmed, and is never asked to stop anything", async () => {
-		node("Sergeys-Mac-mini.local", { machineId: "mac-mini-id" });
+		node("runner-host.local", { machineId: "mac-mini-id" });
 		node("dell-laptop", { machineId: "dell-id" });
 		session("s1");
 		const { relay, dispatched } = buildRelay({ [relayNameForInstance(INST, "dell-laptop")]: { status: 200, body: { ok: true } } });
@@ -117,10 +117,10 @@ describe("ambiguous or unknown alias (#1541)", () => {
 		// read is owner-wide (`ownerNodeRegistrations`), so it sees both regardless of which
 		// instance this session itself belongs to.
 		d1.exec(`INSERT OR IGNORE INTO agent_instances (id, agent_id, user_id) VALUES ('i2', 'agent-1', '${UID}')`);
-		node("Sergeys-Mac-mini.local", { machineId: "machine-a" });
-		node("Sergeys-Mac-mini.local", { machineId: "machine-b", instanceId: "i2" });
+		node("runner-host.local", { machineId: "machine-a" });
+		node("runner-host.local", { machineId: "machine-b", instanceId: "i2" });
 		session("s1");
-		const { relay, dispatched } = buildRelay({ [relayNameForInstance(INST, "Sergeys-Mac-mini.local")]: { status: 200, body: { ok: true } } });
+		const { relay, dispatched } = buildRelay({ [relayNameForInstance(INST, "runner-host.local")]: { status: 200, body: { ok: true } } });
 		const env = { DB: d1.DB, RELAY: relay } as unknown as Env;
 
 		const result = await endCodingSession(env, { instanceId: INST, userId: UID, sessionId: "s1" });
@@ -130,7 +130,7 @@ describe("ambiguous or unknown alias (#1541)", () => {
 	});
 
 	it("unknown: the stamped name carries no recorded machine_id — no alias candidate even with another live machine", async () => {
-		node("Sergeys-Mac-mini.local", { machineId: null });
+		node("runner-host.local", { machineId: null });
 		node("Macmini.modem", { machineId: "some-other-id" });
 		session("s1");
 		const { relay, dispatched } = buildRelay({ [relayNameForInstance(INST, "Macmini.modem")]: { status: 200, body: { ok: true } } });
@@ -145,7 +145,7 @@ describe("ambiguous or unknown alias (#1541)", () => {
 
 describe("unreachable runner (#1541)", () => {
 	it("a proven alias exists but nothing answers it — the row still closes, the claim does not release", async () => {
-		node("Sergeys-Mac-mini.local", { machineId: "mac-mini-id" });
+		node("runner-host.local", { machineId: "mac-mini-id" });
 		node("Macmini.modem", { machineId: "mac-mini-id" });
 		session("s1");
 		const { relay, dispatched } = buildRelay({}); // nothing live at all
@@ -165,12 +165,12 @@ describe("unreachable runner (#1541)", () => {
 
 describe("a superseded claim is preserved, never released by a stale read (#1541, #1015)", () => {
 	it("a newer direct turn taken after the read is left alone", async () => {
-		node("Sergeys-Mac-mini.local", { machineId: "mac-mini-id" });
+		node("runner-host.local", { machineId: "mac-mini-id" });
 		session("s1");
 		// Something claimed a NEWER direct turn on this session between the read and the stop
 		// confirming — simulated directly, since admitting one is a different module's job.
 		d1.exec(`UPDATE coding_sessions SET direct_turn_id = 'dt-2', direct_turn_at = ${Date.now()} WHERE id = 's1'`);
-		const { relay, dispatched } = buildRelay({ [relayNameForInstance(INST, "Sergeys-Mac-mini.local")]: { status: 200, body: { ok: true } } });
+		const { relay, dispatched } = buildRelay({ [relayNameForInstance(INST, "runner-host.local")]: { status: 200, body: { ok: true } } });
 		const env = { DB: d1.DB, RELAY: relay } as unknown as Env;
 
 		// endCodingSession reads the claim ('dt-2') fresh itself, so this exercises the release's
@@ -179,13 +179,13 @@ describe("a superseded claim is preserved, never released by a stale read (#1541
 		// general case; here the superseded-claim id simply flows straight through as `turnId`.
 		const result = await endCodingSession(env, { instanceId: INST, userId: UID, sessionId: "s1" });
 		expect(result.directTurn).toMatchObject({ turnId: "dt-2", released: true });
-		expect(dispatched).toEqual([{ name: relayNameForInstance(INST, "Sergeys-Mac-mini.local"), path: "/coding/end", sessionId: "s1" }]);
+		expect(dispatched).toEqual([{ name: relayNameForInstance(INST, "runner-host.local"), path: "/coding/end", sessionId: "s1" }]);
 	});
 });
 
 describe("a repeated end changes nothing the second time (#1541, #1015)", () => {
 	it("the first call releases and drains once; the second finds no claim left to act on", async () => {
-		node("Sergeys-Mac-mini.local", { machineId: "mac-mini-id" });
+		node("runner-host.local", { machineId: "mac-mini-id" });
 		node("Macmini.modem", { machineId: "mac-mini-id" });
 		session("s1");
 		const { relay, dispatched } = buildRelay({ [relayNameForInstance(INST, "Macmini.modem")]: { status: 200, body: { ok: true } } });
@@ -208,9 +208,9 @@ describe("a repeated end changes nothing the second time (#1541, #1015)", () => 
 
 describe("a single queue drain per release (#1541, #1015)", () => {
 	it("an empty queue drains to nothing, reported as attempted, and a repeat end never attempts it again", async () => {
-		node("Sergeys-Mac-mini.local", { machineId: "mac-mini-id" });
+		node("runner-host.local", { machineId: "mac-mini-id" });
 		session("s1");
-		const { relay } = buildRelay({ [relayNameForInstance(INST, "Sergeys-Mac-mini.local")]: { status: 200, body: { ok: true } } });
+		const { relay } = buildRelay({ [relayNameForInstance(INST, "runner-host.local")]: { status: 200, body: { ok: true } } });
 		const env = { DB: d1.DB, RELAY: relay } as unknown as Env;
 
 		const first = await endCodingSession(env, { instanceId: INST, userId: UID, sessionId: "s1" });

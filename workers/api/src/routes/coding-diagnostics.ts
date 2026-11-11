@@ -308,7 +308,7 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 	 * cache hit. An older runner 404s and this route returns 502.
 	 *
 	 * Query parameters:
-	 *   `repo`   — required — `owner/repo` slug (e.g. `serge-ivo/my-app`)
+	 *   `repo`   — required — `owner/repo` slug (e.g. `owner-login/my-app`)
 	 *   `limit`  — max items per list (1–100; default 30)
 	 *   `state`  — `"open"` (default) | `"all"` (for issues + PRs)
 	 *

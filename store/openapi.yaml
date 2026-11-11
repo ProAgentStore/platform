@@ -991,10 +991,6 @@ components:
           type: string
         status:
           type: string
-        creator_login:
-          type: string
-        creator_avatar:
-          type: string
         subscriber_count:
           type: integer
 
@@ -5214,54 +5210,21 @@ paths:
 
   /v1/public/developers/{login}:
     get:
-      summary: Developer public profile
-      description: Public creator profile with their published agents.
+      summary: Retired developer profile
+      description: Developer profiles are retired; the store is anonymous. Always 410, with no person data.
       operationId: getDeveloperProfile
       security: []
       tags: [Public]
+      deprecated: true
       parameters:
         - name: login
           in: path
           required: true
           schema:
             type: string
-          description: GitHub login of the creator
       responses:
-        "200":
-          description: Developer profile and their agents
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  developer:
-                    type: object
-                    properties:
-                      login:
-                        type: string
-                      name:
-                        type: string
-                      avatar:
-                        type: string
-                        format: uri
-                      bio:
-                        type: string
-                      website:
-                        type: string
-                      twitter:
-                        type: string
-                      roles:
-                        type: array
-                        items:
-                          type: string
-                      agentCount:
-                        type: integer
-                  agents:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/AgentSummary"
-        "404":
-          description: Developer not found
+        "410":
+          description: Gone
           content:
             application/json:
               schema:

@@ -78,7 +78,7 @@ describe("credDomain", () => {
 describe("credentials vault", () => {
 	it("encrypts secrets at rest, reveals them back, and never lists plaintext", async () => {
 		const env = mockEnv();
-		const id = await createCredential(env, "inst-1", "u1", { domain: "dayforcehcm.com", loginUrl: "https://dfid.dayforcehcm.com/login", username: "serge.pro.job@gmail.com", password: "S3cr3t!Pass", pin: "4821", comments: "Red Cross ATS" });
+		const id = await createCredential(env, "inst-1", "u1", { domain: "dayforcehcm.com", loginUrl: "https://dfid.dayforcehcm.com/login", username: "owner@example.com", password: "S3cr3t!Pass", pin: "4821", comments: "Red Cross ATS" });
 
 		// List exposes flags, never the secret values.
 		const list = await listCredentials(env, "inst-1", "u1");
@@ -86,7 +86,7 @@ describe("credentials vault", () => {
 		expect(list[0].hasPassword).toBe(true);
 		expect(list[0].hasPin).toBe(true);
 		expect(JSON.stringify(list[0])).not.toContain("S3cr3t!Pass");
-		expect(list[0].username).toBe("serge.pro.job@gmail.com");
+		expect(list[0].username).toBe("owner@example.com");
 
 		// Reveal decrypts the real secrets.
 		const revealed = await revealCredential(env, "inst-1", "u1", id);

@@ -16,7 +16,7 @@ function gh(byOrg: Record<string, unknown>, status: Record<string, number> = {})
 
 describe("labelsForNames", () => {
 	it("is the routing label of every name the machine has used, skipping unusable ones", () => {
-		expect(labelsForNames(["Sergeys-Mac-mini.local", "mac-mini", ""])).toEqual(["pags-sergeys-mac-mini-local", "pags-mac-mini"]);
+		expect(labelsForNames(["runner-host.local", "mac-mini", ""])).toEqual(["pags-runner-host-local", "pags-mac-mini"]);
 	});
 });
 

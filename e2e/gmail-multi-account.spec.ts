@@ -14,13 +14,13 @@ const API = "https://api.proagentstore.online";
 const G = (id: string, label: string, held: boolean) => ({ id, label, held });
 const GRANTS = (held: string[]) => [G("send", "Send and reply", held.includes("send")), G("archive", "Archive and mark read", held.includes("archive")), G("filters", "Create filters (each one approved by you)", held.includes("filters"))];
 const GMAIL = {
-	id: "gmail", label: "Gmail", auth: "oauth", grantModel: "user", configured: true, connected: true, account: "serge.the.dev@gmail.com", connectedAt: "2026-07-01T00:00:00Z", reach: null,
+	id: "gmail", label: "Gmail", auth: "oauth", grantModel: "user", configured: true, connected: true, account: "owner-a@example.com", connectedAt: "2026-07-01T00:00:00Z", reach: null,
 	flow: { start: "/v1/email/google/start", disconnect: "/v1/email/google" }, scopes: { read: true, write: true }, missingScopes: [],
 	optionalGrants: GRANTS([]),
 	accounts: [
-		{ accountId: "a1", label: "serge.the.dev@gmail.com", connectedAt: "2026-07-01T00:00:00Z", missingScopes: [], optionalGrants: GRANTS([]) },
-		{ accountId: "a2", label: "sivochkin@gmail.com", connectedAt: "2026-07-02T00:00:00Z", missingScopes: [], optionalGrants: GRANTS(["send"]) },
-		{ accountId: "a3", label: "serge.pro.job@gmail.com", connectedAt: "2026-07-03T00:00:00Z", missingScopes: [], optionalGrants: GRANTS([]) },
+		{ accountId: "a1", label: "owner-a@example.com", connectedAt: "2026-07-01T00:00:00Z", missingScopes: [], optionalGrants: GRANTS([]) },
+		{ accountId: "a2", label: "owner-b@example.com", connectedAt: "2026-07-02T00:00:00Z", missingScopes: [], optionalGrants: GRANTS(["send"]) },
+		{ accountId: "a3", label: "owner@example.com", connectedAt: "2026-07-03T00:00:00Z", missingScopes: [], optionalGrants: GRANTS([]) },
 	],
 };
 const OTHERS = [
@@ -41,7 +41,7 @@ async function mock(page: Page, opts: { onStart?: (url: string) => void; onDelet
 		const req = route.request();
 		const path = new URL(req.url()).pathname;
 		const json = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(data) });
-		if (path === "/v1/auth/me") return json({ id: "user-1", login: "tester", name: "Test User", display_name: "Test User", avatar: "https://example.com/a.png", roles: ["user", "creator"], boardConfig: null, githubLinked: "serge-ivo" });
+		if (path === "/v1/auth/me") return json({ id: "user-1", login: "tester", name: "Test User", display_name: "Test User", avatar: "https://example.com/a.png", roles: ["user", "creator"], boardConfig: null, githubLinked: "owner-login" });
 		if (path === "/v1/connectors") return json({ connectors: [gmail, ...OTHERS] });
 		if (path === "/v1/email/google/start") {
 			opts.onStart?.(req.url());
@@ -78,9 +78,9 @@ test.describe("Preferences Connections with three Gmail mailboxes (#1281)", () =
 
 			// Mixed grant state: which actions each mailbox offers.
 			const expected = [
-				{ addr: "serge.the.dev@gmail.com", allow: ["Send and reply", "Archive and mark read", "Create filters"] },
-				{ addr: "sivochkin@gmail.com", allow: ["Archive and mark read", "Create filters"] },
-				{ addr: "serge.pro.job@gmail.com", allow: ["Send and reply", "Archive and mark read", "Create filters"] },
+				{ addr: "owner-a@example.com", allow: ["Send and reply", "Archive and mark read", "Create filters"] },
+				{ addr: "owner-b@example.com", allow: ["Archive and mark read", "Create filters"] },
+				{ addr: "owner@example.com", allow: ["Send and reply", "Archive and mark read", "Create filters"] },
 			];
 			for (const [i, want] of expected.entries()) {
 				const g = groups(page).nth(i);
@@ -135,10 +135,10 @@ test.describe("Preferences Connections with three Gmail mailboxes (#1281)", () =
 		expect(starts.at(-1)).toContain("account=a2");
 
 		page.once("dialog", (d) => void d.accept());
-		await groups(page).nth(1).getByRole("button", { name: "Disconnect sivochkin@gmail.com" }).click();
+		await groups(page).nth(1).getByRole("button", { name: "Disconnect owner-b@example.com" }).click();
 		await expect.poll(() => deletes.at(-1)).toContain("account=a2");
 		await expect(groups(page)).toHaveCount(2);
-		await expect(page.getByText("sivochkin@gmail.com disconnected.")).toBeVisible();
+		await expect(page.getByText("owner-b@example.com disconnected.")).toBeVisible();
 	});
 
 	test("mobile — the sign-in instruction is replaced once the sign-in has changed the connection, and kept while it has not", async ({ page }) => {

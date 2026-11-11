@@ -288,7 +288,7 @@ describe("a node's reported status comes from its heartbeat, not from a write-on
 	/** The observed table: one machine heartbeating, three registered days ago. All stored `online`. */
 	const rows: RuntimeRow[] = [
 		mockRow({ runner_node: "RLs-MacBook-Air", status: "online", last_seen_at: stamp(20_000) }),
-		mockRow({ runner_node: "Sergeys-Mac-mini.local", status: "online", last_seen_at: stamp(3 * 86_400_000) }),
+		mockRow({ runner_node: "runner-host.local", status: "online", last_seen_at: stamp(3 * 86_400_000) }),
 		mockRow({ runner_node: "RLs-MacBook-Air.local", status: "online", last_seen_at: stamp(4 * 86_400_000) }),
 		mockRow({ runner_node: "Mac", status: "online", last_seen_at: stamp(5 * 86_400_000) }),
 	];
@@ -299,7 +299,7 @@ describe("a node's reported status comes from its heartbeat, not from a write-on
 		// one of them — not just that "at least one" is offline.
 		expect(serialised.map((n) => [n.runnerNode, n.status])).toEqual([
 			["RLs-MacBook-Air", "online"],
-			["Sergeys-Mac-mini.local", "offline"],
+			["runner-host.local", "offline"],
 			["RLs-MacBook-Air.local", "offline"],
 			["Mac", "offline"],
 		]);

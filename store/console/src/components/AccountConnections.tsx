@@ -193,7 +193,7 @@ export default function AccountConnections() {
 			    token running off the page, the other stops the buttons collapsing — but together
 			    they leave the row unable to overflow AND unable to wrap, so the whole deficit lands
 			    on the only thing that yields. At 320px the label took 25% of the row and ran 140px
-			    tall, in both engines: "connecte / d as / serge.pro. / job@gmail / .com". Wrapping is
+			    tall, in both engines: "connecte / d as / owner.pro. / job@gmail / .com". Wrapping is
 			    capped at sm because line-breaking uses each item's MAX-content width, so an unpinned
 			    `flex-wrap` drops the buttons below the label on a desktop row that fits. */}
 			<div className="flex flex-wrap sm:flex-nowrap items-start justify-between gap-3 mb-3">

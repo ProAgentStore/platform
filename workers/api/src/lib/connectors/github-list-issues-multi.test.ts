@@ -121,7 +121,7 @@ describe("github_list_issues across repos (#1240)", () => {
 		expect(b.per_repo_counts).not.toHaveProperty("proappstore-online/console");
 		// A repo the GitHub connector cannot get a token for fails alone too.
 		const noToken = { ...(ctx() as object), connectorClient: () => ({ token: async () => null }) } as never;
-		const n = await body({ repo: "proappstore-online/platform" , assignee: "serge-ivo" }, noToken);
+		const n = await body({ repo: "proappstore-online/platform" , assignee: "owner-login" }, noToken);
 		expect(n.failures).toHaveLength(1);
 		expect(n.issues).toEqual([]);
 	});
@@ -138,8 +138,8 @@ describe("github_list_issues across repos (#1240)", () => {
 
 	it("assignee and updated_since reach the query (updated_since inclusive; `none` = unassigned)", async () => {
 		seedPas();
-		await body({ repo: "*", assignee: "serge-ivo", updated_since: "2026-10-01" });
-		expect(queries.at(-1)).toMatch(/assignee:serge-ivo updated:>=2026-10-01$/);
+		await body({ repo: "*", assignee: "owner-login", updated_since: "2026-10-01" });
+		expect(queries.at(-1)).toMatch(/assignee:owner-login updated:>=2026-10-01$/);
 		await body({ repo: "*", assignee: "none" });
 		expect(queries.at(-1)).toContain("no:assignee");
 		expect(queries.at(-1)).not.toContain("assignee:none");

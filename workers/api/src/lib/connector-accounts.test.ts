@@ -15,8 +15,8 @@ const acct = (accountId: string, label = accountId): ConnectorAccount => ({
 	grantedScopes: null,
 });
 
-const WORK = acct("serge.pro.job@gmail.com");
-const HOME = acct("sivochkin@gmail.com");
+const WORK = acct("owner@example.com");
+const HOME = acct("owner-b@example.com");
 const LEGACY = acct("", null as unknown as string);
 
 describe("nothing connected", () => {
@@ -61,16 +61,16 @@ describe("two accounts and no choice — REFUSES rather than picking", () => {
 	it("names both accounts and where to choose, so the refusal is actionable", () => {
 		const r = resolveConnectorAccount(two, undefined, "Gmail");
 		if (r.ok) throw new Error("expected a refusal");
-		expect(r.message).toContain("serge.pro.job@gmail.com");
-		expect(r.message).toContain("sivochkin@gmail.com");
+		expect(r.message).toContain("owner@example.com");
+		expect(r.message).toContain("owner-b@example.com");
 		expect(r.message).toContain("Settings");
 		// It must also say nothing happened — a model relaying this should not imply a half-send.
 		expect(r.message).toMatch(/nothing is sent or read until you do/i);
 	});
 
 	it("resolves once a choice is recorded", () => {
-		expect(resolveConnectorAccount(two, "sivochkin@gmail.com", "Gmail")).toEqual({ ok: true, account: HOME });
-		expect(resolveConnectorAccount(two, "serge.pro.job@gmail.com", "Gmail")).toEqual({ ok: true, account: WORK });
+		expect(resolveConnectorAccount(two, "owner-b@example.com", "Gmail")).toEqual({ ok: true, account: HOME });
+		expect(resolveConnectorAccount(two, "owner@example.com", "Gmail")).toEqual({ ok: true, account: WORK });
 	});
 });
 
@@ -78,7 +78,7 @@ describe("a pin that has gone stale", () => {
 	it("refuses instead of falling back to another account", () => {
 		// The dangerous case: an agent pinned to a mailbox the owner disconnected. Falling back
 		// is the wrong-identity bug arriving on a schedule, weeks later, with nobody watching.
-		const r = resolveConnectorAccount([WORK], "sivochkin@gmail.com", "Gmail");
+		const r = resolveConnectorAccount([WORK], "owner-b@example.com", "Gmail");
 		expect(r.ok).toBe(false);
 		expect(r).toMatchObject({ reason: "pinned_account_gone" });
 		expect("account" in r).toBe(false);
@@ -89,7 +89,7 @@ describe("a pin that has gone stale", () => {
 		expect(r.ok).toBe(false);
 		if (r.ok) return;
 		expect(r.message).toContain("gone@example.test");
-		expect(r.message).toContain("serge.pro.job@gmail.com");
+		expect(r.message).toContain("owner@example.com");
 	});
 });
 

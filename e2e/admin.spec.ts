@@ -517,10 +517,10 @@ async function mockAdminSurfaces(page: Page) {
 				errors24h: 3,
 				stuckSessions: [
 					{ id: "cs_01J9ZQ8F3K2M7NPRSTVWXY", instance_id: "inst_01J9ZQ8F3K2M7NPRSTVWXY", user_id: "user-2", owner_login: "creator-two", client_type: "claude", status: "needs_human", updated_at: "2026-08-08T00:21:19Z" },
-					{ id: "cs_01J9ZQ8F3K2M7NPRSTVWXZ", instance_id: "inst_01J9ZQ8F3K2M7NPRSTVWXZ", user_id: "user-3", owner_login: "sergey-ivochkin", client_type: "codex", status: "blocked", updated_at: "2026-08-07T23:04:02Z" },
+					{ id: "cs_01J9ZQ8F3K2M7NPRSTVWXZ", instance_id: "inst_01J9ZQ8F3K2M7NPRSTVWXZ", user_id: "user-3", owner_login: "owner-login", client_type: "codex", status: "blocked", updated_at: "2026-08-07T23:04:02Z" },
 				],
 				staleRunners: [
-					{ instance_id: "inst_01J9ZQ8F3K2M7NPRSTVWXY", runner_node: "Sergeys-MacBook-Air.local", user_id: "user-2", owner_login: "creator-two", runner_version: "0.4.16", status: "connected", last_seen_at: "2026-08-08T00:21:19Z" },
+					{ instance_id: "inst_01J9ZQ8F3K2M7NPRSTVWXY", runner_node: "runner-host-b.local", user_id: "user-2", owner_login: "creator-two", runner_version: "0.4.16", status: "connected", last_seen_at: "2026-08-08T00:21:19Z" },
 				],
 				noKeyUsers: [{ id: "user-4", github_login: "a-long-github-login-name", github_name: "A Contributor With A Long Name", active_instances: 2 }],
 			});
@@ -529,7 +529,7 @@ async function mockAdminSurfaces(page: Page) {
 			return json({
 				count: 2,
 				triggers: [
-					{ id: "trg-1", agentName: "Small Business Website Lead Finder", ownerLogin: "sergey-ivochkin", name: "nightly sweep", type: "cron", action: "run_pipeline", enabled: true, hasSecret: false, schedule: "0 17 * * *", createdAt: "2026-08-01T00:00:00Z" },
+					{ id: "trg-1", agentName: "Small Business Website Lead Finder", ownerLogin: "owner-login", name: "nightly sweep", type: "cron", action: "run_pipeline", enabled: true, hasSecret: false, schedule: "0 17 * * *", createdAt: "2026-08-01T00:00:00Z" },
 					{ id: "trg-2", agentName: "Lead Outreach", ownerLogin: "creator-two", name: "inbound lead webhook", type: "webhook", action: "run_pipeline", enabled: false, hasSecret: true, schedule: null, createdAt: "2026-07-28T00:00:00Z" },
 				],
 			});
@@ -538,7 +538,7 @@ async function mockAdminSurfaces(page: Page) {
 			return json({
 				nodes: [
 					{
-						node: "Sergeys-MacBook-Air.local", ownerLogin: "sergey-ivochkin", runnerVersion: "0.4.16",
+						node: "runner-host-b.local", ownerLogin: "owner-login", runnerVersion: "0.4.16",
 						lastSeenAt: "2026-08-08 00:21:19", connected: false,
 						instances: [{ instanceId: "inst-1", name: "Repo Coder", agentSlug: "coder", status: "active", connected: false, bound: true, runtime: "coding" }],
 						sessions: [{ sessionId: "cs-1", repoName: "ProAgentStore/platform", engine: "claude", status: "active", updatedAt: "2026-08-08T00:21:19Z", terminalTail: "» running pnpm vitest run\n" }],
@@ -559,7 +559,7 @@ async function mockAdminSurfaces(page: Page) {
 		if (path === "/v1/admin/mcp-audit") {
 			return json({
 				events: ERROR_SOURCES.map((source, i) => ({
-					time: "2026-08-08T00:21:19Z", subject: `user:sergey-ivochkin`, tool: "coding_session_capture",
+					time: "2026-08-08T00:21:19Z", subject: `user:owner-login`, tool: "coding_session_capture",
 					action: i === 0 ? "denied" : "allowed", reason: i === 0 ? "scope not granted" : undefined,
 					requiredScope: "runtime", scopes: ["read", "write", "runtime"], result: { source },
 				})),
@@ -827,7 +827,7 @@ const PORTAL_ROUTES: Array<{ route: string; painted: string }> = [
 	{ route: "/admin/users", painted: "a-long-github-login-name" },
 	{ route: "/admin/agents", painted: "Agent 0" },
 	{ route: "/admin/instances", painted: "creator-two" },
-	{ route: "/admin/terminals", painted: "Sergeys-MacBook-Air.local" },
+	{ route: "/admin/terminals", painted: "runner-host-b.local" },
 	{ route: "/admin/connectors", painted: "github_create_issue" },
 	{ route: "/admin/ops", painted: "needs_human" },
 	{ route: "/admin/github-issues", painted: "The operator portal's <select> rules have no paint containment" },

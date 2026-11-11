@@ -282,34 +282,14 @@ describe("GET /v1/public/agents/:id — view counting", () => {
 	});
 });
 
-describe("GET /v1/public/developers/:login", () => {
-	it("404s an unknown developer", async () => {
-		const { wrap } = buildApp({ users: [] });
-		const res = await wrap("/v1/public/developers/ghost");
-		expect(res.status).toBe(404);
-		expect((await jsonBody(res)).error).toContain("Developer not found");
-	});
-
-	it("returns the profile + published agents, NEVER leaking roles", async () => {
-		const user = {
-			id: "u1", github_login: "alice", github_name: "Alice", avatar_url: "http://x/a.png",
-			display_name: "", bio: "hi", website: "http://a.dev", twitter: "@a", roles: '["user","admin"]',
-		};
-		const agents = [
-			{ id: "a1", slug: "one", name: "One", visibility: "published", owner_id: "u1" },
-			{ id: "a2", slug: "two", name: "Two", visibility: "draft", owner_id: "u1" }, // filtered out
-		];
-		const { wrap } = buildApp({ users: [user], agents });
+describe("GET /v1/public/developers/:login (retired, #1632)", () => {
+	it("answers 410 with no person data, even for a real developer", async () => {
+		const user = { id: "u1", github_login: "alice", github_name: "Alice", avatar_url: "http://x/a.png", display_name: "Alice A", bio: "hi" };
+		const { wrap } = buildApp({ users: [user], agents: [{ id: "a1", slug: "one", name: "One", visibility: "published", owner_id: "u1" }] });
 		const res = await wrap("/v1/public/developers/alice");
-		expect(res.status).toBe(200);
-		const body = await jsonBody(res);
-		expect(rec(body.developer).login).toBe("alice");
-		expect(rec(body.developer).name).toBe("Alice"); // falls back to github_name when display_name empty
-		expect(rec(body.developer).agentCount).toBe(1); // only the published one
-		expect(body.agents).toHaveLength(1);
-		// roles must NOT be exposed on this unauthenticated endpoint
-		expect(JSON.stringify(body)).not.toContain("roles");
-		expect(rec(body.developer).roles).toBeUndefined();
+		expect(res.status).toBe(410);
+		const text = JSON.stringify(await jsonBody(res));
+		for (const leak of ["alice", "Alice", "a.png", "hi"]) expect(text).not.toContain(leak);
 	});
 });
 

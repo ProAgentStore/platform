@@ -127,13 +127,13 @@ describe("ats apply cache", () => {
 		await saveAtsCache(env, "u1", "jobs.lever.co", [
 			"read_email_link → Email \"Sign in\" from x. Most likely sign-in link: https://jobs.lever.co/magic?token=abc123",
 			"navigate to https://jobs.lever.co/acme-corp/1234/apply",
-			'type "0404453580" into textbox "Phone" — "Phone" now reads "+61404453580"',
+			'type "0400123456" into textbox "Phone" — "Phone" now reads "+61400123456"',
 		]);
 		const stored = store.get("u1:jobs.lever.co")?.notes ?? "";
 		expect(stored).not.toContain("token=abc123");
 		expect(stored).not.toContain("acme-corp");
 		expect(stored).toContain("navigate to https://jobs.lever.co/…");
-		expect(stored).not.toContain("+61404453580");
+		expect(stored).not.toContain("+61400123456");
 		expect(stored).toContain('now reads "⟨withheld⟩"');
 	});
 

@@ -1,7 +1,7 @@
 # #1365 — PAGS-owned unattended Actions recovery queue
 
 Design: [actions-runner-unattended-recovery.md](../actions-runner-unattended-recovery.md).
-Fleet evidence and temporary watcher: [machine-setup#15](https://github.com/serge-ivo/machine-setup/issues/15).
+Fleet evidence and temporary watcher: [machine-setup#15](https://github.com/owner-login/machine-setup/issues/15).
 
 | Order | Issue | Deliverable | Depends on |
 |---|---|---|---|

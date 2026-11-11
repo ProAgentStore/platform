@@ -78,7 +78,7 @@ describe("what is handed to the process", () => {
 	});
 
 	it("the value is in no argument and no environment variable — on success, wrong password or a refused command", async () => {
-		for (const script of [{}, { code: 1, stderr: "Sorry, try again.\nsudo: 1 incorrect password attempt" }, { code: 1, stderr: "Sorry, user serge is not allowed to execute '/bin/rm' as root" }] as Script[]) {
+		for (const script of [{}, { code: 1, stderr: "Sorry, try again.\nsudo: 1 incorrect password attempt" }, { code: 1, stderr: "Sorry, user owner is not allowed to execute '/bin/rm' as root" }] as Script[]) {
 			const { seen } = await run(script);
 			for (const call of seen) {
 				expect(call.args.join("\u0000")).not.toContain(PASSWORD);
@@ -137,7 +137,7 @@ describe("failure: one attempt, sudo's reason, the value cut out", () => {
 	});
 
 	it("a command sudo's policy does not allow is reported as such, after one attempt", async () => {
-		const { result, spawn } = await run({ code: 1, stderr: "Sorry, user serge is not allowed to execute '/bin/rm -rf /' as root on mini.local." }, { command: ["rm", "-rf", "/"], value: PASSWORD });
+		const { result, spawn } = await run({ code: 1, stderr: "Sorry, user owner is not allowed to execute '/bin/rm -rf /' as root on mini.local." }, { command: ["rm", "-rf", "/"], value: PASSWORD });
 		expect(result).toMatchObject({ ok: false, exitCode: 1 });
 		expect(result.stderr).toMatch(/not allowed to execute/);
 		expect(spawn).toHaveBeenCalledTimes(1);

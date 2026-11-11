@@ -2,7 +2,7 @@
  * `instance_runner_node` reads a machine under EVERY name it is provably known by (#949).
  *
  * The live state on 2026-10-07, reproduced over the real schema: the FreeGameStore coder had
- * registered on the Mac mini only under its OLD hostname `Sergeys-Mac-mini.local`, while the Mac
+ * registered on the Mac mini only under its OLD hostname `runner-host.local`, while the Mac
  * mini's runner held its sockets under its current name `Macmini.modem`. `list_runner_nodes` (which
  * folds every name, #922) showed the machine connected; this route probed the one old name and
  * reported `nodeOnline: false` with the old row's version — the symptom of freegamestore #126.
@@ -51,7 +51,7 @@ beforeEach(() => {
 		d1.exec(`INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, runner_version, machine_id, status, last_seen_at)
 		         VALUES ('${inst}', 'u1', '${node}', 'relay://', '${version}', '${machine}', 'online', '${seen}')`);
 	row("fgs", "pink-laptop", PINK, "0.4.69", "2026-10-06 22:07:52");
-	row("fgs", "Sergeys-Mac-mini.local", MINI, "0.4.68", "2026-09-11 23:35:32"); // the old name, never re-registered
+	row("fgs", "runner-host.local", MINI, "0.4.68", "2026-09-11 23:35:32"); // the old name, never re-registered
 	row("other", "Macmini.modem", MINI, "0.4.69", "2026-10-06 22:07:30"); // the Mac mini as it is now
 });
 afterEach(() => d1.close());
@@ -70,7 +70,7 @@ describe("instance_runner_node across a machine's names (#949)", () => {
 		live.add("other:node:Macmini.modem"); // `pags up` on the Mac mini, sockets under its new name
 		live.add("fgs:node:pink-laptop");
 		const body = await runnerNode("fgs");
-		expect(body.nodesDetail.find((n) => n.node === "Sergeys-Mac-mini.local")).toMatchObject({
+		expect(body.nodesDetail.find((n) => n.node === "runner-host.local")).toMatchObject({
 			aka: ["Macmini.modem"],
 			connected: false, // this agent is pinned to pink-laptop, so it holds no socket on the Mac mini
 			nodeOnline: true, // ...but the machine is up — which is what the picker must say
@@ -82,18 +82,18 @@ describe("instance_runner_node across a machine's names (#949)", () => {
 	it("counts THIS agent's socket under the machine's new name as connected", async () => {
 		live.add("fgs:node:Macmini.modem");
 		const body = await runnerNode("fgs");
-		expect(body.nodesDetail.find((n) => n.node === "Sergeys-Mac-mini.local")).toMatchObject({ connected: true, nodeOnline: true });
+		expect(body.nodesDetail.find((n) => n.node === "runner-host.local")).toMatchObject({ connected: true, nodeOnline: true });
 	});
 
 	it("still reads a machine with no socket under any name as offline", async () => {
 		const body = await runnerNode("fgs");
-		expect(body.nodesDetail.find((n) => n.node === "Sergeys-Mac-mini.local")).toMatchObject({ connected: false, nodeOnline: false });
+		expect(body.nodesDetail.find((n) => n.node === "runner-host.local")).toMatchObject({ connected: false, nodeOnline: false });
 	});
 
 	it("never borrows liveness across machines a name cannot prove are the same", async () => {
-		d1.exec(`UPDATE instance_runtime_nodes SET machine_id = NULL WHERE runner_node = 'Sergeys-Mac-mini.local'`);
+		d1.exec(`UPDATE instance_runtime_nodes SET machine_id = NULL WHERE runner_node = 'runner-host.local'`);
 		live.add("other:node:Macmini.modem");
-		const detail = (await runnerNode("fgs")).nodesDetail.find((n) => n.node === "Sergeys-Mac-mini.local");
+		const detail = (await runnerNode("fgs")).nodesDetail.find((n) => n.node === "runner-host.local");
 		expect(detail).toMatchObject({ connected: false, nodeOnline: false, runnerVersion: "0.4.68" });
 		expect(detail).not.toHaveProperty("aka");
 	});
@@ -108,7 +108,7 @@ describe("instance_runner_node across a machine's names (#949)", () => {
 		expect(body.nodesDetail.find((n) => n.node === "dell-laptop")).toMatchObject({ connected: false, nodeOnline: true, runnerVersion: "0.4.69" });
 		// The Mac mini is still ONE machine under this agent's spelling — its other agent's name is an alias, not a second tile.
 		expect(body.nodes).not.toContain("Macmini.modem");
-		expect(body.nodes.filter((n) => n === "Sergeys-Mac-mini.local")).toHaveLength(1);
+		expect(body.nodes.filter((n) => n === "runner-host.local")).toHaveLength(1);
 	});
 });
 

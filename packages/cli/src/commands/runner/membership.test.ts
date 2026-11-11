@@ -212,9 +212,9 @@ describe("partitionByPin — the pin rule at the START, not twenty seconds in (#
 	});
 
 	it("counts a pin to a name this machine used to wear as HERE — the same history discovery honours", () => {
-		const old = inst({ id: "a", config: { runnerNode: "Sergeys-Mac-mini.local" } });
+		const old = inst({ id: "a", config: { runnerNode: "runner-host.local" } });
 		expect(partitionByPin([old], NODE).elsewhere).toHaveLength(1);
-		expect(partitionByPin([old], NODE, ["Sergeys-Mac-mini.local"]).here).toHaveLength(1);
+		expect(partitionByPin([old], NODE, ["runner-host.local"]).here).toHaveLength(1);
 	});
 
 	it("is exactly isEligible, element by element — one rule, two call sites", () => {
@@ -323,7 +323,7 @@ describe("relayStatusPath (#1171)", () => {
 		expect(relayStatusPath("inst-1", "my-laptop")).toBe("/v1/relay/inst-1/status?node=my-laptop");
 	});
 	it("encodes a hostname that is not URL-safe", () => {
-		expect(relayStatusPath("inst-1", "Serge's Mac.local")).toBe("/v1/relay/inst-1/status?node=Serge's%20Mac.local");
+		expect(relayStatusPath("inst-1", "Owner's Mac.local")).toBe("/v1/relay/inst-1/status?node=Owner's%20Mac.local");
 		expect(relayStatusPath("inst-1", "a&node=other")).toBe("/v1/relay/inst-1/status?node=a%26node%3Dother");
 	});
 });

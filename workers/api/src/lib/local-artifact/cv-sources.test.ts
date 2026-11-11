@@ -22,8 +22,8 @@ const { CV_SOURCE_IDS, cvProvenance, materializeCvTailorSources, playbookKindFor
 const book = {
 	revision: 42,
 	facts: [
-		{ key: "first_name", value: "Sergey", allowed_use: "resume" },
-		{ key: "application_email", value: "serge.pro.job@gmail.com", allowed_use: "resume" },
+		{ key: "first_name", value: "Owner", allowed_use: "resume" },
+		{ key: "application_email", value: "owner@example.com", allowed_use: "resume" },
 		{ key: "salary_rule", value: "from AUD 200,000", allowed_use: "forms" },
 		{ key: "residential_address", value: "⚠ Not recorded", allowed_use: "resume" },
 	],
@@ -94,8 +94,8 @@ describe("materializeCvTailorSources", () => {
 		expect(sources.map((s) => [s.role, s.fileId, s.version])).toEqual([["resume", CV_SOURCE_IDS.resume, "book-r42.head_of_eng.AU-VIC"], ["profile", CV_SOURCE_IDS.profile, "book-r42.head_of_eng.AU-VIC"]]);
 		for (const s of sources) expect(s.extractedTextSha256).toBe(await sha256Hex(new TextEncoder().encode(s.text)));
 		const profile = sources[1].text;
-		expect(profile).toContain("- first name: Sergey");
-		expect(profile).toContain("- application email: serge.pro.job@gmail.com");
+		expect(profile).toContain("- first name: Owner");
+		expect(profile).toContain("- application email: owner@example.com");
 		expect(profile).not.toContain("200,000");
 		expect(profile).not.toContain("Not recorded");
 		expect(profile).toContain("They are not facts about the owner");

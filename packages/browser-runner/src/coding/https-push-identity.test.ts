@@ -28,14 +28,14 @@ describe("probeHttpsPushCapability (#1465)", () => {
 	});
 
 	it("reports the resolved identity and per-repo push capability, with a reason only when it is not pushable", async () => {
-		const credential: HttpsCredential = { username: "sergey-ivochkin-rocketlab", password: "token-value" };
+		const credential: HttpsCredential = { username: "owner-login-rl", password: "token-value" };
 		const resolveCredential = vi.fn(() => credential);
 		const checkPush = vi.fn(async (_c: HttpsCredential, repo: string) => (repo === "acme/pushable" ? true : repo === "acme/readonly" ? false : null));
 		const out = await probeHttpsPushCapability("github.com", ["acme/pushable", "acme/readonly", "acme/unknown"], { resolveCredential, checkPush });
-		expect(out.identity).toBe("sergey-ivochkin-rocketlab");
+		expect(out.identity).toBe("owner-login-rl");
 		expect(out.repos).toEqual([
 			{ repo: "acme/pushable", pushable: true },
-			{ repo: "acme/readonly", pushable: false, reason: "sergey-ivochkin-rocketlab can read acme/readonly but not push to it" },
+			{ repo: "acme/readonly", pushable: false, reason: "owner-login-rl can read acme/readonly but not push to it" },
 			{ repo: "acme/unknown", pushable: null, reason: "could not be verified against the GitHub API" },
 		]);
 		// The credential itself never appears anywhere on the report.
@@ -68,9 +68,9 @@ describe("resolveHttpsCredential — real git, a scripted credential helper (#14
 		vi.stubEnv("HOME", home);
 		vi.stubEnv("USERPROFILE", home);
 		const helper = join(home, "fake-credential-helper.sh");
-		writeFileSync(helper, "#!/bin/sh\necho username=serge-ivo\necho password=sk-fake-token\n", { mode: 0o755 });
+		writeFileSync(helper, "#!/bin/sh\necho username=owner-login\necho password=sk-fake-token\n", { mode: 0o755 });
 		execFileSync("git", ["config", "--global", "credential.helper", helper], { env: { ...process.env, HOME: home } });
-		expect(resolveHttpsCredential("github.com")).toEqual({ username: "serge-ivo", password: "sk-fake-token" });
+		expect(resolveHttpsCredential("github.com")).toEqual({ username: "owner-login", password: "sk-fake-token" });
 	});
 
 	it("returns null when the helper offers nothing (e.g. refuses or is unconfigured)", () => {

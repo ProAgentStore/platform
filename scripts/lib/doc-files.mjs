@@ -168,7 +168,7 @@ export function servedHtmlFiles(p) {
 		"servedHtmlFiles()",
 		files.length,
 		8,
-		"store/ carries the homepage, about, get-started, skills, agent detail, developer profile,\n" +
+		"store/ carries the homepage, about, get-started, skills, agent detail,\n" +
 			"  changelog, 404 and the app/* legal pages — a walk that finds fewer has lost a directory.",
 	);
 	return files;

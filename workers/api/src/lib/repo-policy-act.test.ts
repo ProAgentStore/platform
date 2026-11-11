@@ -86,9 +86,9 @@ describe("classifyRunnerError — an old CLI is not a failure", () => {
 		// the machine in front of him. `runRepoPolicyRemediation` holds `conn.runnerNode` already,
 		// so the name costs nothing and is the difference between an actionable remedy and a
 		// version number attached to no address.
-		const r = classifyRunnerError(new Error("Runner /coding/git-write → 404: not found"), "Sergeys-Mac-mini.local");
+		const r = classifyRunnerError(new Error("Runner /coding/git-write → 404: not found"), "runner-host.local");
 		expect(r.status).toBe("unsupported");
-		expect(r.detail).toContain("Sergeys-Mac-mini.local");
+		expect(r.detail).toContain("runner-host.local");
 		expect(r.detail).toContain(SWITCH_BRANCH_MIN_CLI);
 	});
 

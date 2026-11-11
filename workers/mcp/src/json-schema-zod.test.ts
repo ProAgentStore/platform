@@ -97,7 +97,7 @@ describe("comma-list fields (#1263)", () => {
 		expect(unsupported).toEqual([]);
 		const obj = z.object(shape);
 		expect(obj.safeParse({ repo: "a/b", labels: "bug,mcp" }).success).toBe(true);
-		expect(obj.safeParse({ repo: "a/b", labels: ["bug", "mcp"], assignees: ["serge"] }).success).toBe(true);
+		expect(obj.safeParse({ repo: "a/b", labels: ["bug", "mcp"], assignees: ["owner"] }).success).toBe(true);
 		expect(obj.safeParse({ repo: "a/b" }).success).toBe(false); // labels is still required
 		expect(obj.safeParse({ repo: "a/b", labels: "x", assignees: undefined }).success).toBe(true); // assignees is still optional
 		expect(shape.labels.description).toBe("Labels. A comma-separated STRING.");

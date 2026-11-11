@@ -22,8 +22,8 @@ import type { Env } from "../types.js";
 const { secureInputRoutes } = await import("./secure-input.js");
 
 const SECRET = "hunter2-Correct-Horse";
-const SSH_PROMPT = "serge@pink-laptop's password: ";
-const SUDO_PROMPT = "[sudo] password for serge: ";
+const SSH_PROMPT = "owner@pink-laptop's password: ";
+const SUDO_PROMPT = "[sudo] password for owner: ";
 
 interface Session {
 	pane: string;
@@ -65,12 +65,12 @@ beforeEach(async () => {
 	await setConsent(env, "i1", "u1", "tmux", "write");
 	await setConsent(env, "i1", "u1", "terminal", "write");
 	machine = new Map([
-		["ssh-pink", session({ pane: `$ ssh serge@pink-laptop\n${SSH_PROMPT}`, prompt: SSH_PROMPT })],
+		["ssh-pink", session({ pane: `$ ssh owner@pink-laptop\n${SSH_PROMPT}`, prompt: SSH_PROMPT })],
 		["sudo", session({ pane: `$ sudo systemctl restart pags-runner\n${SUDO_PROMPT}`, prompt: SUDO_PROMPT, rejection: "Sorry, try again." })],
-		["shell", session({ pane: "serge@dell-laptop:~$ " })],
-		["1:1:1", session({ pane: `$ ssh serge@pink-laptop\n${SSH_PROMPT}`, prompt: SSH_PROMPT })],
-		["1:1:2", session({ pane: "serge@dell-laptop:~$ " })],
-		["1:1:3", session({ pane: `$ ssh serge@pink-laptop\n${SSH_PROMPT}`, prompt: SSH_PROMPT, noKeys: true })],
+		["shell", session({ pane: "owner@dell-laptop:~$ " })],
+		["1:1:1", session({ pane: `$ ssh owner@pink-laptop\n${SSH_PROMPT}`, prompt: SSH_PROMPT })],
+		["1:1:2", session({ pane: "owner@dell-laptop:~$ " })],
+		["1:1:3", session({ pane: `$ ssh owner@pink-laptop\n${SSH_PROMPT}`, prompt: SSH_PROMPT, noKeys: true })],
 	]);
 	sent = [];
 	Object.assign(hiddenOutcomeTiming, { windowMs: 60, pollMs: 5 });
@@ -93,12 +93,12 @@ beforeEach(async () => {
 		}
 		for (const k of body.keys ?? []) {
 			if (k === "C-u") s.buffer = "";
-			if (k === "C-c") s.pane += "^C\nserge@dell-laptop:~$ ";
+			if (k === "C-c") s.pane += "^C\nowner@dell-laptop:~$ ";
 			if (k === "Enter" && atPrompt) {
 				const ok = s.buffer === s.password;
 				s.buffer = "";
 				s.pane += "\n";
-				if (ok) s.pane += "Welcome to pink-laptop\nserge@pink-laptop:~$ ";
+				if (ok) s.pane += "Welcome to pink-laptop\nowner@pink-laptop:~$ ";
 				else if (s.slow > 0) s.pendingRejection = s.slow;
 				else s.pane += `${s.rejection}\n${s.prompt}`;
 			}
@@ -286,16 +286,16 @@ describe("terminal targets keep the terminal connector's limits (#1140)", () => 
 
 describe("reading a password prompt", () => {
 	it("recognises the prompts ssh, sudo, su and ssh-agent print — and not a shell or a code prompt", () => {
-		for (const p of [SSH_PROMPT, SUDO_PROMPT, "Password: ", "Enter passphrase for key '/home/serge/.ssh/id_ed25519': ", "Enter PIN for 'YubiKey':"]) {
+		for (const p of [SSH_PROMPT, SUDO_PROMPT, "Password: ", "Enter passphrase for key '/home/former/.ssh/id_ed25519': ", "Enter PIN for 'YubiKey':"]) {
 			expect(trailingSecretPrompt(`$ cmd\n${p}`), p).not.toBeNull();
 		}
-		for (const p of ["serge@dell-laptop:~$ ", "Enter the verification code provided in your browser: ", `${SSH_PROMPT}\nWelcome\n$ `]) {
+		for (const p of ["owner@dell-laptop:~$ ", "Enter the verification code provided in your browser: ", `${SSH_PROMPT}\nWelcome\n$ `]) {
 			expect(trailingSecretPrompt(p), p).toBeNull();
 		}
 	});
 
 	it("recognises localised password prompts (#1146)", () => {
-		for (const p of ["Passwort:", "Passwort: ", "Mot de passe :", "[sudo] Mot de passe de serge : ", "Contraseña:", "[sudo] contraseña para serge: ", "Senha:", "Wachtwoord:", "Lösenord:", "Пароль:", "密码：", "Kennwort für serge: ", "Enter Passphrase für Schlüssel '/home/me/.ssh/id_rsa': "]) {
+		for (const p of ["Passwort:", "Passwort: ", "Mot de passe :", "[sudo] Mot de passe de owner : ", "Contraseña:", "[sudo] contraseña para owner: ", "Senha:", "Wachtwoord:", "Lösenord:", "Пароль:", "密码：", "Kennwort für owner: ", "Enter Passphrase für Schlüssel '/home/me/.ssh/id_rsa': "]) {
 			expect(trailingSecretPrompt(`$ ssh host\n${p}`), p).not.toBeNull();
 		}
 		// A localised word that is not asking, or not waiting, is not a prompt.
@@ -310,7 +310,7 @@ describe("reading a password prompt", () => {
 			"┌──────────────────────────────────────────────┐",
 			"│ Please enter the passphrase to unlock the    │",
 			"│ OpenPGP secret key:                          │",
-			"│ \"Serge <serge@example.com>\"                 │",
+			"│ \"the owner <other@example.com>\"                 │",
 			"│                                              │",
 			"│ Passphrase: ________________________________ │",
 			"│                                              │",

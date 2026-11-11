@@ -12,7 +12,7 @@ import type { Page } from "@playwright/test";
  */
 const API = "https://api.proagentstore.online";
 const INSTANCE = { id: "inst-1", agent_id: "agent-1", name: "Job Application Runner", status: "active", slug: "job-application-runner", category: "productivity", icon_bg: "#7c3aed", capabilities: { surfaces: [], runtime: "local_apply", workflow: null } };
-const SEEK = { id: "cred-1", domain: "seek.com.au", username: "serge.pro.job@gmail.com", loginUrl: "https://login.seek.com/login", hasPassword: true, hasPin: false, hasRecoveryCodes: false, createdAt: "2026-10-19T00:00:00Z", updatedAt: "2026-10-19T00:00:00Z" };
+const SEEK = { id: "cred-1", domain: "seek.com.au", username: "owner@example.com", loginUrl: "https://login.seek.com/login", hasPassword: true, hasPin: false, hasRecoveryCodes: false, createdAt: "2026-10-19T00:00:00Z", updatedAt: "2026-10-19T00:00:00Z" };
 const PASSWORD = "Xk7#mQ2!pR9v@Lw4Zt8$";
 
 async function mockVault(page: Page) {
@@ -57,7 +57,7 @@ test.describe("site logins in the console (#1226)", () => {
 		await open(page);
 		const row = page.getByTestId("credential-row");
 		await expect(row).toContainText("seek.com.au");
-		await expect(row).toContainText("serge.pro.job@gmail.com");
+		await expect(row).toContainText("owner@example.com");
 		await expect(row).toContainText("password stored");
 		await expect(page.locator("body")).not.toContainText(PASSWORD);
 		expect(calls.filter((c) => c.path.endsWith("/reveal"))).toEqual([]);
@@ -80,14 +80,14 @@ test.describe("site logins in the console (#1226)", () => {
 		await open(page);
 		await page.getByTestId("credential-row").getByRole("button", { name: "Edit" }).click();
 		const form = page.getByTestId("credential-form");
-		await expect(form.getByRole("textbox", { name: "Username or email" })).toHaveValue("serge.pro.job@gmail.com");
+		await expect(form.getByRole("textbox", { name: "Username or email" })).toHaveValue("owner@example.com");
 		await expect(form.getByLabel("New password (blank keeps the current one)")).toHaveValue("");
-		await form.getByRole("textbox", { name: "Username or email" }).fill("serge@example.com");
+		await form.getByRole("textbox", { name: "Username or email" }).fill("other@example.com");
 		await form.getByRole("button", { name: "Save" }).click();
 		await expect(form).toHaveCount(0);
 		const put = calls.find((c) => c.method === "PUT");
 		expect(put?.path).toBe("/v1/instances/inst-1/credentials/cred-1");
-		expect(put?.body).toMatchObject({ username: "serge@example.com" });
+		expect(put?.body).toMatchObject({ username: "other@example.com" });
 		expect(put?.body).not.toHaveProperty("password");
 	});
 
@@ -114,11 +114,11 @@ test.describe("site logins in the console (#1226)", () => {
 		await page.getByRole("button", { name: "Add a login" }).click();
 		const form = page.getByTestId("credential-form");
 		await form.getByRole("textbox", { name: "Site (domain)" }).fill("indeed.com");
-		await form.getByRole("textbox", { name: "Username or email" }).fill("serge.pro.job@gmail.com");
+		await form.getByRole("textbox", { name: "Username or email" }).fill("owner@example.com");
 		await form.getByLabel("Password").fill("Correct-Horse-9!");
 		await form.getByRole("button", { name: "Save" }).click();
 		await expect(page.getByTestId("credential-row")).toHaveCount(2);
-		expect(calls.find((c) => c.method === "POST")?.body).toEqual({ domain: "indeed.com", username: "serge.pro.job@gmail.com", password: "Correct-Horse-9!" });
+		expect(calls.find((c) => c.method === "POST")?.body).toEqual({ domain: "indeed.com", username: "owner@example.com", password: "Correct-Horse-9!" });
 
 		page.once("dialog", (d) => void d.accept());
 		await page.getByTestId("credential-row").filter({ hasText: "seek.com.au" }).getByRole("button", { name: "Delete" }).click();

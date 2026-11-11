@@ -152,7 +152,7 @@ export function registerSessionOpenRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		// Under every name the machine is PROVABLY known by (#1102), as `getBoundRunnerConn` routes:
 		// a pin outlives the hostname it was made with, and the runner reconnects under its current
 		// one. Probing only the literal pin refused the Mac mini pinned as `Macmini.modem` while its
-		// socket was live as `Sergeys-Mac-mini.local` — "Runner node is not connected" beside a
+		// socket was live as `runner-host.local` — "Runner node is not connected" beside a
 		// listing that said connected, through restarts and re-attaches alike. Same machine_id only,
 		// so this never runs a session on a machine the user did not choose.
 		let runnerNode = requestedRunnerNode;

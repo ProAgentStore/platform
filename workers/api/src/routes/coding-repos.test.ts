@@ -293,7 +293,7 @@ describe("POST /coding/repos/:id/detect-github — a local row does not adopt a 
 	// then this route stamping the local row with the same coordinate.
 	const local = {
 		id: "repo_local", instance_id: INSTANCE, user_id: UID, name: "pags/platform", github_repo: null, provider: "local",
-		repo_slug: null, web_url: null, clone_url: null, branch: "", workdir: "/Users/serge/dev/stores/pags/platform",
+		repo_slug: null, web_url: null, clone_url: null, branch: "", workdir: "/Users/former/dev/stores/pags/platform",
 		clone_status: "needs_attention", clone_error: null, urls: null, instructions: null, merge_policy: null, default_client: "claude",
 		created_at: "2026-08-08 00:00:00", updated_at: "2026-08-08 00:00:00",
 	};
@@ -458,9 +458,9 @@ describe("POST /coding/repos requireGithub — a coding repo is stored with BOTH
 	});
 
 	it("an absolute path from a machine that reports its home is STORED home-relative (#1379)", async () => {
-		// The Hiring coder's failure: `/Users/serge/dev/...` baked in, then pinned to a machine whose user is someone else.
-		machine("git@github.com:proappstore-online/stash.git", { ...HEALTHY, path: "/Users/serge/dev/stash", homeRelative: "~/dev/stash" });
-		const { status, row } = await addRepo({ localPath: "/Users/serge/dev/stash", requireGithub: true });
+		// The Hiring coder's failure: `/Users/former/dev/...` baked in, then pinned to a machine whose user is someone else.
+		machine("git@github.com:proappstore-online/stash.git", { ...HEALTHY, path: "/Users/former/dev/stash", homeRelative: "~/dev/stash" });
+		const { status, row } = await addRepo({ localPath: "/Users/former/dev/stash", requireGithub: true });
 		expect(status).toBe(201);
 		expect(row).toMatchObject({ workdir: "~/dev/stash" });
 	});
@@ -479,7 +479,7 @@ describe("POST /coding/repos requireGithub — a coding repo is stored with BOTH
 
 	it("REFUSES a Windows drive-letter path with what to use instead, before asking the machine (#1237)", async () => {
 		machine("https://github.com/o/r.git");
-		const { status, body, issued } = await addRepo({ localPath: "C:\\Users\\serge\\dev\\stash", requireGithub: true });
+		const { status, body, issued } = await addRepo({ localPath: "C:\\Users\\former\\dev\\stash", requireGithub: true });
 		expect(status).toBe(400);
 		expect(body.error).toMatch(/^Windows drive-letter paths are not supported — use a home-relative `~\/` path instead/);
 		expect(inserted(issued)).toBe(false);
@@ -1162,10 +1162,10 @@ describe("GET /coding/repos — the path is re-checked on every list", () => {
 	// one of them was told about the pin.
 	it("names the dead pin AND the machine that is up, and offers no `--force`, when the pin is why", async () => {
 		liveNodeIgnoringPin.mockResolvedValue("Mac");
-		const { body } = await listRepos([row()], { registered: true, pinnedTo: "Sergeys-Mac-mini.local" });
+		const { body } = await listRepos([row()], { registered: true, pinnedTo: "runner-host.local" });
 		const reason = reasonOf(body);
 		expect(body.recheck).toMatchObject({ ran: false, checked: 0 });
-		expect(reason).toContain("Sergeys-Mac-mini.local");
+		expect(reason).toContain("runner-host.local");
 		expect(reason).toContain("Mac has a relay connection");
 		expect(reason).toContain('"Runs on"');
 		// The two halves that were false: nothing else holds this agent, and `--force` cannot
@@ -1619,7 +1619,7 @@ describe("POST /coding/repos/:id/recheck — a verdict can be re-taken on purpos
 		// The measured row, and the measured runner answer for that exact path: 18 entries, inside
 		// a work tree. The whole point is that ONE deliberate request replaces the stale claim.
 		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
-		callRunner.mockResolvedValue({ checked: true, path: "/Users/serge-ivo/dev/stores/pas/platform", exists: true, isDirectory: true, entryCount: 18, insideWorkTree: true, gitChecked: true });
+		callRunner.mockResolvedValue({ checked: true, path: "/Users/owner-login/dev/stores/pas/platform", exists: true, isDirectory: true, entryCount: 18, insideWorkTree: true, gitChecked: true });
 		const { status, body, issued } = await recheck(localRepo);
 		expect(status).toBe(200);
 		expect(body.checked).toBe(true);

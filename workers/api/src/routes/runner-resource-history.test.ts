@@ -24,7 +24,7 @@ beforeEach(() => {
 	d1.exec(`INSERT INTO users (id, github_login) VALUES ('u1', 'u1')`);
 	d1.exec(`INSERT INTO agents (id, owner_id, slug, name, config) VALUES ('ag', 'u1', 't924-coder', 'Coder', '{"capabilities":{"surfaces":["coding"],"runtime":"coding"}}')`);
 	d1.exec(`INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES ('i-a', 'ag', 'u1', 'active', '{}'), ('i-b', 'ag', 'u1', 'active', '{}')`);
-	for (const [inst, node] of [["i-a", "Macmini"], ["i-b", "Sergeys-Mac-mini.local"]] as const) {
+	for (const [inst, node] of [["i-a", "Macmini"], ["i-b", "runner-host.local"]] as const) {
 		d1.exec(`INSERT INTO instance_runtimes (instance_id, user_id, endpoint_url, runner_node, status) VALUES ('${inst}', 'u1', 'relay://', '${node}', 'online')`);
 		d1.exec(`INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, runner_version, machine_id, status, last_seen_at)
 		         VALUES ('${inst}', 'u1', '${node}', 'relay://', '0.4.71', '${MINI}', 'online', '2026-10-05 06:00:00')`);
@@ -95,13 +95,13 @@ describe("two-tier resource history (#924)", () => {
 
 	it("serves a window of the history across every name the machine has, oldest first", async () => {
 		await heartbeat("i-a", { runnerNode: "Macmini", resources: sample(1, T0) });
-		await heartbeat("i-b", { runnerNode: "Sergeys-Mac-mini.local", resources: sample(9, T0 + MIN) });
+		await heartbeat("i-b", { runnerNode: "runner-host.local", resources: sample(9, T0 + MIN) });
 		await heartbeat("i-a", { runnerNode: "Macmini", resources: sample(3, T0 + 20 * MIN) });
 		const all = await history("Macmini", `?from=${T0 - MIN}&to=${T0 + 30 * MIN}`);
 		expect(all.status).toBe(200);
-		expect(all.body.names.sort()).toEqual(["Macmini", "Sergeys-Mac-mini.local"]);
+		expect(all.body.names.sort()).toEqual(["Macmini", "runner-host.local"]);
 		expect(all.body.samples.map((p) => p.load1)).toEqual([1, 9, 3]);
-		const before = await history("Sergeys-Mac-mini.local", `?from=${new Date(T0 - MIN).toISOString()}&to=${new Date(T0 + 5 * MIN).toISOString()}`);
+		const before = await history("runner-host.local", `?from=${new Date(T0 - MIN).toISOString()}&to=${new Date(T0 + 5 * MIN).toISOString()}`);
 		expect(before.body.samples.map((p) => p.load1)).toEqual([1, 9]);
 		const coarse = await history("Macmini", `?tier=coarse&from=${T0 - MIN}&to=${T0 + 30 * MIN}`);
 		expect(coarse.body.samples.map((p) => [p.load1, p.samples])).toEqual([[9, 2], [3, 1]]);

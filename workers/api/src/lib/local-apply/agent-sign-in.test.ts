@@ -14,13 +14,13 @@ const UID = "u1";
 const INSTANCE = "runner-1";
 const RUN = "run-1";
 const KEK = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-const USERNAME = "serge.pro.job@gmail.com";
+const USERNAME = "owner@example.com";
 const PASSWORD = "Tr0ub4dor&3-vault-secret";
-const JOB_MAILBOX = "serge.pro.job@gmail.com";
+const JOB_MAILBOX = "owner@example.com";
 const T0 = Date.parse("2026-11-02T08:00:00Z");
 const INDEED_PAUSE = { reason: "login_required", domain: "secure.indeed.com", url: "https://secure.indeed.com/auth", question: "Sign in to indeed.com in this browser." };
 const SEEK_PAUSE = { reason: "login_required", domain: "login.seek.com", url: "https://login.seek.com/login", question: "Sign in to seek.com in this browser." };
-const CODE_MAIL = { id: "msg-new", date: new Date(T0 + 40_000).toUTCString(), subject: "Your SEEK sign in code", text: "Hi Serge, your sign in code is 482913. It expires in 10 minutes." };
+const CODE_MAIL = { id: "msg-new", date: new Date(T0 + 40_000).toUTCString(), subject: "Your SEEK sign in code", text: "Hi Owner, your sign in code is 482913. It expires in 10 minutes." };
 const STALE_MAIL = { id: "msg-old", date: new Date(T0 - 3_600_000).toUTCString(), subject: "Your SEEK sign in code", text: "Your sign in code is 111111." };
 const SIGNED_IN: ApplyTraceEvent = { type: "policy.decision", at: new Date(T0).toISOString(), domain: "login.seek.com", detail: { tool: "agent_sign_in", class: "session", decision: "signed_in", site: "seek.com" } };
 

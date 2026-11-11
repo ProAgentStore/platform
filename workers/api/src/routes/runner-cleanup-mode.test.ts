@@ -31,7 +31,7 @@ beforeEach(() => {
 	d1.exec(`INSERT INTO users (id, github_login) VALUES ('u1', 'u1'), ('u2', 'u2')`);
 	d1.exec(`INSERT INTO agents (id, owner_id, slug, name, config) VALUES ('ag', 'u1', 'cl-coder', 'Coder', '{"capabilities":{"surfaces":["coding"],"runtime":"coding"}}')`);
 	d1.exec(`INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES ('i-mini', 'ag', 'u1', 'active', '{}'), ('i-pink', 'ag', 'u1', 'active', '{}')`);
-	for (const [inst, node, machine] of [["i-mini", "Sergeys-Mac-mini.local", MINI], ["i-pink", "pink-laptop", PINK]] as const) {
+	for (const [inst, node, machine] of [["i-mini", "runner-host.local", MINI], ["i-pink", "pink-laptop", PINK]] as const) {
 		d1.exec(`INSERT INTO instance_runtimes (instance_id, user_id, endpoint_url, runner_node, status) VALUES ('${inst}', 'u1', 'relay://', '${node}', 'online')`);
 		d1.exec(`INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, runner_version, machine_id, status, last_seen_at) VALUES ('${inst}', 'u1', '${node}', 'relay://', '0.4.80', '${machine}', 'online', '2026-10-21 06:00:00')`);
 	}
@@ -51,7 +51,7 @@ const env = () => ({ DB: d1.DB, RELAY: relay }) as unknown as Env;
 // biome-ignore lint/suspicious/noExplicitAny: response bodies are read field by field in assertions
 type Beat = Record<string, any>;
 async function heartbeat(instance: "i-mini" | "i-pink", body: Record<string, unknown> = {}): Promise<Beat> {
-	const node = instance === "i-mini" ? "Sergeys-Mac-mini.local" : "pink-laptop";
+	const node = instance === "i-mini" ? "runner-host.local" : "pink-laptop";
 	const machineId = instance === "i-mini" ? MINI : PINK;
 	const res = await app().request(`/v1/instances/${instance}/runtime/heartbeat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ runnerNode: node, machineId, ...body }) }, env());
 	expect(res.status).toBe(200);
@@ -82,7 +82,7 @@ describe("the default and the heartbeat answer", () => {
 
 	it("reports the active mode in the node list (list_runner_nodes) from the start", async () => {
 		await heartbeat("i-mini");
-		expect(await nodeNamed("Sergeys-Mac-mini.local")).toMatchObject({ cleanup_mode: "gentle", cleanup: { mode: "gentle", orphaned_processes: null, now_pending: false } });
+		expect(await nodeNamed("runner-host.local")).toMatchObject({ cleanup_mode: "gentle", cleanup: { mode: "gentle", orphaned_processes: null, now_pending: false } });
 	});
 });
 
@@ -93,7 +93,7 @@ describe("setting the mode per machine", () => {
 		expect((await heartbeat("i-pink")).cleanupPolicy.behaviours.cachePruning).toBe(true);
 		expect((await heartbeat("i-mini")).cleanupPolicy.mode).toBe("gentle");
 		expect((await nodeNamed("pink-laptop")).cleanup_mode).toBe("harsh");
-		expect((await nodeNamed("Sergeys-Mac-mini.local")).cleanup_mode).toBe("gentle");
+		expect((await nodeNamed("runner-host.local")).cleanup_mode).toBe("gentle");
 	});
 
 	it("a machine can be set explicitly to gentle (the Mac mini)", async () => {
@@ -180,7 +180,7 @@ describe("the runner's report", () => {
 	it("is telemetry only: a runner claiming to be harsh does not make its machine harsh", async () => {
 		await heartbeat("i-mini", { cleanup: status({ mode: "harsh" }) });
 		expect((await heartbeat("i-mini")).cleanupPolicy.mode).toBe("gentle");
-		expect((await nodeNamed("Sergeys-Mac-mini.local")).cleanup_mode).toBe("gentle");
+		expect((await nodeNamed("runner-host.local")).cleanup_mode).toBe("gentle");
 	});
 
 	it("is bounded and typed: oversized and malformed fields are clipped or dropped", () => {

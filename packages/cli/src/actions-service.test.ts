@@ -2,21 +2,21 @@ import { describe, expect, it } from "vitest";
 import { actionsServiceContent, actionsServiceLabel, actionsServicePlist, activeProcessIn, assertOwnedRemovalService, preflightActionsServiceLaunch, serviceForPlist, waitListenerGone } from "./actions-service.js";
 import type { ServiceContext } from "./service-install.js";
 
-const dir = "/Users/serge/.proagentstore/actions-runner/proappstore-online";
-const ctx: ServiceContext = { platform: "darwin", home: "/Users/serge", user: "serge", uid: 501, nodePath: "/old/nvm/node", script: "/opt/homebrew/lib/node_modules/@proagentstore/cli/dist/bootstrap.js", configDir: "/Users/serge/.config/proagentstore", pathEnv: "/opt/homebrew/bin:/usr/bin" };
+const dir = "/Users/former/.proagentstore/actions-runner/proappstore-online";
+const ctx: ServiceContext = { platform: "darwin", home: "/Users/former", user: "owner", uid: 501, nodePath: "/old/nvm/node", script: "/opt/homebrew/lib/node_modules/@proagentstore/cli/dist/bootstrap.js", configDir: "/Users/former/.config/proagentstore", pathEnv: "/opt/homebrew/bin:/usr/bin" };
 
 describe("macOS Actions system service (#1209)", () => {
 	it("proves launchd's captured PATH can run the durable CLI before adoption", () => {
 		const probe = { exists: () => true, run: (_file: string, _args: string[], _env: NodeJS.ProcessEnv) => 0 };
 		preflightActionsServiceLaunch(ctx, probe);
 		expect(() => preflightActionsServiceLaunch({ ...ctx, pathEnv: ":/usr/bin" }, probe)).toThrow(/PATH/);
-		expect(() => preflightActionsServiceLaunch({ ...ctx, script: "/Users/serge/.config/proagentstore/cli/0.4.185/dist/bootstrap.js" }, probe)).toThrow(/versioned CLI payload/);
+		expect(() => preflightActionsServiceLaunch({ ...ctx, script: "/Users/former/.config/proagentstore/cli/0.4.185/dist/bootstrap.js" }, probe)).toThrow(/versioned CLI payload/);
 		expect(() => preflightActionsServiceLaunch(ctx, { ...probe, exists: () => false })).toThrow(/bootstrap is missing/);
 		expect(() => preflightActionsServiceLaunch(ctx, { ...probe, run: () => 1 })).toThrow(/could not run/);
 	});
 	it("starts the PAGS supervisor as the owner, with a stable bootstrap and no token or pinned Node binary", () => {
 		const plist = actionsServiceContent(dir, ctx);
-		expect(plist).toContain("<key>UserName</key><string>serge</string>");
+		expect(plist).toContain("<key>UserName</key><string>owner</string>");
 		expect(plist).toContain("<string>actions</string><string>supervise</string><string>--dir</string>");
 		expect(plist).toContain("<key>ACTIONS_RUNNER_SVC</key><string>1</string>");
 		expect(plist).toContain("/usr/bin/env</string><string>node");
@@ -29,7 +29,7 @@ describe("macOS Actions system service (#1209)", () => {
 	it("recognizes the exact existing tiny/pink system plist and refuses unrelated scopes", () => {
 		const old = { Label: "actions.runner.proappstore-online.pags-tiny-laptop", WorkingDirectory: dir, ProgramArguments: [`${dir}/runsvc.sh`] };
 		expect(serviceForPlist("/Library/LaunchDaemons/actions.runner.proappstore-online.pags-tiny-laptop.plist", old, dir, 501)).toMatchObject({ domain: "system", owned: false });
-		expect(serviceForPlist("/Library/LaunchDaemons/other.plist", old, "/Users/serge/.proagentstore/actions-runner/other", 501)).toBeNull();
+		expect(serviceForPlist("/Library/LaunchDaemons/other.plist", old, "/Users/former/.proagentstore/actions-runner/other", 501)).toBeNull();
 		expect(serviceForPlist(actionsServicePlist(dir), { ...old, Label: actionsServiceLabel(dir) }, dir, 501)).toMatchObject({ owned: true });
 	});
 

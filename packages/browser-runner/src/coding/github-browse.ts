@@ -30,7 +30,7 @@
  *
  * ── Scale
  *
- * The measured account (serge-ivo, 2026-08-16) has ~90 distinct owners and >1 000
+ * The measured account (owner-login, 2026-08-16) has ~90 distinct owners and >1 000
  * repos. A single unpaginated call cannot work: GitHub caps list endpoints at 100
  * items per page. This module paginates by driving `gh api --paginate`, which
  * follows GitHub's `Link: <…>; rel="next"` header automatically and collects all
@@ -467,7 +467,7 @@ export interface GithubSearchInput {
 	 *   - `"react hooks"` — repos whose name/description/README contains this phrase
 	 *   - `topic:machine-learning language:python` — repos tagged with a topic
 	 *   - `is:public pushed:>2026-01-01` — public repos pushed after a date
-	 *   - `user:serge-ivo is:private` — private repos under a specific owner
+	 *   - `user:owner-login is:private` — private repos under a specific owner
 	 *
 	 * When omitted the query defaults to listing ALL repos reachable by the credential
 	 * (effectively `is:public OR is:private` scoped to the authenticated account's
@@ -807,7 +807,7 @@ export interface GithubBranchEntry {
 /** Input for {@link getGithubRepoDetail}. */
 export interface GithubRepoDetailInput {
 	/**
-	 * The `owner/repo` slug, e.g. `"serge-ivo/my-app"`.
+	 * The `owner/repo` slug, e.g. `"owner-login/my-app"`.
 	 *
 	 * Must contain exactly one slash and must not be empty. Invalid input returns
 	 * `{ error }` without calling `gh`.
@@ -1017,7 +1017,7 @@ export function getGithubRepoDetail(input: GithubRepoDetailInput): GithubRepoDet
 	const repoSlug = (input.repo ?? "").trim();
 	// Validate the slug — must be "owner/repo" with no extra slashes.
 	if (!repoSlug?.includes("/") || repoSlug.split("/").length !== 2) {
-		return { error: "repo must be an \"owner/repo\" slug (e.g. \"serge-ivo/my-app\")" };
+		return { error: "repo must be an \"owner/repo\" slug (e.g. \"owner-login/my-app\")" };
 	}
 	const limit = Math.max(1, Math.min(DETAIL_MAX_LIMIT, Math.floor(Number(input.limit) || DETAIL_DEFAULT_LIMIT)));
 	const state = input.state === "all" ? "all" : "open";

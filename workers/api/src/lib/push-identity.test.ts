@@ -4,7 +4,7 @@ import { type HttpsPushCapabilityProbe, pushCapabilityIssues, pushCapabilityRepo
 const probe = (over: Partial<HttpsPushCapabilityProbe> = {}): HttpsPushCapabilityProbe => ({
 	checked: true,
 	host: "github.com",
-	identity: "sergey-ivochkin-rocketlab",
+	identity: "owner-login-rl",
 	repos: [],
 	...over,
 });
@@ -20,19 +20,19 @@ describe("pushCapabilityIssues (#1465)", () => {
 		const out = pushCapabilityIssues(probe({ repos: [{ repo: "freeappstore-online/hanzi-associations", pushable: false }] }));
 		expect(out).toHaveLength(1);
 		expect(out[0]).toMatchObject({ severity: "error" });
-		expect(out[0].message).toContain("sergey-ivochkin-rocketlab");
+		expect(out[0].message).toContain("owner-login-rl");
 		expect(out[0].message).toContain("freeappstore-online/hanzi-associations");
 		expect(out[0].message).toContain("cannot push to it");
 	});
 
 	it("names the mismatch when the push credential disagrees with gh's own login", () => {
-		const out = pushCapabilityIssues(probe({ repos: [{ repo: "acme/repo", pushable: false }] }), "serge-ivo");
-		expect(out[0].message).toMatch(/different account \(serge-ivo\)/);
-		expect(out[0].fix).toContain("serge-ivo");
+		const out = pushCapabilityIssues(probe({ repos: [{ repo: "acme/repo", pushable: false }] }), "owner-login");
+		expect(out[0].message).toMatch(/different account \(owner-login\)/);
+		expect(out[0].fix).toContain("owner-login");
 	});
 
 	it("says nothing extra about identity when the push credential already matches gh's login", () => {
-		const out = pushCapabilityIssues(probe({ identity: "serge-ivo", repos: [{ repo: "acme/repo", pushable: false }] }), "serge-ivo");
+		const out = pushCapabilityIssues(probe({ identity: "owner-login", repos: [{ repo: "acme/repo", pushable: false }] }), "owner-login");
 		expect(out[0].message).not.toMatch(/different account/);
 	});
 

@@ -5,7 +5,7 @@ import { noticeSentence, runnerOfflineNotice } from "./runner-offline-notice";
 const SESSION_ELSEWHERE = {
 	state: "session-machine-offline",
 	message:
-		"This session is running on RLs-MacBook-Air.local, which isn't connected. Sergeys-Mac-mini.local is connected — open the session again to move it to Sergeys-Mac-mini.local, or start the runner on RLs-MacBook-Air.local.",
+		"This session is running on RLs-MacBook-Air.local, which isn't connected. runner-host.local is connected — open the session again to move it to runner-host.local, or start the runner on RLs-MacBook-Air.local.",
 	remedy: null,
 };
 
@@ -17,7 +17,7 @@ describe("runnerOfflineNotice — the banner stops instructing an owner who is a
 	it("a session stamped to an offline machine names both machines and offers no command", () => {
 		const n = runnerOfflineNotice({ runnerOnline: false, sessionAttachment: SESSION_ELSEWHERE });
 		expect(n?.text).toContain("RLs-MacBook-Air.local");
-		expect(n?.text).toContain("Sergeys-Mac-mini.local");
+		expect(n?.text).toContain("runner-host.local");
 		expect(n?.command).toBeUndefined();
 		expect(n?.text).not.toContain("pags up");
 	});

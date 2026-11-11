@@ -42,9 +42,9 @@ describe("upsert and read-back", () => {
 		expect(await getMachineCapabilities(env, "u1", M)).toBeNull();
 	});
 	it("never stores what the schema strips, even when the runner sends it", async () => {
-		await upsertMachineCapabilities(env, "u1", M, record({ username: "serge", env: { TOKEN: "sk-x" }, nodeVersion: "/opt/node" }));
+		await upsertMachineCapabilities(env, "u1", M, record({ username: "owner", env: { TOKEN: "sk-x" }, nodeVersion: "/opt/node" }));
 		const raw = (d1.sqlite.prepare("SELECT raw_json FROM machine_capabilities").get() as { raw_json: string }).raw_json;
-		expect(raw).not.toMatch(/serge|sk-x|TOKEN|\/opt/);
+		expect(raw).not.toMatch(/owner|sk-x|TOKEN|\/opt/);
 	});
 	it("is scoped to the owner: another account cannot read or overwrite a machine's record", async () => {
 		await upsertMachineCapabilities(env, "u1", M, record());

@@ -1,4 +1,4 @@
-cd /Users/serge/.config/proagentstore/browser-runner/repos/repo_2b2657fb-31e5-48a4-99f3-147fffde0925; python3 - <<'EOF'
+cd /Users/former/.config/proagentstore/browser-runner/repos/repo_2b2657fb-31e5-48a4-99f3-147fffde0925; python3 - <<'EOF'
 p='workers/api/src/lib/repo-write-scope.ts'; s=open(p).read()
 old='''/** The segments that perform a REMOTE write — the same commands the runner classifies as one. */
 const REMOTE_WRITE_SEGMENT = /\\bgit\\s+push\\b|\\bgh\\s+pr\\s+(?:create|merge)\\b|\\bgh\\s+release\\s+create\\b|\\bgh\\s+repo\\s+delete\\b/;'''

@@ -34,7 +34,7 @@ describe("#997 Gmail Scout fresh subscription acceptance", () => {
 	it("subscribes the read-only source, pins its one mailbox, scans an isolated new lead, and emits Tailor handoff only on Apply", async () => {
 		const d1 = realSchemaD1();
 		try {
-			d1.exec(`INSERT INTO users (id, github_login, roles) VALUES ('${USER}', 'serge', '["user"]')`);
+			d1.exec(`INSERT INTO users (id, github_login, roles) VALUES ('${USER}', 'owner', '["user"]')`);
 			// The value is deliberately an address in both fields: Google stores it as the account id
 			// after identity lookup, while older connections may only have retained the label.
 			d1.exec(`INSERT INTO user_api_keys (user_id, provider, account_id, key_ciphertext, dek_wrapped, iv, account_label)
@@ -104,7 +104,7 @@ describe("#997 Gmail Scout fresh subscription acceptance", () => {
 	it("upgrades an existing legacy Job Search Scout so deployed subscriptions no longer report Gmail no_tools", async () => {
 		const d1 = realSchemaD1();
 		try {
-			d1.exec(`INSERT INTO users (id, github_login, roles) VALUES ('${USER}', 'serge', '["user"]')`);
+			d1.exec(`INSERT INTO users (id, github_login, roles) VALUES ('${USER}', 'owner', '["user"]')`);
 			d1.exec(`INSERT INTO user_api_keys (user_id, provider, account_id, key_ciphertext, dek_wrapped, iv, account_label)
 				VALUES ('${USER}', 'gmail', '${GMAIL_SCOUT_PINNED_EMAIL}', X'00', X'00', X'00', '${GMAIL_SCOUT_PINNED_EMAIL}')`);
 			d1.exec(`INSERT INTO agents (id, owner_id, slug, name, config) VALUES ('legacy-scout', '${USER}', 'job-search-scout', 'Job Search Scout', '${legacyScoutConfig().replaceAll("'", "''")}')`);

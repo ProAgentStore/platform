@@ -86,7 +86,7 @@ find yourself on a non-`main` branch, stop and report it. (Declared 2026-08-16.)
 
 ## Git workflow
 
-- Commit finished work and push directly to `main` (see *Delivery mode*). Do not open pull requests unless Serge
+- Commit finished work and push directly to `main` (see *Delivery mode*). Do not open pull requests unless the owner
   explicitly asks.
 - **NEVER force-push.** That means `--force`, `--force-with-lease`, `--force-if-includes`, a short-flag cluster that
   carries `f` (`-f`, `-uf`), and a leading `+` on a refspec (`git push origin +main`, `+HEAD:main`), which forces

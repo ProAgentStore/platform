@@ -1,7 +1,7 @@
 /**
  * `GET /v1/terminals/nodes` (list_runner_nodes) finds a machine's socket under any of its names (#922).
  *
- * Live: the Mac mini registered and heartbeated as `Sergeys-Mac-mini.local` (seen seconds ago) while
+ * Live: the Mac mini registered and heartbeated as `runner-host.local` (seen seconds ago) while
  * its relay sockets — opened after macOS renamed it — sat under `Macmini`. This route probed only the
  * freshest name and reported every agent there `connected: false`; `coding_diagnostics` walks the
  * machine's aliases, found the socket, and said online. One runner, two answers, 90 seconds apart.
@@ -29,9 +29,9 @@ beforeEach(() => {
 		d1.exec(`INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, runner_version, machine_id, status, last_seen_at, updated_at)
 		         VALUES ('${inst}', 'u1', '${node}', 'relay://', '0.4.69', ${machine ? `'${machine}'` : "NULL"}, 'online', '${seen}', '${seen}')`);
 	// The freshest name is the one the runner heartbeats under; the older one is where its sockets are.
-	row("i-a", "Sergeys-Mac-mini.local", "2026-10-05 06:06:10", MINI);
+	row("i-a", "runner-host.local", "2026-10-05 06:06:10", MINI);
 	row("i-a", "Macmini", "2026-09-11 23:35:32", MINI);
-	row("i-b", "Sergeys-Mac-mini.local", "2026-10-05 06:06:10", MINI);
+	row("i-b", "runner-host.local", "2026-10-05 06:06:10", MINI);
 	// A different machine, with no socket anywhere.
 	row("i-b", "pink-laptop", "2026-10-05 06:04:19", "pink-0000-machine-id");
 });
@@ -58,7 +58,7 @@ async function nodes(live: string[]) {
 describe("list_runner_nodes reads a machine's sockets under every name it has (#922)", () => {
 	it("reports connected when the socket sits under an alias, not the freshest name", async () => {
 		const all = await nodes(["i-a:node:Macmini"]);
-		const mini = all.find((n) => n.node === "Sergeys-Mac-mini.local");
+		const mini = all.find((n) => n.node === "runner-host.local");
 		expect(mini?.aka).toEqual(["Macmini"]);
 		expect(mini?.connected).toBe(true);
 		expect(mini?.instances.find((i) => i.instanceId === "i-a")?.connected).toBe(true);
@@ -67,8 +67,8 @@ describe("list_runner_nodes reads a machine's sockets under every name it has (#
 	});
 
 	it("still reads the freshest name, and never borrows another machine's socket", async () => {
-		const all = await nodes(["i-b:node:Sergeys-Mac-mini.local"]);
-		expect(all.find((n) => n.node === "Sergeys-Mac-mini.local")?.instances.find((i) => i.instanceId === "i-b")?.connected).toBe(true);
+		const all = await nodes(["i-b:node:runner-host.local"]);
+		expect(all.find((n) => n.node === "runner-host.local")?.instances.find((i) => i.instanceId === "i-b")?.connected).toBe(true);
 		expect(all.find((n) => n.node === "pink-laptop")?.connected).toBe(false);
 	});
 });

@@ -40,7 +40,7 @@ afterEach(() => d1.close());
 const act = (id: string, kind: string, command: string, extra: Record<string, unknown> = {}): EngineActReport => ({ id, kind, command, target: null, irreversible: true, ok: true, at: "2026-10-19T10:05:00Z", atReliable: true, ...extra }) as EngineActReport;
 const record = (...acts: EngineActReport[]) => recordEngineActs(env, { userId: "u1", instanceId: "inst-1", sessionId: "sess-1", traceId: RUN }, acts);
 const push = (id: string, from: string, to: string) => act(id, "push.trunk", "git push origin main", { target: "origin main", pushedFromSha: from, pushedSha: to });
-const evidence = (over: Partial<MergeEvidence> = {}): MergeEvidence => ({ v: 1, repo: "acme/platform", pr: 42, baseRef: "main", method: "squash", beforeSha: sha("a"), afterSha: sha("b"), mergedAt: "2026-10-19T10:05:05Z", mergedBy: "serge", actor: "serge", ...over });
+const evidence = (over: Partial<MergeEvidence> = {}): MergeEvidence => ({ v: 1, repo: "acme/platform", pr: 42, baseRef: "main", method: "squash", beforeSha: sha("a"), afterSha: sha("b"), mergedAt: "2026-10-19T10:05:05Z", mergedBy: "owner", actor: "owner", ...over });
 const merge = (id: string, over: Partial<MergeEvidence> = {}, extra: Record<string, unknown> = {}) => act(id, "pr.merge", "gh pr merge 42 --squash", { target: "#42", merge: evidence(over), ...extra });
 const input = (): ReleaseNoteInput => ({ env, userId: "u1", instanceId: "inst-1", runId: RUN, sessionId: "sess-1", repoId: "repo-1", repoLabel: "platform", runStartedAt: Date.parse("2026-10-19T10:00:00Z") });
 function deps() {

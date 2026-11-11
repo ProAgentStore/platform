@@ -82,9 +82,9 @@ describe("foldNodesByMachine", () => {
 			row("RLs-MacBook-Air", "machine-aaaa1111", { lastSeenAt: "2026-07-16 10:00:00" }),
 			row("RLs-MacBook-Air.local", "machine-aaaa1111", { lastSeenAt: "2026-08-07 09:20:00" }),
 			row("Mac", "machine-aaaa1111", { lastSeenAt: "2026-08-08 06:39:00" }),
-			row("Sergeys-Mac-mini.local", "machine-bbbb2222", { lastSeenAt: "2026-08-08 06:00:00" }),
+			row("runner-host.local", "machine-bbbb2222", { lastSeenAt: "2026-08-08 06:00:00" }),
 		]);
-		expect(folded.map((f) => f.node)).toEqual(["Mac", "Sergeys-Mac-mini.local"]);
+		expect(folded.map((f) => f.node)).toEqual(["Mac", "runner-host.local"]);
 	});
 
 	it("leaves un-identified rows alone — without the proof they ARE separate machines", () => {
@@ -116,7 +116,7 @@ describe("machineNamesFor (#393 — what 'forget this machine' operates on)", ()
 		row("RLs-MacBook-Air", "machine-aaaa1111"),
 		row("RLs-MacBook-Air.local", "machine-aaaa1111"),
 		row("Mac", "machine-aaaa1111"),
-		row("Sergeys-Mac-mini.local", "machine-bbbb2222"),
+		row("runner-host.local", "machine-bbbb2222"),
 	];
 
 	it("resolves any one name of a laptop to ALL of its names", () => {
@@ -130,8 +130,8 @@ describe("machineNamesFor (#393 — what 'forget this machine' operates on)", ()
 	});
 
 	it("never reaches across machines", () => {
-		const got = machineNamesFor("Sergeys-Mac-mini.local", fleet);
-		expect(got.ok && got.names).toEqual(["Sergeys-Mac-mini.local"]);
+		const got = machineNamesFor("runner-host.local", fleet);
+		expect(got.ok && got.names).toEqual(["runner-host.local"]);
 	});
 
 	it("an unidentified name is a machine of exactly one name", () => {

@@ -215,7 +215,7 @@ describe("plain speech is reachable for a coding agent, and still tells it no li
 // brains read, because the defect was never in the diagnosis: it was that this caller alone never
 // asked for one.
 
-const MINI = "Sergeys-Mac-mini.local";
+const MINI = "runner-host.local";
 const AIR = "RLs-MacBook-Air";
 
 /** A heartbeat `agoMs` in the past, in the D1 text shape `diagnoseAttachment` parses. */

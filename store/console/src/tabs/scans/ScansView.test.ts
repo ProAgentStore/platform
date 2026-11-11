@@ -15,7 +15,7 @@ const receipt = (over: Partial<GmailScoutScanReceipt> = {}): GmailScoutScanRecei
 	hits: 2, candidates: 1, added: 1, deduped: 0, rejected: {}, errorMessage: null, lastMessageId: null, handoff: "none", ...over,
 });
 const status = (over: Partial<GmailScoutStatus> = {}): GmailScoutStatus => ({
-	config: { pinnedEmail: "serge.pro.job@gmail.com", enabled: true },
+	config: { pinnedEmail: "owner@example.com", enabled: true },
 	state: { lastScanAt: "2026-11-07T05:42:00.000Z", candidateCount: 1, dedupeCount: 0, failureCount: 0, lastFailureAt: null, lastFailureMessage: null },
 	leadCount: 1, newLeadCount: 1, receipts: [receipt()], ...over,
 });

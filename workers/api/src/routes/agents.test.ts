@@ -435,8 +435,25 @@ describe("GET /v1/agents — pagination (#661)", () => {
 		}
 	});
 
+	it("carries no creator person fields in the public list (#1632)", async () => {
+		const d1 = realSchemaD1();
+		try {
+			const app = new Hono<{ Bindings: Env }>();
+			app.route("/v1/agents", agentRoutes);
+			const env = { DB: d1.DB, SESSION_SIGNING_KEY: TEST_SECRET } as unknown as Env;
+			const res = await app.request("/v1/agents", {}, env);
+			const data = await res.json<{ agents: Array<Record<string, unknown>> }>();
+			expect(data.agents.length).toBeGreaterThan(0);
+			for (const agent of data.agents) {
+				expect(Object.keys(agent).filter((k) => /creator|owner|developer|avatar|login/i.test(k))).toEqual([]);
+			}
+		} finally {
+			d1.close();
+		}
+	});
+
 	it("returns total and has_more:false when all agents fit in one page", async () => {
-		const rows = [{ id: "a1", slug: "alpha", name: "Alpha", description: "", category: "general", store_type: "agent", icon: "", icon_bg: "#000", model: "", creator_login: null, creator_name: "Creator", creator_avatar: null, subscriber_count: 0 }];
+		const rows = [{ id: "a1", slug: "alpha", name: "Alpha", description: "", category: "general", store_type: "agent", icon: "", icon_bg: "#000", model: "",  subscriber_count: 0 }];
 		const { app, env } = catalogueApp(1, rows);
 		const res = await app.request("/v1/agents", {}, env);
 		expect(res.status).toBe(200);
@@ -450,9 +467,9 @@ describe("GET /v1/agents — pagination (#661)", () => {
 		// Simulate limit=2 (default 50 → we send a request with limit=2) and 3 rows in DB.
 		// The route probes limit+1 rows (3) and detects has_more.
 		const rows = [
-			{ id: "a1", slug: "a1", name: "A1", description: "", category: "g", store_type: "agent", icon: "", icon_bg: "#000", model: "", creator_login: null, creator_name: "C", creator_avatar: null, subscriber_count: 0 },
-			{ id: "a2", slug: "a2", name: "A2", description: "", category: "g", store_type: "agent", icon: "", icon_bg: "#000", model: "", creator_login: null, creator_name: "C", creator_avatar: null, subscriber_count: 0 },
-			{ id: "a3", slug: "a3", name: "A3", description: "", category: "g", store_type: "agent", icon: "", icon_bg: "#000", model: "", creator_login: null, creator_name: "C", creator_avatar: null, subscriber_count: 0 },
+			{ id: "a1", slug: "a1", name: "A1", description: "", category: "g", store_type: "agent", icon: "", icon_bg: "#000", model: "",  subscriber_count: 0 },
+			{ id: "a2", slug: "a2", name: "A2", description: "", category: "g", store_type: "agent", icon: "", icon_bg: "#000", model: "",  subscriber_count: 0 },
+			{ id: "a3", slug: "a3", name: "A3", description: "", category: "g", store_type: "agent", icon: "", icon_bg: "#000", model: "",  subscriber_count: 0 },
 		];
 		const { app, env } = catalogueApp(3, rows); // probe returns 3 rows for limit=2
 		const res = await app.request("/v1/agents?limit=2", {}, env);
@@ -468,7 +485,7 @@ describe("GET /v1/agents — pagination (#661)", () => {
 		// A request for limit=9999 should behave like limit=500.
 		// We can only check that it doesn't crash and returns the standard shape.
 		const { app, env } = catalogueApp(2, [
-			{ id: "a1", slug: "a1", name: "A1", description: "", category: "g", store_type: "agent", icon: "", icon_bg: "#000", model: "", creator_login: null, creator_name: "C", creator_avatar: null, subscriber_count: 0 },
+			{ id: "a1", slug: "a1", name: "A1", description: "", category: "g", store_type: "agent", icon: "", icon_bg: "#000", model: "",  subscriber_count: 0 },
 		]);
 		const res = await app.request("/v1/agents?limit=9999", {}, env);
 		expect(res.status).toBe(200);
@@ -482,8 +499,7 @@ describe("GET /v1/agents — pagination (#661)", () => {
 		// Simulate 300 total with only 50 returned (first page at default limit).
 		const rows = Array.from({ length: 51 }, (_, i) => ({
 			id: `a${i}`, slug: `a${i}`, name: `A${i}`, description: "", category: "g", store_type: "agent",
-			icon: "", icon_bg: "#000", model: "", creator_login: null, creator_name: "C",
-			creator_avatar: null, subscriber_count: 0,
+			icon: "", icon_bg: "#000", model: "",  subscriber_count: 0,
 		}));
 		const { app, env } = catalogueApp(300, rows);
 		const res = await app.request("/v1/agents", {}, env); // default limit=50

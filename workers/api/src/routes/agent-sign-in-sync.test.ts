@@ -22,7 +22,7 @@ vi.mock("../lib/runner-client.js", async (importOriginal) => ({ ...(await import
 const { instanceRoutes } = await import("./instances.js");
 const { syncApplyRun } = await import("../lib/local-apply/apply.js");
 
-const JOB_MAILBOX = "serge.pro.job@gmail.com";
+const JOB_MAILBOX = "owner@example.com";
 let d1: RealSchemaD1;
 let sent: Array<{ path: string; body: Record<string, unknown> }>;
 let answers: Record<string, { status: number; body: unknown }>;
@@ -67,7 +67,7 @@ async function call(method: string, path: string, body?: unknown) {
 	return { status: res.status, body: (await res.json()) as Record<string, any> };
 }
 
-const USERNAME = "serge.pro.job@gmail.com";
+const USERNAME = "owner@example.com";
 const PASSWORD = "Tr0ub4dor&3-vault-secret";
 const paused = (domain: string) => ({ status: 200, body: { state: "paused", lastSeq: 1, events: [], pause: { reason: "login_required", domain, url: `https://${domain}/auth`, question: `Sign in to ${domain} in this browser.` } } });
 const signingIn = (names: string[]) => ({ status: 200, body: { state: "running", lastSeq: 2, events: [], signIn: { state: "signing_in", origin: "www.indeed.com", secrets: names, codeRequested: false } } });

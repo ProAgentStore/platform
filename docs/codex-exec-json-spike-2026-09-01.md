@@ -4,7 +4,7 @@ Issue: #729.
 
 ## Environment
 
-- Platform: `Darwin Sergeys-Mac-mini.local 24.6.0 Darwin Kernel Version 24.6.0: Tue Apr 21 20:17:54 PDT 2026; root:xnu-11417.140.69.710.16~1/RELEASE_X86_64 x86_64`
+- Platform: `Darwin runner-host.local 24.6.0 Darwin Kernel Version 24.6.0: Tue Apr 21 20:17:54 PDT 2026; root:xnu-11417.140.69.710.16~1/RELEASE_X86_64 x86_64`
 - Codex CLI: `codex-cli 0.151.0`
 - Test directory: temp git repo with one committed file, `note.txt`, containing `alpha-spike`.
 - Auth mode: machine Codex sign-in from the local environment; no API key was added for the spike.

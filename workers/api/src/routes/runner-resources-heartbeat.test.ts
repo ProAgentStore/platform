@@ -28,7 +28,7 @@ beforeEach(() => {
 	d1.exec(`INSERT INTO users (id, github_login) VALUES ('u1', 'u1')`);
 	d1.exec(`INSERT INTO agents (id, owner_id, slug, name, config) VALUES ('ag', 'u1', 't924-coder', 'Coder', '{"capabilities":{"surfaces":["coding"],"runtime":"coding"}}')`);
 	d1.exec(`INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES ('i-a', 'ag', 'u1', 'active', '{}'), ('i-b', 'ag', 'u1', 'active', '{}')`);
-	for (const [inst, node] of [["i-a", "Macmini"], ["i-b", "Sergeys-Mac-mini.local"]] as const) {
+	for (const [inst, node] of [["i-a", "Macmini"], ["i-b", "runner-host.local"]] as const) {
 		d1.exec(`INSERT INTO instance_runtimes (instance_id, user_id, endpoint_url, runner_node, status) VALUES ('${inst}', 'u1', 'relay://', '${node}', 'online')`);
 		d1.exec(`INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, runner_version, machine_id, status, last_seen_at)
 		         VALUES ('${inst}', 'u1', '${node}', 'relay://', '0.4.71', '${MINI}', 'online', '2026-10-05 06:00:00')`);
@@ -76,7 +76,7 @@ describe("machine resources on the heartbeat (#924)", () => {
 
 	it("reads the FRESHEST sample across the machine's names and agents", async () => {
 		await heartbeat("i-a", { runnerNode: "Macmini", resources: sample(1, Date.UTC(2026, 9, 5, 6, 0)) });
-		await heartbeat("i-b", { runnerNode: "Sergeys-Mac-mini.local", resources: sample(14, Date.UTC(2026, 9, 5, 6, 1)) });
+		await heartbeat("i-b", { runnerNode: "runner-host.local", resources: sample(14, Date.UTC(2026, 9, 5, 6, 1)) });
 		const m = await machine();
 		expect(m.resources).toMatchObject({ load1: 14, sampledAt: "2026-10-05T06:01:00.000Z" });
 		expect((m.resources?.warnings as string[])[0]).toMatch(/^CPU saturated/);

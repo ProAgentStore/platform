@@ -2,10 +2,10 @@
  * The wake path opens a session on the pinned machine under ANY name it is provably known by (#1102).
  *
  * The live state on 2026-10-15/16: the platform Coder (a185b1db) was pinned to `Macmini.modem`; the Mac
- * mini's runner held its socket as `Sergeys-Mac-mini.local` (same machine_id 8de74159…). Opening a session
+ * mini's runner held its socket as `runner-host.local` (same machine_id 8de74159…). Opening a session
  * — the wake MCP's coding_session_message makes when nothing is active — probed only the literal pin and
  * answered "Runner node is not connected: Macmini.modem", while list_runner_nodes, force_runner_attach and
- * instance_runner_node (resolvedNode "Sergeys-Mac-mini.local") all read it connected. Over the real schema;
+ * instance_runner_node (resolvedNode "runner-host.local") all read it connected. Over the real schema;
  * only the relay is faked: which `<instance>:node:<name>` slots hold a socket, and what a command returns.
  */
 import { Hono } from "hono";
@@ -49,7 +49,7 @@ beforeEach(() => {
 		d1.exec(`INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, runner_version, machine_id, status, last_seen_at)
 		         VALUES ('${CODER}', 'u1', '${node}', 'relay://', '0.4.134', '${machine}', 'online', '${seen}')`);
 	row("Macmini.modem", MINI, "2026-10-15 22:20:00"); // the name the pin was made with
-	row("Sergeys-Mac-mini.local", MINI, "2026-10-15 23:22:50"); // the name the runner reconnects under
+	row("runner-host.local", MINI, "2026-10-15 23:22:50"); // the name the runner reconnects under
 	row("pink-laptop", PINK, "2026-10-15 23:22:55"); // a different machine, also live
 });
 afterEach(() => d1.close());
@@ -66,20 +66,20 @@ const sessionNode = () => d1.DB.prepare("SELECT runner_node FROM coding_sessions
 
 describe("waking a session on a pinned machine that reconnected under another name (#1102)", () => {
 	it("opens on the live alias — the reported failure — and stamps the session with the name that answers", async () => {
-		live.add(`${CODER}:node:Sergeys-Mac-mini.local`);
+		live.add(`${CODER}:node:runner-host.local`);
 		live.add(`${CODER}:node:pink-laptop`);
 		const r = await open();
 		expect(r.status).toBe(201);
 		expect(r.body.runnerConnected).toBe(true);
-		expect((await sessionNode())?.runner_node).toBe("Sergeys-Mac-mini.local");
+		expect((await sessionNode())?.runner_node).toBe("runner-host.local");
 		// It started on the Mac mini, never on the other live machine.
 		expect(commands.length).toBeGreaterThan(0);
-		expect(commands.every((n) => n === `${CODER}:node:Sergeys-Mac-mini.local`)).toBe(true);
+		expect(commands.every((n) => n === `${CODER}:node:runner-host.local`)).toBe(true);
 	});
 
 	it("still uses the pinned name itself when that name holds the socket", async () => {
 		live.add(`${CODER}:node:Macmini.modem`);
-		live.add(`${CODER}:node:Sergeys-Mac-mini.local`);
+		live.add(`${CODER}:node:runner-host.local`);
 		expect((await open()).status).toBe(201);
 		expect((await sessionNode())?.runner_node).toBe("Macmini.modem");
 	});
@@ -95,7 +95,7 @@ describe("waking a session on a pinned machine that reconnected under another na
 
 	it("never borrows liveness from a name it cannot prove is the same machine", async () => {
 		d1.exec(`UPDATE instance_runtime_nodes SET machine_id = NULL WHERE runner_node = 'Macmini.modem'`);
-		live.add(`${CODER}:node:Sergeys-Mac-mini.local`);
+		live.add(`${CODER}:node:runner-host.local`);
 		const r = await open();
 		expect(r.status).toBe(409);
 		expect(await sessionNode()).toBeNull();
@@ -103,9 +103,9 @@ describe("waking a session on a pinned machine that reconnected under another na
 
 	it("an explicitly requested node resolves the same way", async () => {
 		d1.exec(`UPDATE agent_instances SET config = '{}' WHERE id = '${CODER}'`);
-		live.add(`${CODER}:node:Sergeys-Mac-mini.local`);
+		live.add(`${CODER}:node:runner-host.local`);
 		const r = await open({ repoId: "r1", runnerNode: "Macmini.modem" });
 		expect(r.status).toBe(201);
-		expect((await sessionNode())?.runner_node).toBe("Sergeys-Mac-mini.local");
+		expect((await sessionNode())?.runner_node).toBe("runner-host.local");
 	});
 });

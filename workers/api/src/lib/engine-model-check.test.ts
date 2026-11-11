@@ -32,7 +32,7 @@ beforeEach(() => {
 	seedTenant(d1, { userId: "u1", instanceIds: ["inst-1"] });
 	env = { DB: d1.DB } as unknown as Env;
 	clearEngineModelCache();
-	getBoundRunnerConn.mockReset().mockResolvedValue({ runnerNode: "Sergeys-Mac-mini.local", instanceId: "inst-1" });
+	getBoundRunnerConn.mockReset().mockResolvedValue({ runnerNode: "runner-host.local", instanceId: "inst-1" });
 	callRunner.mockReset().mockImplementation(async (_conn: unknown, path: string) => {
 		if (path !== "/coding/engine-models") throw new Error(`unexpected ${path}`);
 		return { clientType: "grok", models: GROK_MODELS, defaultModel: "grok-4.7" };

@@ -43,7 +43,7 @@ const LOCK = (over: Partial<RunnerLockFile> = {}): RunnerLockFile => ({
 	port: 4000,
 	node: "pink-laptop",
 	machineId: "m-pink",
-	account: "serge-ivo",
+	account: "owner-login",
 	version: "0.4.87",
 	launch: "tty",
 	launchDetail: "ttys003",
@@ -141,26 +141,26 @@ describe("where the lock lives", () => {
 	const at = (home: string) => ({ HOME: home }) as NodeJS.ProcessEnv;
 
 	it("is per ACCOUNT, so two accounts can each run one runner here (Q1)", () => {
-		const a = lockPath("serge-ivo", at("/home/x"));
+		const a = lockPath("owner-login", at("/home/x"));
 		const b = lockPath("someone-else", at("/home/x"));
 		expect(a).not.toBe(b);
 		expect(basename(a)).toMatch(/^up-[0-9a-f]{12}\.lock$/);
 		// The account is hashed, not spelled out, and the same account always resolves the same way.
-		expect(basename(a)).toBe(`up-${accountKey("serge-ivo")}.lock`);
-		expect(basename(a)).not.toContain("serge-ivo");
-		expect(accountKey("Serge-Ivo")).toBe(accountKey("serge-ivo "));
-		expect(accountKey("serge-ivo")).not.toBe(accountKey("someone-else"));
+		expect(basename(a)).toBe(`up-${accountKey("owner-login")}.lock`);
+		expect(basename(a)).not.toContain("owner-login");
+		expect(accountKey("Owner-Login")).toBe(accountKey("owner-login "));
+		expect(accountKey("owner-login")).not.toBe(accountKey("someone-else"));
 	});
 
 	it("keeps the account out of the FILENAME even when the home directory is named after it (#1092)", () => {
 		// The audit machine's real layout: the OS user and the PAGS account share a name.
-		const home = "/Users/serge-ivo";
-		const a = lockPath("serge-ivo", at(home));
+		const home = "/Users/owner-login";
+		const a = lockPath("owner-login", at(home));
 		// The parent is the user's own directory and is left exactly as given — it is not ours to hide.
 		expect(dirname(a)).toBe(`${home}/.config/proagentstore`);
-		expect(basename(a)).toBe(`up-${accountKey("serge-ivo")}.lock`);
-		for (const spelling of ["serge-ivo", "Serge-Ivo", "SERGE-IVO"]) expect(basename(a)).not.toContain(spelling);
-		expect(lockPath(" Serge-Ivo ", at(home)), "normalised: case and surrounding space do not make a second lock").toBe(a);
+		expect(basename(a)).toBe(`up-${accountKey("owner-login")}.lock`);
+		for (const spelling of ["owner-login", "Owner-Login", "OWNER-LOGIN"]) expect(basename(a)).not.toContain(spelling);
+		expect(lockPath(" Owner-Login ", at(home)), "normalised: case and surrounding space do not make a second lock").toBe(a);
 		expect(lockPath("someone-else", at(home))).not.toBe(a);
 		expect(dirname(lockPath("someone-else", at(home)))).toBe(dirname(a));
 	});
@@ -197,7 +197,7 @@ describe("how the launch is recognised", () => {
 describe("taking and releasing the lock, on a real filesystem", () => {
 	let dir: string;
 	let env: NodeJS.ProcessEnv;
-	const input = () => ({ account: "serge-ivo", node: "pink-laptop", machineId: "m-pink", version: "0.4.87", port: null, env });
+	const input = () => ({ account: "owner-login", node: "pink-laptop", machineId: "m-pink", version: "0.4.87", port: null, env });
 
 	beforeEach(() => {
 		dir = mkdtempSync(join(tmpdir(), "pags-lock-"));
@@ -211,7 +211,7 @@ describe("taking and releasing the lock, on a real filesystem", () => {
 		expect(got.ok).toBe(true);
 		if (!got.ok) return;
 		expect(got.tookOver).toBe("none");
-		expect(got.lock).toMatchObject({ v: 1, rsid: "mine", pid: process.pid, account: "serge-ivo", node: "pink-laptop" });
+		expect(got.lock).toMatchObject({ v: 1, rsid: "mine", pid: process.pid, account: "owner-login", node: "pink-laptop" });
 		expect(got.lock.nonce, "the shutdown credential is generated, not blank").toMatch(/[0-9a-f-]{36}/);
 		expect(readLock(got.path)?.rsid).toBe("mine");
 	});
@@ -231,7 +231,7 @@ describe("taking and releasing the lock, on a real filesystem", () => {
 
 	it("TAKES OVER a stale lock automatically: the pid is gone", async () => {
 		// pid 2**31-1 cannot be running; nothing is killed and nothing is asked.
-		writeFileSync(lockPath("serge-ivo", env), JSON.stringify(LOCK({ pid: 2147483647, rsid: "ghost", port: null })), { mode: 0o600 });
+		writeFileSync(lockPath("owner-login", env), JSON.stringify(LOCK({ pid: 2147483647, rsid: "ghost", port: null })), { mode: 0o600 });
 		const got = await acquireLock({ ...input(), rsid: "mine" });
 		expect(got.ok).toBe(true);
 		if (!got.ok) return;
@@ -242,7 +242,7 @@ describe("taking and releasing the lock, on a real filesystem", () => {
 	});
 
 	it("TAKES OVER when the pid was REUSED: alive, but a different process", async () => {
-		writeFileSync(lockPath("serge-ivo", env), JSON.stringify(LOCK({ pid: process.pid, rsid: "ghost", pidStartedAt: "Wed Jan  1 00:00:00 2020", port: null })), { mode: 0o600 });
+		writeFileSync(lockPath("owner-login", env), JSON.stringify(LOCK({ pid: process.pid, rsid: "ghost", pidStartedAt: "Wed Jan  1 00:00:00 2020", port: null })), { mode: 0o600 });
 		const got = await acquireLock({ ...input(), rsid: "mine" });
 		expect(got.ok, "a recorded start time that no longer matches means the pid was recycled").toBe(true);
 		if (got.ok) expect(readLock(got.path)?.rsid).toBe("mine");
@@ -257,7 +257,7 @@ describe("taking and releasing the lock, on a real filesystem", () => {
 	});
 
 	it("TWO CONTENDERS FOR ONE STALE LOCK: one takeover, not two", async () => {
-		writeFileSync(lockPath("serge-ivo", env), JSON.stringify(LOCK({ pid: 2147483647, rsid: "ghost", port: null })), { mode: 0o600 });
+		writeFileSync(lockPath("owner-login", env), JSON.stringify(LOCK({ pid: 2147483647, rsid: "ghost", port: null })), { mode: 0o600 });
 		const [a, b] = await Promise.all([acquireLock({ ...input(), rsid: "A" }), acquireLock({ ...input(), rsid: "B" })]);
 		expect([a, b].filter((r) => r.ok), "the rename is the one-winner gate").toHaveLength(1);
 	});
@@ -265,7 +265,7 @@ describe("taking and releasing the lock, on a real filesystem", () => {
 	it("a SUPERVISED RESTART inherits the slot from the exact process that handed it over", async () => {
 		// `runner_update` / the self-update path: the old process is still recorded, and only the
 		// handoff rsid may take it. Anything else still refuses.
-		writeFileSync(lockPath("serge-ivo", env), JSON.stringify(LOCK({ pid: process.pid, pidStartedAt: pidStartedAt(process.pid), rsid: "outgoing", port: null })), { mode: 0o600 });
+		writeFileSync(lockPath("owner-login", env), JSON.stringify(LOCK({ pid: process.pid, pidStartedAt: pidStartedAt(process.pid), rsid: "outgoing", port: null })), { mode: 0o600 });
 		const stranger = await acquireLock({ ...input(), rsid: "stranger" });
 		expect(stranger.ok, "no handoff id — refused").toBe(false);
 		const heir = await acquireLock({ ...input(), rsid: "incoming", handoffFrom: "outgoing" });
@@ -275,12 +275,12 @@ describe("taking and releasing the lock, on a real filesystem", () => {
 			expect(readLock(heir.path)?.rsid).toBe("incoming");
 		}
 		// …and a handoff id that does not match the incumbent is not a licence to take it.
-		writeFileSync(lockPath("serge-ivo", env), JSON.stringify(LOCK({ pid: process.pid, pidStartedAt: pidStartedAt(process.pid), rsid: "someone", port: null })), { mode: 0o600 });
+		writeFileSync(lockPath("owner-login", env), JSON.stringify(LOCK({ pid: process.pid, pidStartedAt: pidStartedAt(process.pid), rsid: "someone", port: null })), { mode: 0o600 });
 		expect((await acquireLock({ ...input(), rsid: "x", handoffFrom: "not-someone" })).ok).toBe(false);
 	});
 
 	it("the handoff can also arrive in the environment, which is how the supervisor passes it", async () => {
-		writeFileSync(lockPath("serge-ivo", env), JSON.stringify(LOCK({ pid: process.pid, pidStartedAt: pidStartedAt(process.pid), rsid: "outgoing", port: null })), { mode: 0o600 });
+		writeFileSync(lockPath("owner-login", env), JSON.stringify(LOCK({ pid: process.pid, pidStartedAt: pidStartedAt(process.pid), rsid: "outgoing", port: null })), { mode: 0o600 });
 		const heir = await acquireLock({ ...input(), rsid: "incoming", env: { ...env, PAGS_LOCK_HANDOFF: "outgoing" } });
 		expect(heir.ok).toBe(true);
 	});
@@ -309,11 +309,11 @@ describe("taking and releasing the lock, on a real filesystem", () => {
 
 	it("an unreadable lock is left alone, not stamped over", async () => {
 		mkdirSync(dir, { recursive: true });
-		writeFileSync(lockPath("serge-ivo", env), "{ this is not json", { mode: 0o600 });
+		writeFileSync(lockPath("owner-login", env), "{ this is not json", { mode: 0o600 });
 		const got = await acquireLock({ ...input(), rsid: "mine" });
 		expect(got.ok, "assumed live: guessing the other way is how a working runner gets killed").toBe(false);
 		if (!got.ok) expect(got.verdict).toBe("unknown");
-		expect(readFileSync(lockPath("serge-ivo", env), "utf-8")).toBe("{ this is not json");
+		expect(readFileSync(lockPath("owner-login", env), "utf-8")).toBe("{ this is not json");
 	});
 
 	it("keeps the two accounts' locks apart on the same machine", async () => {

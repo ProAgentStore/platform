@@ -12,26 +12,26 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { daemonPlistPath, installService, refreshSupervisorScript, SERVICE_LABEL, type ServiceContext, servicePlan, serviceRemovalPlan, supervisedPath, supervisorPath, uninstallService, versionManagedNode } from "./service-install.js";
 
-const mac: ServiceContext = { platform: "darwin", home: "/Users/serge", nodePath: "/opt/homebrew/bin/node", script: "/opt/homebrew/lib/node_modules/@proagentstore/cli/dist/bootstrap.js", configDir: "/Users/serge/.config/proagentstore", pathEnv: "/opt/homebrew/bin:/usr/bin:/bin", uid: 501, user: "serge" };
-const linux: ServiceContext = { platform: "linux", home: "/home/serge", nodePath: "/usr/bin/node", script: "/usr/lib/node_modules/@proagentstore/cli/dist/bootstrap.js", configDir: "/home/serge/.config/proagentstore", pathEnv: "/usr/local/bin:/usr/bin", user: "serge" };
-const win: ServiceContext = { platform: "win32", home: "C:\\Users\\serge", nodePath: "C:\\Program Files\\nodejs\\node.exe", script: "C:\\Users\\serge\\AppData\\Roaming\\npm\\node_modules\\@proagentstore\\cli\\dist\\bootstrap.js", configDir: "C:\\Users\\serge\\.config\\proagentstore", pathEnv: "C:\\Program Files\\nodejs", user: "serge", domain: "DELL-LAPTOP" };
+const mac: ServiceContext = { platform: "darwin", home: "/Users/former", nodePath: "/opt/homebrew/bin/node", script: "/opt/homebrew/lib/node_modules/@proagentstore/cli/dist/bootstrap.js", configDir: "/Users/former/.config/proagentstore", pathEnv: "/opt/homebrew/bin:/usr/bin:/bin", uid: 501, user: "owner" };
+const linux: ServiceContext = { platform: "linux", home: "/home/former", nodePath: "/usr/bin/node", script: "/usr/lib/node_modules/@proagentstore/cli/dist/bootstrap.js", configDir: "/home/former/.config/proagentstore", pathEnv: "/usr/local/bin:/usr/bin", user: "owner" };
+const win: ServiceContext = { platform: "win32", home: "C:\\Users\\former", nodePath: "C:\\Program Files\\nodejs\\node.exe", script: "C:\\Users\\former\\AppData\\Roaming\\npm\\node_modules\\@proagentstore\\cli\\dist\\bootstrap.js", configDir: "C:\\Users\\former\\.config\\proagentstore", pathEnv: "C:\\Program Files\\nodejs", user: "owner", domain: "DELL-LAPTOP" };
 
 describe("the service each OS gets (#1141)", () => {
 	it("macOS: a KeepAlive LaunchAgent running the supervisor, loaded into the user's GUI domain and kicked", () => {
 		const plan = servicePlan(mac);
 		expect(plan.kind).toBe("launchd");
 		const plist = plan.files.find((f) => f.path.endsWith(`${SERVICE_LABEL}.plist`));
-		expect(plist?.path).toBe(`/Users/serge/Library/LaunchAgents/${SERVICE_LABEL}.plist`);
+		expect(plist?.path).toBe(`/Users/former/Library/LaunchAgents/${SERVICE_LABEL}.plist`);
 		expect(plist?.content).toContain("<key>KeepAlive</key><true/>");
 		expect(plist?.content).toContain("<string>/opt/homebrew/bin/node</string>");
-		expect(plist?.content).toContain("<string>/Users/serge/.config/proagentstore/pags-up-supervisor.mjs</string>");
+		expect(plist?.content).toContain("<string>/Users/former/.config/proagentstore/pags-up-supervisor.mjs</string>");
 		// #1416: launchd's own bare environment has no nvm/homebrew node on PATH — this plist needs its own, like the
 		// LaunchDaemon variant and the watchdog's plist already have.
 		expect(plist?.content).toContain("<key>EnvironmentVariables</key><dict><key>PATH</key><string>/opt/homebrew/bin:/usr/bin:/bin</string></dict>");
-		expect(plist?.content).toContain("<key>WorkingDirectory</key><string>/Users/serge</string>"); // #1154: not launchd's `/`
+		expect(plist?.content).toContain("<key>WorkingDirectory</key><string>/Users/former</string>"); // #1154: not launchd's `/`
 		expect(plan.commands.map((c) => [c.file, ...c.args].join(" "))).toEqual([
 			`launchctl bootout gui/501/${SERVICE_LABEL}`,
-			`launchctl bootstrap gui/501 /Users/serge/Library/LaunchAgents/${SERVICE_LABEL}.plist`,
+			`launchctl bootstrap gui/501 /Users/former/Library/LaunchAgents/${SERVICE_LABEL}.plist`,
 			`launchctl kickstart -k gui/501/${SERVICE_LABEL}`,
 		]);
 		expect(plan.commands[0].optional).toBe(true);
@@ -40,25 +40,25 @@ describe("the service each OS gets (#1141)", () => {
 	it("Linux: a Restart=always systemd user unit, enabled now, lingering so it runs with nobody logged in", () => {
 		const plan = servicePlan(linux);
 		const unit = plan.files.find((f) => f.path.endsWith("pags-up.service"));
-		expect(unit?.path).toBe("/home/serge/.config/systemd/user/pags-up.service");
-		expect(unit?.content).toContain('ExecStart="/usr/bin/node" "/home/serge/.config/proagentstore/pags-up-supervisor.mjs"');
+		expect(unit?.path).toBe("/home/former/.config/systemd/user/pags-up.service");
+		expect(unit?.content).toContain('ExecStart="/usr/bin/node" "/home/former/.config/proagentstore/pags-up-supervisor.mjs"');
 		expect(unit?.content).toContain("Restart=always");
 		expect(unit?.content).toContain("StartLimitIntervalSec=0");
 		expect(unit?.content).toContain('Environment="PATH=/usr/local/bin:/usr/bin"');
-		expect(plan.commands.map((c) => [c.file, ...c.args].join(" "))).toEqual(["systemctl --user daemon-reload", "systemctl --user enable --now pags-up.service", "loginctl enable-linger serge"]);
+		expect(plan.commands.map((c) => [c.file, ...c.args].join(" "))).toEqual(["systemctl --user daemon-reload", "systemctl --user enable --now pags-up.service", "loginctl enable-linger owner"]);
 	});
 
 	it("Windows: a Scheduled Task at startup as this user (S4U), restarted on failure, registered by a script it writes", () => {
 		const plan = servicePlan(win);
 		const task = plan.files.find((f) => f.path.endsWith("pags-up-task.ps1"));
 		expect(task?.content).toContain("New-ScheduledTaskTrigger -AtStartup");
-		expect(task?.content).toContain("-UserId 'DELL-LAPTOP\\serge' -LogonType S4U");
+		expect(task?.content).toContain("-UserId 'DELL-LAPTOP\\owner' -LogonType S4U");
 		expect(task?.content).toContain("-RestartCount 999");
 		// #1154: restart-on-failure only covers a task that failed to START — a killed supervisor is brought back by a
 		// trigger repeating every 5 minutes, and IgnoreNew keeps that to one supervisor.
 		expect(task?.content).toContain("-RepetitionInterval (New-TimeSpan -Minutes 5)");
 		expect(task?.content).toContain("-MultipleInstances IgnoreNew");
-		expect(task?.content).toContain(`-Execute 'C:\\Program Files\\nodejs\\node.exe' -Argument '"C:\\Users\\serge\\.config\\proagentstore\\pags-up-supervisor.mjs"'`);
+		expect(task?.content).toContain(`-Execute 'C:\\Program Files\\nodejs\\node.exe' -Argument '"C:\\Users\\former\\.config\\proagentstore\\pags-up-supervisor.mjs"'`);
 		expect(plan.commands).toEqual([expect.objectContaining({ file: "powershell.exe", args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", task?.path] })]);
 	});
 
@@ -81,8 +81,8 @@ describe("the service each OS gets (#1141)", () => {
 
 describe("supervisedPath (#1416): the pinned node's own directory is always on the supervised runner's PATH", () => {
 	it("prepends the pinned node's directory ahead of the install-time captured PATH", () => {
-		expect(supervisedPath({ platform: "linux", nodePath: "/home/serge/.nvm/versions/node/v22.4.0/bin/node", pathEnv: "/home/serge/.nvm/versions/node/v18.0.0/bin:/usr/bin" })).toBe(
-			"/home/serge/.nvm/versions/node/v22.4.0/bin:/home/serge/.nvm/versions/node/v18.0.0/bin:/usr/bin",
+		expect(supervisedPath({ platform: "linux", nodePath: "/home/former/.nvm/versions/node/v22.4.0/bin/node", pathEnv: "/home/former/.nvm/versions/node/v18.0.0/bin:/usr/bin" })).toBe(
+			"/home/former/.nvm/versions/node/v22.4.0/bin:/home/former/.nvm/versions/node/v18.0.0/bin:/usr/bin",
 		);
 	});
 
@@ -96,10 +96,10 @@ describe("supervisedPath (#1416): the pinned node's own directory is always on t
 	});
 
 	it("this is exactly what fixes nvm drift: the version `default` pointed at WHEN INSTALLED stays on PATH even after `default` moves elsewhere later — the captured PATH string would not", () => {
-		const atInstallTime = supervisedPath({ platform: "darwin", nodePath: "/Users/serge/.nvm/versions/node/v20.0.0/bin/node", pathEnv: "/Users/serge/.nvm/versions/node/v20.0.0/bin:/usr/bin" });
+		const atInstallTime = supervisedPath({ platform: "darwin", nodePath: "/Users/former/.nvm/versions/node/v20.0.0/bin/node", pathEnv: "/Users/former/.nvm/versions/node/v20.0.0/bin:/usr/bin" });
 		// nvm moved `default` to v22 sometime later; the captured PATH (from a NEW install) would no longer mention v20 at all —
 		// but this service was never reinstalled, so its baked-in PATH is still the v20 one computed above, and it still works.
-		expect(atInstallTime).toContain("/Users/serge/.nvm/versions/node/v20.0.0/bin");
+		expect(atInstallTime).toContain("/Users/former/.nvm/versions/node/v20.0.0/bin");
 	});
 });
 
@@ -115,7 +115,7 @@ describe("installing and removing it (#1141)", () => {
 			},
 		});
 		expect(r.ok).toBe(true);
-		expect(written).toEqual(["/home/serge/.config/proagentstore/pags-up-supervisor.mjs", "/home/serge/.config/systemd/user/pags-up.service"]);
+		expect(written).toEqual(["/home/former/.config/proagentstore/pags-up-supervisor.mjs", "/home/former/.config/systemd/user/pags-up.service"]);
 		expect(ran).toHaveLength(3);
 		expect(r.lines).toContain("keep it running with nobody logged in: skipped — Could not enable linger: Access denied");
 	});
@@ -132,7 +132,7 @@ describe("installing and removing it (#1141)", () => {
 		uninstallService(mac, { remove: (p) => removed.push(p), run: (f, a) => ran.push([f, ...a].join(" ")) });
 		expect(ran).toEqual([`launchctl bootout gui/501/${SERVICE_LABEL}`]);
 		expect(removed).toEqual(serviceRemovalPlan(mac).files);
-		expect(removed).toContain(`/Users/serge/Library/LaunchAgents/${SERVICE_LABEL}.plist`);
+		expect(removed).toContain(`/Users/former/Library/LaunchAgents/${SERVICE_LABEL}.plist`);
 	});
 });
 
@@ -261,19 +261,19 @@ describe("the supervisor, run for real (#1141)", () => {
 
 describe("a service pinned to a version manager's Node (#1154)", () => {
 	it("recognises nvm, nvm-windows, fnm, volta, asdf, nodenv and n — and not a system Node", () => {
-		expect(versionManagedNode("/Users/serge/.nvm/versions/node/v22.23.2/bin/node")).toBe("nvm");
-		expect(versionManagedNode("C:\\Users\\serge\\AppData\\Roaming\\nvm\\v22.11.0\\node.exe")).toBe("nvm");
-		expect(versionManagedNode("/home/serge/.local/share/fnm/node-versions/v22/installation/bin/node")).toBe("fnm");
-		expect(versionManagedNode("/Users/serge/.volta/tools/image/node/22.0.0/bin/node")).toBe("volta");
-		expect(versionManagedNode("/home/serge/.asdf/installs/nodejs/22.0.0/bin/node")).toBe("asdf");
-		expect(versionManagedNode("/home/serge/.nodenv/versions/22.0.0/bin/node")).toBe("nodenv");
+		expect(versionManagedNode("/Users/former/.nvm/versions/node/v22.23.2/bin/node")).toBe("nvm");
+		expect(versionManagedNode("C:\\Users\\former\\AppData\\Roaming\\nvm\\v22.11.0\\node.exe")).toBe("nvm");
+		expect(versionManagedNode("/home/former/.local/share/fnm/node-versions/v22/installation/bin/node")).toBe("fnm");
+		expect(versionManagedNode("/Users/former/.volta/tools/image/node/22.0.0/bin/node")).toBe("volta");
+		expect(versionManagedNode("/home/former/.asdf/installs/nodejs/22.0.0/bin/node")).toBe("asdf");
+		expect(versionManagedNode("/home/former/.nodenv/versions/22.0.0/bin/node")).toBe("nodenv");
 		expect(versionManagedNode("/usr/local/n/versions/node/22.0.0/bin/node")).toBe("n");
 		for (const plain of ["/opt/homebrew/bin/node", "/usr/bin/node", "C:\\Program Files\\nodejs\\node.exe"]) expect(versionManagedNode(plain)).toBeNull();
 	});
 
 	it("says so at install, on every OS — and says nothing for a system Node", () => {
 		for (const ctx of [mac, linux, win]) {
-			const pinned = { ...ctx, nodePath: ctx.platform === "win32" ? "C:\\Users\\serge\\AppData\\Roaming\\nvm\\v22\\node.exe" : "/home/serge/.nvm/versions/node/v22/bin/node" };
+			const pinned = { ...ctx, nodePath: ctx.platform === "win32" ? "C:\\Users\\former\\AppData\\Roaming\\nvm\\v22\\node.exe" : "/home/former/.nvm/versions/node/v22/bin/node" };
 			expect(servicePlan(pinned).notes.join("\n")).toMatch(/installed by nvm.*run `pags up --install-service` again/);
 			expect(servicePlan(ctx).notes.join("\n")).not.toMatch(/installed by/);
 		}
@@ -286,24 +286,24 @@ describe("macOS LaunchDaemon (#1149): restart after an unattended reboot", () =>
 	it("a system-domain job run AS the owner, with their HOME, staged in the config dir and installed root-owned", () => {
 		const plan = servicePlan(daemon);
 		const staged = plan.files.find((f) => f.path.endsWith(".daemon.plist"));
-		expect(staged?.path).toBe(`/Users/serge/.config/proagentstore/${SERVICE_LABEL}.daemon.plist`);
-		expect(staged?.content).toContain("<key>UserName</key><string>serge</string>");
-		expect(staged?.content).toContain("<key>HOME</key><string>/Users/serge</string>");
+		expect(staged?.path).toBe(`/Users/former/.config/proagentstore/${SERVICE_LABEL}.daemon.plist`);
+		expect(staged?.content).toContain("<key>UserName</key><string>owner</string>");
+		expect(staged?.content).toContain("<key>HOME</key><string>/Users/former</string>");
 		expect(staged?.content).toContain("<key>PAGS_SERVICE_DOMAIN</key><string>system</string>");
 		expect(staged?.content).toContain("<key>KeepAlive</key><true/>");
-		expect(staged?.content).toContain("<string>/Users/serge/.config/proagentstore/pags-up-supervisor.mjs</string>");
+		expect(staged?.content).toContain("<string>/Users/former/.config/proagentstore/pags-up-supervisor.mjs</string>");
 		// Nothing is written into /Library from the user's process: launchd needs root:wheel, so `sudo install` does it.
 		expect(plan.files.map((f) => f.path).every((p) => !p.startsWith("/Library"))).toBe(true);
 		expect(plan.commands.map((c) => [c.file, ...c.args].join(" "))).toEqual([
 			`launchctl bootout gui/501/${SERVICE_LABEL}`,
-			`rm -f /Users/serge/Library/LaunchAgents/${SERVICE_LABEL}.plist`,
+			`rm -f /Users/former/Library/LaunchAgents/${SERVICE_LABEL}.plist`,
 			`sudo launchctl bootout system/${SERVICE_LABEL}`,
 			`sudo install -o root -g wheel -m 644 ${staged?.path} ${daemonPlistPath()}`,
 			`sudo launchctl bootstrap system ${daemonPlistPath()}`,
 			`sudo launchctl kickstart -k system/${SERVICE_LABEL}`,
 		]);
 		expect(plan.commands.filter((c) => c.file === "sudo").every((c) => c.interactive)).toBe(true);
-		expect(plan.notes.join("\n")).toMatch(/starts at boot as serge, with nobody logged in/);
+		expect(plan.notes.join("\n")).toMatch(/starts at boot as owner, with nobody logged in/);
 		expect(plan.notes.join("\n")).toMatch(/FileVault/);
 	});
 
@@ -334,7 +334,7 @@ describe("macOS LaunchDaemon (#1149): restart after an unattended reboot", () =>
 		uninstallService(daemon, { run: (f, a) => ran.push([f, ...a].join(" ")), remove: (p) => removed.push(p) });
 		expect(ran).toEqual([`sudo launchctl bootout system/${SERVICE_LABEL}`, `sudo rm -f ${daemonPlistPath()}`]);
 		expect(removed).toEqual(serviceRemovalPlan(daemon).files);
-		expect(removed).toContain(`/Users/serge/.config/proagentstore/${SERVICE_LABEL}.daemon.plist`);
+		expect(removed).toContain(`/Users/former/.config/proagentstore/${SERVICE_LABEL}.daemon.plist`);
 	});
 
 	it("without --daemon nothing changes: still the LaunchAgent", () => {

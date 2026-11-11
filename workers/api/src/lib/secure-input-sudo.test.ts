@@ -193,7 +193,7 @@ describe("failure leaves the secret READY, says why, and is never retried", () =
 
 	it("a command sudo's POLICY does not allow: not delivered, the reason is sudo's, and a retry is said not to help", async () => {
 		const id = await readyRequest(["rm", "-rf", "/"]);
-		runnerSays({ ok: false, exitCode: 1, stderr: "Sorry, user serge is not allowed to execute '/bin/rm -rf /' as root on mini.local.\n", stdout: "" });
+		runnerSays({ ok: false, exitCode: 1, stderr: "Sorry, user owner is not allowed to execute '/bin/rm -rf /' as root on mini.local.\n", stdout: "" });
 		const out = await deliver(id);
 		expect(out).toMatchObject({ delivered: false, consumedValue: false, status: "ready" });
 		expect(out?.reason).toMatch(/not allowed to execute/);

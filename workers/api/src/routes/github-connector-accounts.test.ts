@@ -23,7 +23,7 @@ const env = () => ({ DB: d1.DB }) as unknown as Env;
 
 beforeEach(() => {
 	d1 = realSchemaD1();
-	d1.exec(`INSERT INTO users (id, github_login) VALUES ('u1', 'serge-ivo'), ('u2', 'other')`);
+	d1.exec(`INSERT INTO users (id, github_login) VALUES ('u1', 'owner-login'), ('u2', 'other')`);
 	d1.exec(`INSERT INTO agents (id, owner_id, slug, name) VALUES ('a1', 'u1', 't1080-coder', 'Coder')`);
 	d1.exec(`INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES ('i1', 'a1', 'u1', 'active', '{}')`);
 });
@@ -48,11 +48,11 @@ describe("GitHub is a first-class connector (#1080)", () => {
 	it("list_connectors: GitHub is connected, and its accounts are the account's verified installation bindings — no one else's", async () => {
 		expect((await call("GET", "/v1/connectors")).body.connectors.find((c: { id: string }) => c.id === "github")).toMatchObject({ connected: false, accounts: [] });
 		bind("u1", "ChessClubs-online", 171531492);
-		bind("u1", "serge-ivo", 7, "User");
+		bind("u1", "owner-login", 7, "User");
 		bind("u2", "someone-elses-org", 9);
 		const github = (await call("GET", "/v1/connectors")).body.connectors.find((c: { id: string }) => c.id === "github");
 		expect(github).toMatchObject({ auth: "app", connected: true, accountChoice: "repository_owner", flow: null });
-		expect(github.accounts.map((a: { accountId: string }) => a.accountId).sort()).toEqual(["ChessClubs-online", "serge-ivo"]);
+		expect(github.accounts.map((a: { accountId: string }) => a.accountId).sort()).toEqual(["ChessClubs-online", "owner-login"]);
 		expect(github.accounts.find((a: { accountId: string }) => a.accountId === "ChessClubs-online").label).toMatch(/organisation · App installation 171531492/);
 		expect(JSON.stringify(github)).not.toContain("someone-elses-org");
 	});

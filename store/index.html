@@ -399,8 +399,6 @@ header nav>span{padding:0.8rem 0.25rem;border-bottom:1px solid var(--line,#1f1f1
         card.href = `/agents/${encodeURIComponent(a.slug || a.id)}/`;
         const iconBg = a.icon_bg || '#7c3aed';
         const icon = a.icon || '&#9889;';
-        const creatorLabel = displayName(a.creator_name || a.creator_login);
-        const creatorHref = a.creator_login && !isEmail(a.creator_login) ? `/developers/${encodeURIComponent(a.creator_login)}/` : '';
         card.innerHTML = `
           <div class="agent-icon" style="background:${esc(iconBg)}">${icon}</div>
           <div class="agent-body">
@@ -410,7 +408,6 @@ header nav>span{padding:0.8rem 0.25rem;border-bottom:1px solid var(--line,#1f1f1
               <span class="tag">${esc(a.store_type || 'agent')}</span>
               <span class="tag">${esc(a.category)}</span>
               ${a.subscriber_count > 0 ? `<span style="font-size:0.68rem;color:var(--muted-soft)">${a.subscriber_count} sub${a.subscriber_count !== 1 ? 's' : ''}</span>` : ''}
-              ${creatorLabel ? creatorByline(creatorLabel, creatorHref) : ''}
             </div>
           </div>
           <span class="agent-cta">Get Agent</span>`;
@@ -433,17 +430,6 @@ header nav>span{padding:0.8rem 0.25rem;border-bottom:1px solid var(--line,#1f1f1
 
 
     function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
-    function isEmail(value) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '')); }
-    function displayName(value) {
-      const label = String(value || '').trim();
-      if (!label) return '';
-      return isEmail(label) ? 'Creator' : label.replace(/^@/, '');
-    }
-    function creatorByline(label, href) {
-      const text = `by ${esc(label)}`;
-      if (!href) return `<span class="creator-link">${text}</span>`;
-      return `<a href="${esc(href)}" class="creator-link" onclick="event.stopPropagation()">${text}</a>`;
-    }
 
     loadAgents();
   </script>

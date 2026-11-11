@@ -13,7 +13,7 @@ import { startRunnerServer } from "../server.js";
 import { forgetInjected, maskInjected, outgoing, redactPane, redactPanesOf, rememberInjected } from "./pane-redact.js";
 
 /** The real shape (workers/api/src/lib/session.ts): base64url(JSON payload) "." base64url(HMAC). Two segments. */
-const PAGS_SESSION = `${Buffer.from(JSON.stringify({ uid: "github:serge-ivo", roles: ["user"], iat: 1, exp: 2 })).toString("base64url")}.${"x".repeat(43)}`;
+const PAGS_SESSION = `${Buffer.from(JSON.stringify({ uid: "github:owner-login", roles: ["user"], iat: 1, exp: 2 })).toString("base64url")}.${"x".repeat(43)}`;
 
 afterEach(() => forgetInjected());
 

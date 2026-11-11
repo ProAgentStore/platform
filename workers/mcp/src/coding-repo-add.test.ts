@@ -129,7 +129,7 @@ describe("coding_repo_add — the clone's transport (#858)", () => {
 });
 
 describe("a Windows drive-letter path is told what to use instead (#1237)", () => {
-	it.each(["C:\\Users\\serge\\dev\\stash", "D:/work/stash"])("%s → use a home-relative ~/ path, nothing sent", async (path) => {
+	it.each(["C:\\Users\\former\\dev\\stash", "D:/work/stash"])("%s → use a home-relative ~/ path, nothing sent", async (path) => {
 		const { calls, tool } = setup();
 		const out = textOf(await tool.handler({ instance_id: "i1", path, github_repo: "proappstore-online/stash" }));
 		expect(out).toMatch(/^Error: Windows drive-letter paths are not supported — use a home-relative `~\/` path instead \(e\.g\. `~\/dev\/myrepo`\)/);

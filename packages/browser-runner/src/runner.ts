@@ -810,7 +810,7 @@ export class LocalRunner {
 	/**
 	 * After a WRITE action, read the field's REAL value back via the standard
 	 * browser_evaluate tool (evaluates on the element by ref — no reinvented DOM
-	 * traversal). Masked/intl fields transform input (e.g. "0404453580" → "+61404453580"),
+	 * traversal). Masked/intl fields transform input (e.g. "0400123456" → "+61400123456"),
 	 * so without this signal the brain can't tell the value "took" and oscillates
 	 * between formats. Returns the prompt's expected "…now reads…" / "REJECTED…" line.
 	 * Never throws — best-effort feedback.
@@ -1107,7 +1107,7 @@ export class LocalRunner {
 		const redirected = websitePolicy ? websiteAccessBlock(websitePolicy, active.url(), true) : null;
 		if (redirected) return this.websiteRefusal(redirected);
 		// For a WRITE, read the field's real value back (masked/intl fields transform
-		// input, e.g. "0404453580" → "+61404453580") so the brain knows it took and
+		// input, e.g. "0400123456" → "+61400123456") so the brain knows it took and
 		// stops oscillating between formats — the signal inspectField used to give.
 		await mcp.selectPage(active);
 		let feedback = this.conciseFeedback(text);

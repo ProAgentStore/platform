@@ -68,14 +68,14 @@ describe("claimCandidates", () => {
 	// The three refusals are the whole safety argument (#460): nothing here infers that two names
 	// are one machine, it only ever removes names that would be unsafe to offer.
 	it("never offers a name another machine has already proven is its own", () => {
-		const nodes = [node({ node: "Sergeys-Mac-mini.local", machineId: "other-machine-id" })];
+		const nodes = [node({ node: "runner-host.local", machineId: "other-machine-id" })];
 		expect(claimCandidates(nodes, identity())).toEqual([]);
 	});
 
 	it("never offers a name whose runner is connected right now", () => {
 		// This machine has not registered yet when the question is asked, so a live socket under
 		// some other name is evidence of a DIFFERENT machine — the most expensive wrong answer.
-		const nodes = [node({ node: "Sergeys-Mac-mini.local", connected: true })];
+		const nodes = [node({ node: "runner-host.local", connected: true })];
 		expect(claimCandidates(nodes, identity())).toEqual([]);
 	});
 

@@ -46,11 +46,11 @@ describe("McpRuntime (standard @playwright/mcp)", () => {
 		expect(snap).toMatch(/\[ref=[\w]+\]/); // ref-annotated, exactly like a direct Claude+PW session
 		const m = snap.match(/textbox "Full name"[^\n]*\[ref=([\w]+)\]/);
 		expect(m).toBeTruthy();
-		const typed = await launched.mcp.callTool("browser_type", { element: "Full name textbox", target: (m as RegExpMatchArray)[1], text: "Sergey Ivochkin" });
+		const typed = await launched.mcp.callTool("browser_type", { element: "Full name textbox", target: (m as RegExpMatchArray)[1], text: "Owner Name" });
 		expect(typed.isError ?? false, launched.mcp.textOf(typed)).toBe(false); // keep the tool's actual failure diagnosis
 		// The field genuinely holds the value (read it back with the standard tool).
 		const evalRes = launched.mcp.textOf(await launched.mcp.callTool("browser_evaluate", { function: "() => document.querySelector('input[name=fullName]').value" }, { internal: true }));
-		expect(evalRes).toContain("Sergey Ivochkin");
+		expect(evalRes).toContain("Owner Name");
 	}, 60_000);
 
 	// #1409: the recorder wraps `callTool` itself, so every one of these real calls — through the

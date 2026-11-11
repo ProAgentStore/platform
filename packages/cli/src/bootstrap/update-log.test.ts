@@ -59,7 +59,7 @@ describe("the step-by-step update log (#1151)", () => {
 	});
 
 	it("what it uploads goes through the shared redactor — a session token a step quoted never reaches the platform (#1166)", () => {
-		const session = `${Buffer.from(JSON.stringify({ uid: "github:serge-ivo", exp: 2 })).toString("base64url")}.${"s".repeat(43)}`;
+		const session = `${Buffer.from(JSON.stringify({ uid: "github:owner-login", exp: 2 })).toString("base64url")}.${"s".repeat(43)}`;
 		logUpdateStep(`restart: pags up --pags-token ${session} --headless`, env);
 		logUpdateStep("install: npm i -g @proagentstore/cli@0.4.158 token=npm_abcdefgh12345678", env);
 		const tail = updateLogTail(env) ?? "";

@@ -155,10 +155,6 @@ const pages = {
 	llmsFullTxt: fs.readFileSync(path.join(storeDir, "llms-full.txt"), "utf-8"),
 	skillsJson: fs.readFileSync(path.join(storeDir, "skills.json"), "utf-8"),
 	mcpServerJson: fs.readFileSync(path.join(storeDir, ".well-known", "mcp-server.json"), "utf-8"),
-	developerProfilePage: fs.readFileSync(
-		path.join(storeDir, "developers", "profile.html"),
-		"utf-8",
-	),
 };
 
 // Binary assets (base64 encoded)

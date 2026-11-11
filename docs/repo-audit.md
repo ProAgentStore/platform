@@ -1,11 +1,11 @@
 # Store org & repo audit — naming standard and consolidation (#900)
 
-Status: **proposal, nothing executed.** Every rename, merge, archive or deletion below needs Serge's
-approval and its own ticket. Items that need Serge at the GitHub org-settings level are marked
-**🔴 needs-human (Serge)**.
+Status: **proposal, nothing executed.** Every rename, merge, archive or deletion below needs the owner's
+approval and its own ticket. Items that need the owner at the GitHub org-settings level are marked
+**🔴 needs-human (owner)**.
 
 Snapshot taken 2026-10-01 with `gh repo list <org> --limit 1000` against every store-family org
-the `serge-ivo` account belongs to, plus `gh api repos/<slug>/contents` (top-level tree, workflows,
+the `owner-login` account belongs to, plus `gh api repos/<slug>/contents` (top-level tree, workflows,
 README) on every non-product repo. Raw counts are from that snapshot. Expect them to drift.
 
 ---
@@ -235,21 +235,21 @@ is `.github`, which is fine.
 
 | # | Current | Proposed | Severity | Who |
 |---|---|---|---|---|
-| G1 | org `ProAgentStore` | `proagentstore-online` | High-impact rename (see §4) | 🔴 needs-human (Serge) |
-| G2 | org `FreeAgentStore` | `freeagentstore-online` | Medium | 🔴 needs-human (Serge) |
-| G3 | org `FreeDocStore` | `freedocstore-online` | Medium. Its README calls `FreeDocStore` "canonical", so that statement changes too. | 🔴 needs-human (Serge) |
-| G4 | org `ProDocStore-online` | `prodocstore-online` | Cosmetic (case only) | 🔴 needs-human (Serge) |
-| G5 | org `HeartFull-online` | `heartfull-online` | Cosmetic (case only) | 🔴 needs-human (Serge) |
-| G6 | `freeappstore-online/freeappstore` | `storefront`, or fold into `platform` | Medium. Admin Worker raw URL, ops docs, app `CLAUDE.md`s. | 🔴 Serge (repo rename) |
-| G7 | `freegamestore-online/freegamestore` | `storefront` | **High.** Every game's `deploy.yml` calls `…/freegamestore/.github/workflows/game-ci.yml@main`. | 🔴 Serge |
-| G8 | `proappstore-online/proappstore` | `storefront` | High. Every app's `ci.yml` calls `…/proappstore/.github/workflows/app-ci.yml@main`. | 🔴 Serge |
-| G9 | `progamestore-online/{storefront,progamestore,marketing}` | one `storefront` (see M1) | High (live deploy race) | 🔴 Serge |
-| G10 | `FreeDocStore/freedocstore-docs` | `docs` | Low | 🔴 Serge |
-| G11 | `OpenFrontierOne/openfrontier-docs` | `docs` (and `openfrontier` → `website`) | Low | 🔴 Serge |
+| G1 | org `ProAgentStore` | `proagentstore-online` | High-impact rename (see §4) | 🔴 needs-human (owner) |
+| G2 | org `FreeAgentStore` | `freeagentstore-online` | Medium | 🔴 needs-human (owner) |
+| G3 | org `FreeDocStore` | `freedocstore-online` | Medium. Its README calls `FreeDocStore` "canonical", so that statement changes too. | 🔴 needs-human (owner) |
+| G4 | org `ProDocStore-online` | `prodocstore-online` | Cosmetic (case only) | 🔴 needs-human (owner) |
+| G5 | org `HeartFull-online` | `heartfull-online` | Cosmetic (case only) | 🔴 needs-human (owner) |
+| G6 | `freeappstore-online/freeappstore` | `storefront`, or fold into `platform` | Medium. Admin Worker raw URL, ops docs, app `CLAUDE.md`s. | 🔴 the owner (repo rename) |
+| G7 | `freegamestore-online/freegamestore` | `storefront` | **High.** Every game's `deploy.yml` calls `…/freegamestore/.github/workflows/game-ci.yml@main`. | 🔴 the owner |
+| G8 | `proappstore-online/proappstore` | `storefront` | High. Every app's `ci.yml` calls `…/proappstore/.github/workflows/app-ci.yml@main`. | 🔴 the owner |
+| G9 | `progamestore-online/{storefront,progamestore,marketing}` | one `storefront` (see M1) | High (live deploy race) | 🔴 the owner |
+| G10 | `FreeDocStore/freedocstore-docs` | `docs` | Low | 🔴 the owner |
+| G11 | `OpenFrontierOne/openfrontier-docs` | `docs` (and `openfrontier` → `website`) | Low | 🔴 the owner |
 | G12 | standalone `admin`/`auth`/`host`/`cli`/`console`/`ai`/`brand`/`ops` in PGS, FWS, FAGS, PAS, FAS, FGS, HeartFull | fold into `platform` (see §3) | Varies | per merge |
-| G13 | Test fixtures across orgs (137 `e2e-create-*` in FGS, ~12 in FAS, ~6 in FGS active, ~5 in PAS, 2 in PWS, 1 fork in FGS) | delete | Low risk, large count reduction | 🔴 needs-human (Serge): deletions |
-| G14 | 4 empty FAGS repos | delete | None | 🔴 needs-human (Serge) |
-| G15 | `proappstore-online/freedocstore-editor` | transfer to the FreeDocStore org, or confirm it is a PAS app | Low | 🔴 needs-human (Serge): transfer |
+| G13 | Test fixtures across orgs (137 `e2e-create-*` in FGS, ~12 in FAS, ~6 in FGS active, ~5 in PAS, 2 in PWS, 1 fork in FGS) | delete | Low risk, large count reduction | 🔴 needs-human (owner): deletions |
+| G14 | 4 empty FAGS repos | delete | None | 🔴 needs-human (owner) |
+| G15 | `proappstore-online/freedocstore-editor` | transfer to the FreeDocStore org, or confirm it is a PAS app | Low | 🔴 needs-human (owner): transfer |
 
 **Recommendation on G6–G8:** do **not** rename existing standalone storefront repos just for the
 name. The rename touches every product repo's CI, and reusable-workflow `uses:` references should
@@ -393,7 +393,7 @@ importantly, they remove the two live duplicate-deploy hazards (PGS Pages, FAGS 
 2. **M4, M8, M9, P2.** Zero-risk cleanups.
 3. **P1.** Also change the e2e flow so fixtures stop accumulating.
 4. **M2, M7, M10, M5, M6.** Real merges. One ticket each.
-5. **Org renames G1–G5.** Last, and only if Serge wants them (see §4.4 for the cheaper
+5. **Org renames G1–G5.** Last, and only if the owner wants them (see §4.4 for the cheaper
    alternative).
 
 ### 4.3 Checklist templates
@@ -411,7 +411,7 @@ importantly, they remove the two live duplicate-deploy hazards (PGS Pages, FAGS 
 - [ ] **Delete the deploy workflow in `X`**, so there is only one source.
 - [ ] Update references: PAGS `coding_repos` rows, README/ops links, raw URLs, CLI clone URLs and
       npm `repository` fields.
-- [ ] 🔴 needs-human (Serge): archive `X`. Do not delete it, because archived repos keep the
+- [ ] 🔴 needs-human (owner): archive `X`. Do not delete it, because archived repos keep the
       redirect target and history.
 
 **Merging duplicate storefronts (M1):**
@@ -422,7 +422,7 @@ importantly, they remove the two live duplicate-deploy hazards (PGS Pages, FAGS 
       canonical one.
 - [ ] Optionally move the canonical one into `progamestore-online/platform/sites/storefront`.
 - [ ] Re-point PAGS bindings if any exist.
-- [ ] 🔴 needs-human (Serge): archive the others.
+- [ ] 🔴 needs-human (owner): archive the others.
 
 **Renaming a repo (G6–G11):**
 - [ ] Search every org for the old slug: `gh search code` (incomplete index) **plus** a scripted
@@ -431,7 +431,7 @@ importantly, they remove the two live duplicate-deploy hazards (PGS Pages, FAGS 
       update PR or commit per repo.
 - [ ] Update raw URLs, CLI clone URLs (and release new CLI versions) and Pages GitHub
       integrations.
-- [ ] 🔴 needs-human (Serge): rename.
+- [ ] 🔴 needs-human (owner): rename.
 - [ ] Update PAGS `coding_repos` rows. Run a deploy-watch tick and confirm it resolves.
 - [ ] Never re-create the old name.
 
@@ -439,7 +439,7 @@ importantly, they remove the two live duplicate-deploy hazards (PGS Pages, FAGS 
 - [ ] Reserve the new slug if needed. Note: you cannot reserve by creating an org and then
       rename onto it; free the name first.
 - [ ] Inventory everything in §3.5 item 6 for that org.
-- [ ] 🔴 needs-human (Serge): rename in org settings. GitHub warns that the old name becomes
+- [ ] 🔴 needs-human (owner): rename in org settings. GitHub warns that the old name becomes
       available to others.
 - [ ] Immediately create a placeholder org under the old name to block squatting. This requires
       the name to be released first; GitHub may hold it briefly.
@@ -479,7 +479,7 @@ leaves G1–G3 as an optional cosmetic decision.
 
 ---
 
-## 5. Open questions for Serge
+## 5. Open questions for the owner
 
 1. **Org renames:** rename `ProAgentStore`, `FreeAgentStore` and `FreeDocStore` to
    `<store>-online`, or keep them and rely on the alias table? *Default: alias table now; defer

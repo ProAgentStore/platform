@@ -143,8 +143,8 @@ describe("the owner's five machines all come back with a series (#1380)", () => 
 	// The shape reported on 26 Oct: three macOS machines online, a Windows one, and a Mac silent for hours. Every one was reporting; the
 	// page showed two. The API's half of the answer: each machine arrives with `latest` and a non-empty `points` series under its own name.
 	const FLEET: Array<{ name: string; platform: string; id: string; instance: string; ageMs: number }> = [
-		{ name: "Sergeys-RL-Laptop.local", platform: "darwin", id: "machine-rl-0000000001", instance: "i1", ageMs: 5_000 },
-		{ name: "Sergeys-Mac-mini.local", platform: "darwin", id: "machine-mini-00000002", instance: "i1", ageMs: 30_000 },
+		{ name: "Owner-RL-Laptop.local", platform: "darwin", id: "machine-rl-0000000001", instance: "i1", ageMs: 5_000 },
+		{ name: "runner-host.local", platform: "darwin", id: "machine-mini-00000002", instance: "i1", ageMs: 30_000 },
 		{ name: "dell-laptop", platform: "win32", id: "machine-dell-00000003", instance: "i2", ageMs: 20_000 },
 		{ name: "pink-laptop", platform: "darwin", id: "machine-pink-00000004", instance: "i2", ageMs: 200_000 },
 		{ name: "tiny-laptop", platform: "darwin", id: "machine-tiny-00000005", instance: "i2", ageMs: 3_600_000 },
@@ -170,7 +170,7 @@ describe("the owner's five machines all come back with a series (#1380)", () => 
 	it("marks the silent ones stale instead of leaving them out", async () => {
 		const { json } = await get("/resources?tier=dense");
 		const stale = Object.fromEntries(json.machines.map((m: { name: string; stale: boolean }) => [m.name, m.stale]));
-		expect(stale).toMatchObject({ "Sergeys-RL-Laptop.local": false, "Sergeys-Mac-mini.local": false, "dell-laptop": false, "pink-laptop": true, "tiny-laptop": true });
+		expect(stale).toMatchObject({ "Owner-RL-Laptop.local": false, "runner-host.local": false, "dell-laptop": false, "pink-laptop": true, "tiny-laptop": true });
 	});
 
 	it("a machine's history is read under every hostname the machine has, so a differently-cased alias does not empty its series", async () => {

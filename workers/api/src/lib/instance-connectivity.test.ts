@@ -78,12 +78,12 @@ beforeEach(() => {
 describe("runtimeConnectivity — the pin is a fact about connectivity (#461)", () => {
 	it("carries the pin and the machine that is up instead", async () => {
 		liveNodeIgnoringPin.mockResolvedValue("Mac");
-		const { env } = db({ pins: { i1: "Sergeys-Mac-mini.local" }, registrations: [reg("i1", "Sergeys-Mac-mini.local")] });
+		const { env } = db({ pins: { i1: "runner-host.local" }, registrations: [reg("i1", "runner-host.local")] });
 		const facts = await runtimeConnectivity(env, "i1", UID);
 		expect(facts).toMatchObject({
 			hasRuntimeRow: true,
 			relayConnected: false,
-			pinnedNode: "Sergeys-Mac-mini.local",
+			pinnedNode: "runner-host.local",
 			liveNodeExcludedByPin: "Mac",
 		});
 	});

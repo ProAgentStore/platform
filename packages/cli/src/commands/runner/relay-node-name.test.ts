@@ -2,7 +2,7 @@
  * The relay socket connects under the name the process registers and heartbeats under (#922).
  *
  * It used to read `os.hostname()` afresh on every (re)connect while registration and the heartbeat
- * kept the name read at startup. macOS renames a machine under a running process (`Sergeys-Mac-mini
+ * kept the name read at startup. macOS renames a machine under a running process (`Owner-Mac-mini
  * .local` → `Macmini`), so after the next reconnect the socket sat in a relay slot nobody's row named:
  * list_runner_nodes probed the registered name and showed the live machine disconnected with a fresh
  * `lastSeenAt`, and the slot that did hold the socket reported a `lastSeenAt` weeks old.
@@ -51,15 +51,15 @@ describe("the relay socket's node name (#922)", () => {
 	});
 
 	it("keeps that name across a reconnect after the hostname has moved", async () => {
-		host.name = "Sergeys-Mac-mini.local";
-		const handle = openRelaySocket("inst-1", "wss://api.test", async () => "relay-token", "http://127.0.0.1:9", "rt", false, undefined, undefined, undefined, "Sergeys-Mac-mini.local");
+		host.name = "runner-host.local";
+		const handle = openRelaySocket("inst-1", "wss://api.test", async () => "relay-token", "http://127.0.0.1:9", "rt", false, undefined, undefined, undefined, "runner-host.local");
 		await vi.waitFor(() => expect(FakeSocket.urls).toHaveLength(1));
 		// macOS renames the machine under the running process, then the socket drops (a sleep, a
 		// network change) and the runner reconnects on its backoff.
 		host.name = "Macmini";
 		FakeSocket.last.onclose?.({ code: 1006, reason: "" });
 		await vi.waitFor(() => expect(FakeSocket.urls).toHaveLength(2), { timeout: 3000 });
-		expect(FakeSocket.urls.map(nodeOf)).toEqual(["Sergeys-Mac-mini.local", "Sergeys-Mac-mini.local"]);
+		expect(FakeSocket.urls.map(nodeOf)).toEqual(["runner-host.local", "runner-host.local"]);
 		handle.close();
 	});
 

@@ -50,7 +50,7 @@ describe("buildListQuery", () => {
 	});
 
 	it("trims the value it does send, so a stray space is not part of the predicate", () => {
-		expect(new URLSearchParams(buildListQuery({ owner: " serge-ivo " }, 0)).get("owner")).toBe("serge-ivo");
+		expect(new URLSearchParams(buildListQuery({ owner: " owner-login " }, 0)).get("owner")).toBe("owner-login");
 	});
 
 	it("omits offset on the first page so it has one canonical URL", () => {

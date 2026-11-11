@@ -39,7 +39,7 @@ beforeEach(() => {
 	node("Macmini", "2026-09-11 23:35:32");
 	// The shared row holds the last registrant — the Mac mini, not the machine the agent is pinned to.
 	d1.exec(`INSERT INTO instance_runtimes (instance_id, user_id, endpoint_url, runner_version, runner_node, status, last_seen_at)
-	         VALUES ('i1', 'u1', 'relay://', '0.4.69', 'Sergeys-Mac-mini.local', 'online', '2026-10-05 06:06:10')`);
+	         VALUES ('i1', 'u1', 'relay://', '0.4.69', 'runner-host.local', 'online', '2026-10-05 06:06:10')`);
 	getBoundRunnerConn.mockReset();
 	callRunner.mockReset();
 	callRunner.mockResolvedValue({ ok: true });

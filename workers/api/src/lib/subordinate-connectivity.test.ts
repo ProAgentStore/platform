@@ -111,10 +111,10 @@ describe("classifySubordinateConnectivity", () => {
 			requiresRunner: true,
 			hasRuntimeRow: true,
 			relayConnected: false,
-			node: "Sergeys-MacBook-Pro.local",
+			node: "Owner-MacBook-Pro.local",
 			lastSeenAt: secondsAgo(10),
-			pinnedNode: "Sergeys-Mac-mini.local",
-			liveNodeExcludedByPin: "Sergeys-MacBook-Pro.local",
+			pinnedNode: "runner-host.local",
+			liveNodeExcludedByPin: "Owner-MacBook-Pro.local",
 			now: NOW,
 		});
 		expect(c.state).toBe("pinned-machine-offline");
@@ -125,8 +125,8 @@ describe("classifySubordinateConnectivity", () => {
 		expect(c.message).not.toContain("pags up");
 		// Both machines named — the dead pin and the live one — since the fix is to repoint the
 		// pin, and the user cannot do that without knowing what to repoint it TO.
-		expect(c.message).toContain("Sergeys-Mac-mini.local");
-		expect(c.message).toContain("Sergeys-MacBook-Pro.local");
+		expect(c.message).toContain("runner-host.local");
+		expect(c.message).toContain("Owner-MacBook-Pro.local");
 		// The sentence must not be suffixed with "(machine: <the excluded machine>)" — that is the
 		// one machine this agent is deliberately not allowed to run on.
 		expect(c.message).not.toContain("machine: ");
@@ -160,11 +160,11 @@ describe("classifySubordinateConnectivity", () => {
 		const facts = {
 			hasRuntimeRow: true,
 			relayConnected: false,
-			node: "Sergeys-MacBook-Pro.local",
+			node: "Owner-MacBook-Pro.local",
 			runnerVersion: "0.4.45",
 			lastSeenAt: secondsAgo(10),
-			pinnedNode: "Sergeys-Mac-mini.local",
-			liveNodeExcludedByPin: "Sergeys-MacBook-Pro.local",
+			pinnedNode: "runner-host.local",
+			liveNodeExcludedByPin: "Owner-MacBook-Pro.local",
 		};
 		const viaSubordinate = classifySubordinateConnectivity({ requiresRunner: true, ...facts, now: NOW });
 		const viaFacts = describeFacts(facts);

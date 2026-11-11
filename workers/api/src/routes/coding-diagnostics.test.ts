@@ -50,7 +50,7 @@ const INSTANCE = "inst-1";
 /** Old node (stale `instance_runtimes` row) — offline after repin. */
 const OLD_NODE = "RLs-MacBook-Air.local";
 /** New node (where the runner actually is after repin). */
-const NEW_NODE = "Sergeys-Mac-mini.local";
+const NEW_NODE = "runner-host.local";
 
 /**
  * Build an Env whose `instance_runtimes` default row still names the OLD node — the

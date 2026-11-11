@@ -66,9 +66,9 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 		const s = snap.snapshot;
 
 		// 3. Act on each field purely by its snapshot ref.
-		await runner.browserAct({ action: "type", ref: ref(s, "textbox", "Full name"), name: "Full name", text: "Sergey Ivochkin" });
-		await runner.browserAct({ action: "type", ref: ref(s, "textbox", "Email"), name: "Email", text: "sergey@example.com" });
-		await runner.browserAct({ action: "type", ref: ref(s, "textbox", "Phone"), name: "Phone", text: "+61404453580" });
+		await runner.browserAct({ action: "type", ref: ref(s, "textbox", "Full name"), name: "Full name", text: "Owner Name" });
+		await runner.browserAct({ action: "type", ref: ref(s, "textbox", "Email"), name: "Email", text: "other@example.com" });
+		await runner.browserAct({ action: "type", ref: ref(s, "textbox", "Phone"), name: "Phone", text: "+61400123456" });
 		await runner.browserAct({ action: "select", ref: ref(s, "combobox", "Work authorization"), name: "Work authorization", text: "Authorized to work in the United States" });
 		await runner.browserAct({ action: "upload", ref: ref(s, "button", "Resume"), name: "Resume" }, resume());
 		await runner.browserAct({ action: "type", ref: ref(s, "textbox", "Cover note"), name: "Cover note", text: "Excited to apply." });
@@ -79,8 +79,8 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 		// 5. The server actually recorded the submission with the right data.
 		expect(server.submissions.length).toBe(1);
 		const sub = server.submissions[0];
-		expect(sub.fields.fullName).toBe("Sergey Ivochkin");
-		expect(sub.fields.email).toBe("sergey@example.com");
+		expect(sub.fields.fullName).toBe("Owner Name");
+		expect(sub.fields.email).toBe("other@example.com");
 		expect(sub.fields.workAuthorization).toBe("Authorized to work in the United States");
 		expect(sub.resume?.filename).toContain("resume");
 		expect(sub.resume?.size).toBeGreaterThan(0);
@@ -154,15 +154,15 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 	}, 120_000);
 
 	it("reads back a masked field's real value so the brain doesn't oscillate", async () => {
-		// A phone field that transforms input like a real intl mask: "0404…" → "+61404…".
+		// A phone field that transforms input like a real intl mask: "0400…" → "+61400…".
 		// Without read-back the brain can't tell the value took and re-types forever.
 		await runner.browserAct({ action: "navigate", url: server.jobUrl });
 		await runner.browsers.current.activePage!.setContent("<input aria-label=Phone oninput=\"this.value=this.value.replace(/^0/,'+61')\">");
 		const snap = await runner.browserSnapshot();
-		const res = await runner.browserAct({ action: "type", ref: ref(snap.snapshot, "textbox", "Phone"), name: "Phone", text: "0404453580" });
+		const res = await runner.browserAct({ action: "type", ref: ref(snap.snapshot, "textbox", "Phone"), name: "Phone", text: "0400123456" });
 		// The runner reports what the field ACTUALLY holds now (the transformed value).
 		expect(res.feedback ?? "").toMatch(/now reads/i);
-		expect(res.feedback ?? "").toContain("+61404453580");
+		expect(res.feedback ?? "").toContain("+61400123456");
 	}, 120_000);
 
 	it("upload refuses an unbound drop-zone instead of guessing a hidden file input (#1490)", async () => {

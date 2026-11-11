@@ -11,7 +11,7 @@ import { maskConnectorResult, maskPaneText } from "./pane-mask.js";
 import { recordTerminalSnapshot, recordTerminalToolUse } from "./terminal-record.js";
 import type { Env } from "../types.js";
 
-const PAGS_SESSION = `${Buffer.from(JSON.stringify({ uid: "github:serge-ivo", roles: ["user"], iat: 1, exp: 2 })).toString("base64url")}.${"x".repeat(43)}`;
+const PAGS_SESSION = `${Buffer.from(JSON.stringify({ uid: "github:owner-login", roles: ["user"], iat: 1, exp: 2 })).toString("base64url")}.${"x".repeat(43)}`;
 const CORPUS = [
 	"npm run build && git status",
 	"$ export OPENAI_API_KEY=sk-proj-abcdefghijklmnop1234",

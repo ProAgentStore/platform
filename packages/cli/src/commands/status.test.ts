@@ -11,7 +11,7 @@ import { describeStatus } from "./status.js";
 
 const NOW = Date.parse("2026-10-14T10:00:00Z");
 const LOCK = (over: Partial<RunnerLockFile> = {}) =>
-	({ v: 1, rsid: "r", pid: 4242, pidStartedAt: "", startedAt: NOW - 30 * 60_000, port: 49171, node: "pink-laptop", machineId: null, account: "serge-ivo", version: "0.4.125", launch: "background", launchDetail: "/l/runner.log", childPids: [], nonce: "n", runnerToken: "t", heartbeatAt: NOW, ...over }) as RunnerLockFile;
+	({ v: 1, rsid: "r", pid: 4242, pidStartedAt: "", startedAt: NOW - 30 * 60_000, port: 49171, node: "pink-laptop", machineId: null, account: "owner-login", version: "0.4.125", launch: "background", launchDetail: "/l/runner.log", childPids: [], nonce: "n", runnerToken: "t", heartbeatAt: NOW, ...over }) as RunnerLockFile;
 const BG: BackgroundState = { v: 1, pid: 4242, startedAt: NOW - 30 * 60_000, logPath: "/l/runner.log", args: ["up", "--background"], instances: [{ id: "i1-aaaaaaaa", name: "Repo Coder" }], watching: true };
 
 describe("pags status", () => {

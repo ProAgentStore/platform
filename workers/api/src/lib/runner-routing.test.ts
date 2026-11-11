@@ -19,8 +19,8 @@ import {
 	shouldFallbackToSelfHosted,
 } from "./runner-routing.js";
 
-const NODE = "Sergeys-Mac-mini.local";
-const PINNED = ["self-hosted", "pags-sergeys-mac-mini-local"];
+const NODE = "runner-host.local";
+const PINNED = ["self-hosted", "pags-runner-host-local"];
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -70,7 +70,7 @@ describe("selectRunnerLabel (#1113)", () => {
 			variable: PAGS_RUNNER_VARIABLE,
 			mode: "self-hosted",
 			labels: PINNED,
-			variableValue: '["self-hosted","pags-sergeys-mac-mini-local"]',
+			variableValue: '["self-hosted","pags-runner-host-local"]',
 			reason: "minutes_exhausted",
 		});
 	});
@@ -88,7 +88,7 @@ describe("the public-repo guard (#1113)", () => {
 
 describe("pin-scoped labels — never generic (#1113 mutual exclusion)", () => {
 	it("the unique label is a slug of the canonical node name; an empty or over-long name is refused, never cut", () => {
-		expect(nodeRunnerLabel("Sergeys-Mac-mini.local")).toBe("pags-sergeys-mac-mini-local");
+		expect(nodeRunnerLabel("runner-host.local")).toBe("pags-runner-host-local");
 		expect(nodeRunnerLabel("RL laptop")).toBe("pags-rl-laptop");
 		expect(() => nodeRunnerLabel("  ")).toThrow(/canonical node name/);
 		expect(() => nodeRunnerLabel("x".repeat(120))).toThrow(/too long/);

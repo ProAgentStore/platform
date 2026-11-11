@@ -102,7 +102,7 @@ export function assertPrivateRepo(visibility: unknown): asserts visibility is "p
 
 /**
  * The pinned machine's unique label: `pags-` + a slug of its canonical runner-node name
- * (`normalizeRunnerNode`), lower-case `[a-z0-9-]`, so `Sergeys-Mac-mini.local` → `pags-sergeys-mac-mini-local`.
+ * (`normalizeRunnerNode`), lower-case `[a-z0-9-]`, so `runner-host.local` → `pags-runner-host-local`.
  * Throws for an empty name: a runner with no unique label cannot be routed to safely.
  */
 export function nodeRunnerLabel(node: string): string {

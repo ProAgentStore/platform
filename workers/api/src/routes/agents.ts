@@ -264,11 +264,8 @@ agentRoutes.get("/", async (c) => {
 	const [pageRes, countRes] = await Promise.all([
 		c.env.DB.prepare(
 			`SELECT a.id, a.slug, a.name, a.description, a.category, a.store_type, a.icon, a.icon_bg, a.model,
-                    CASE WHEN instr(COALESCE(u.github_login, ''), '@') = 0 THEN u.github_login ELSE NULL END as creator_login,
-                    COALESCE(NULLIF(u.display_name, ''), NULLIF(u.github_name, ''), CASE WHEN instr(COALESCE(u.github_login, ''), '@') = 0 THEN u.github_login ELSE 'Creator' END) as creator_name,
-                    u.avatar_url as creator_avatar,
                     (SELECT COUNT(*) FROM agent_instances WHERE agent_id = a.id AND status = 'active') as subscriber_count
-             FROM agents a LEFT JOIN users u ON u.id = a.owner_id
+             FROM agents a
              WHERE ${baseWhere} ${orderBy} LIMIT ${limit + 1} OFFSET ${offset}`,
 		).bind(...baseParams).all<AgentRow>(),
 		c.env.DB.prepare(

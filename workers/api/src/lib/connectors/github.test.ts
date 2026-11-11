@@ -698,12 +698,12 @@ describe("github connector — github_create_issue dispatch", () => {
 
 	/** #1405: a human-only ticket used to need a second github_update_issue call just to assign it. */
 	it("accepts assignees on creation, split/trimmed like labels, and reports who GitHub actually assigned", async () => {
-		fetchMock.mockResolvedValue(jsonResponse({ number: 14, html_url: "u14", assignees: [{ login: "serge-ivo" }] }));
-		const r = await tool("github_create_issue").handler(ctx(), { repo: "acme/widgets", title: "t", assignees: "serge-ivo, " });
+		fetchMock.mockResolvedValue(jsonResponse({ number: 14, html_url: "u14", assignees: [{ login: "owner-login" }] }));
+		const r = await tool("github_create_issue").handler(ctx(), { repo: "acme/widgets", title: "t", assignees: "owner-login, " });
 		const sent = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body));
-		expect(sent.assignees).toEqual(["serge-ivo"]);
+		expect(sent.assignees).toEqual(["owner-login"]);
 		expect(r.success).toBe(true);
-		expect(r.content).toBe("Opened issue #14 — assignees: serge-ivo — u14");
+		expect(r.content).toBe("Opened issue #14 — assignees: owner-login — u14");
 	});
 
 	it("accepts an array of logins too, same as github_update_issue (#1263)", async () => {
@@ -953,17 +953,17 @@ describe("github connector — github_update_issue dispatch", () => {
 	});
 
 	it("assigns and relabels in ONE call — the request the owner was refused", async () => {
-		fetchMock.mockResolvedValue(jsonResponse({ state: "open", html_url: "u", labels: [{ name: "high priority" }], assignees: [{ login: "serge-ivo" }] }));
+		fetchMock.mockResolvedValue(jsonResponse({ state: "open", html_url: "u", labels: [{ name: "high priority" }], assignees: [{ login: "owner-login" }] }));
 		const r = await tool("github_update_issue").handler(ctx(), {
 			repo: "acme/widgets",
 			number: 16,
-			assignees: "serge-ivo",
+			assignees: "owner-login",
 			labels: "high priority, , high priority",
 		});
 		expect(r.success).toBe(true);
 		const sent = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body));
 		// trimmed, empties dropped, de-duplicated — same handling as create's labels.
-		expect(sent).toEqual({ labels: ["high priority"], assignees: ["serge-ivo"] });
+		expect(sent).toEqual({ labels: ["high priority"], assignees: ["owner-login"] });
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 

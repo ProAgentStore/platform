@@ -38,7 +38,7 @@ function harness(over: { verdict?: "live" | "dead"; alive?: boolean } = {}) {
 		step: (text, status) => out.push(`[${status}] ${text}`),
 	};
 	const start = {
-		session: { token: "session-token", user: { login: "serge-ivo" } },
+		session: { token: "session-token", user: { login: "owner-login" } },
 		opts: { instance: undefined, headless: false, force: false },
 		runnerArgs: ["/opt/pags/bin/pags", "runner", "connect", "i1", "i2", "--watch-instances"],
 		instances: [{ id: "i1-aaaaaaaa", name: "Repo Coder" }, { id: "i2-bbbbbbbb", name: "Scout" }],
@@ -59,9 +59,9 @@ describe("pags up --background", () => {
 		expect(opts.detached).toBe(true);
 		// The account session is in NO environment (#1163): the runner reads session.json itself.
 		expect(opts.env.PAGS_TOKEN).toBeUndefined();
-		expect(opts.env.PAGS_LOCK_ACCOUNT).toBe("serge-ivo");
+		expect(opts.env.PAGS_LOCK_ACCOUNT).toBe("owner-login");
 		expect(opts.env.PAGS_BACKGROUND).toBe("1");
-		expect(opts.env.PAGS_BACKGROUND_LOG).toBe(backgroundLogPath("serge-ivo", h.deps.env));
+		expect(opts.env.PAGS_BACKGROUND_LOG).toBe(backgroundLogPath("owner-login", h.deps.env));
 		// Nothing waits on this process, so it must not believe a `pags up` will restart it (#860).
 		expect(opts.env.PAGS_UP_SUPERVISED).toBeUndefined();
 		expect(opts.env.PAGS_RESTART_COMMAND).toBe("PAGS_BACKGROUND_RESTART=1 /usr/bin/node /opt/pags/bin/pags up --background");
@@ -78,7 +78,7 @@ describe("pags up --background", () => {
 	it("records what it serves, for `pags status`", async () => {
 		const h = harness();
 		await startInBackground(h.start, h.deps);
-		expect(readBackgroundState(backgroundStatePath("serge-ivo", h.deps.env))).toMatchObject({ pid: 4242, args: ["up", "--background"], instances: h.start.instances, watching: true });
+		expect(readBackgroundState(backgroundStatePath("owner-login", h.deps.env))).toMatchObject({ pid: 4242, args: ["up", "--background"], instances: h.start.instances, watching: true });
 	});
 
 	it("says it is running only once it is, and how to see and stop it", async () => {
@@ -94,7 +94,7 @@ describe("pags up --background", () => {
 
 	it("a runner that dies before it is ready: exit 1, and the log's tail instead of a success claim", async () => {
 		const h = harness({ alive: false });
-		const log = backgroundLogPath("serge-ivo", h.deps.env);
+		const log = backgroundLogPath("owner-login", h.deps.env);
 		mkdirSync(dirname(log), { recursive: true });
 		writeFileSync(log, "Relay conflict: another machine holds this agent\n");
 		const code = await startInBackground(h.start, h.deps);

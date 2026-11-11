@@ -68,7 +68,7 @@ type ArtifactPath = (kind: LocalApplyArtifactKind) => PreparedUpload | { error: 
 const fileSlug = (value: string | undefined) => (value ?? "").normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
 /**
- * Employers see the attachment's filename (#1574): `Sergey-Ivochkin-Resume-Program-Director.pdf`, not `resume.pdf`.
+ * Employers see the attachment's filename (#1574): `Owner-Name-Resume-Program-Director.pdf`, not `resume.pdf`.
  * Falls back to the generic name when the owner's name is unknown. The title keeps whole words up to 60 characters.
  */
 export function documentFileName(kind: LocalApplyArtifactKind, envelope: Pick<LocalApplyTaskEnvelope, "job" | "ownerFacts">): string {

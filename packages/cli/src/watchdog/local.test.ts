@@ -29,26 +29,26 @@ describe("crashes and the last error come from the service log (#1320)", () => {
 				line(300, "pags up exited (1); starting it again in 10s"),
 				line(200, "pags up exited (75); starting it again in 1s"), // an update, not a crash
 				line(100, "pags up exited (null); starting it again in 20s"),
-				line(50, "could not start pags up: spawn /Users/serge/.nvm/node ENOENT"),
+				line(50, "could not start pags up: spawn /Users/former/.nvm/node ENOENT"),
 				"pags up wrote something unrelated",
 			].join("\n"),
 		);
 		const h = logHistory(log, NOW);
 		expect(h.crashes24h).toBe(2);
 		expect(h.lastError).toBe("could not start pags up: spawn <path> ENOENT");
-		expect(JSON.stringify(h)).not.toContain("serge");
+		expect(JSON.stringify(h)).not.toContain("owner");
 	});
 	it("an unreadable log is unknown, not zero", () => {
 		expect(logHistory(join(dir, "nope.log"), NOW)).toEqual({ crashes24h: null, lastError: null });
 	});
 	it("the log tail is bounded and has paths and token-shaped strings removed", () => {
 		const log = join(dir, "pags-up.log");
-		writeFileSync(log, `${Array.from({ length: 80 }, (_, i) => `row ${i} ${"x".repeat(300)}`).join("\n")}\nopened /Users/serge/.config/proagentstore/session.json with sk-ant-abcdef123456789012345\n`);
+		writeFileSync(log, `${Array.from({ length: 80 }, (_, i) => `row ${i} ${"x".repeat(300)}`).join("\n")}\nopened /Users/former/.config/proagentstore/session.json with sk-ant-abcdef123456789012345\n`);
 		const t = tailOf(log);
 		expect(t.length).toBeLessThanOrEqual(4_000);
 		expect(t.split("\n").length).toBeLessThanOrEqual(30);
 		expect(t).toContain("opened <path> with <secret>");
-		expect(t).not.toMatch(/serge|sk-ant/);
+		expect(t).not.toMatch(/owner|sk-ant/);
 		expect(tailOf(join(dir, "none.log"))).toMatch(/no runner log/);
 	});
 });

@@ -11,7 +11,7 @@ import { type ActualState, type DesiredRepo, planReconciliation, type ReconcileO
 import { GITHUB_HOSTED_LABEL, isPinScoped, nodeRunnerLabel } from "./runner-routing.js";
 
 const REPO = "pas-apps/interns";
-const NODES = ["Sergeys-Mac-mini.local", "pink-laptop", "dell-laptop"];
+const NODES = ["runner-host.local", "pink-laptop", "dell-laptop"];
 const EXHAUSTED = { exhausted: true };
 
 /** A runner on `node` carries `self-hosted`, `pags` and its own `pags-<node>`. */
@@ -48,7 +48,7 @@ describe("pin-scoped mutual exclusion (#1113 acceptance)", () => {
 	it("3 machines with the same checkout, Coder pinned to one: only the pinned machine can take a job", () => {
 		const after = apply(state(), planReconciliation([repo("pink-laptop")], state()).ops);
 		expect(pickers(after, REPO)).toEqual(["pink-laptop"]);
-		expect(after.groupAccess["Sergeys-Mac-mini.local"]).toEqual([]);
+		expect(after.groupAccess["runner-host.local"]).toEqual([]);
 		expect(after.groupAccess["dell-laptop"]).toEqual([]);
 	});
 
@@ -90,7 +90,7 @@ describe("pin-scoped mutual exclusion (#1113 acceptance)", () => {
 
 describe("violations are fixed and reported (#1113)", () => {
 	it("a repo reachable by more than one machine's runner is a violation, fixed in the same plan", () => {
-		const drifted = state({ groupAccess: { "Sergeys-Mac-mini.local": [REPO], "pink-laptop": [REPO], "dell-laptop": [REPO] } });
+		const drifted = state({ groupAccess: { "runner-host.local": [REPO], "pink-laptop": [REPO], "dell-laptop": [REPO] } });
 		const plan = planReconciliation([repo("pink-laptop")], drifted);
 		expect(plan.violations).toEqual([expect.objectContaining({ kind: "multiple_machines" })]);
 		const after = apply(drifted, plan.ops);

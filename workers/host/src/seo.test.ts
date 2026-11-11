@@ -31,15 +31,6 @@ describe("public catalogue SEO", () => {
 		expect(html).toContain('href="/favicon.svg"');
 	});
 
-	it("gives a developer profile its public identity without exposing account fields", async () => {
-		const api = { async fetch() { return json({ developer: { login: "alice", name: "Alice", bio: "Builds useful agents." } }); } };
-		const response = await publicListingResponse(api, "developers", "alice", template, headers);
-		const html = await response.text();
-		expect(html).toContain("<title>Alice — ProAgentStore Developer</title>");
-		expect(html).toContain('href="https://proagentstore.online/developers/alice/"');
-		expect(html).toContain('content="Builds useful agents."');
-	});
-
 	it("keeps an unpublished owner shell usable while returning a non-cacheable public 404/noindex", async () => {
 		const api = { async fetch() { return new Response("Not found", { status: 404 }); } };
 		const response = await publicListingResponse(api, "agents", "private-agent", template, headers);
@@ -54,7 +45,7 @@ describe("public catalogue SEO", () => {
 		await expect(publicListingResponse(api, "agents", "local-coder", template, headers)).rejects.toThrow("HTTP 503");
 	});
 
-	it("pages through the published catalogue, deduplicates creators and refuses invalid URL fragments", async () => {
+	it("pages through the published catalogue, lists only agent slugs and refuses invalid URL fragments", async () => {
 		const requests: Array<Request | string> = [];
 		const api = { async fetch(input: Request | string) {
 			requests.push(input);
@@ -66,7 +57,8 @@ describe("public catalogue SEO", () => {
 		expect(requests).toEqual(["https://api.proagentstore.online/v1/agents?limit=100&offset=0", "https://api.proagentstore.online/v1/agents?limit=100&offset=100"]);
 		expect(entries).toContain("/agents/one/");
 		expect(entries).toContain("/agents/two/");
-		expect(entries.match(/\/developers\/alice\//g)).toHaveLength(1);
+		expect(entries).not.toContain("/developers/");
+		expect(entries).not.toContain("alice");
 		expect(entries).not.toContain("<script>");
 		expect(entries).not.toContain("x&y");
 	});

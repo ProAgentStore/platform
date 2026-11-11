@@ -40,7 +40,7 @@ async function connect(instanceId = "i1", uid = "u1", extra = "") {
 	const { token } = await signRelayToken(instanceId, uid, KEY);
 	const app = new Hono<{ Bindings: Env }>();
 	app.route("/v1/relay", relayRoutes);
-	return app.request(`/v1/relay/${instanceId}/connect?token=${encodeURIComponent(token)}&node=Sergeys-Mac-mini.local${extra}`, {}, env());
+	return app.request(`/v1/relay/${instanceId}/connect?token=${encodeURIComponent(token)}&node=runner-host.local${extra}`, {}, env());
 }
 
 beforeEach(() => {

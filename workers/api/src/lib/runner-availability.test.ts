@@ -34,7 +34,7 @@ const NEVER: RuntimeFacts = { hasRuntimeRow: false, relayConnected: false, node:
  * shared default row, so the pinned-at-a-dead-machine case is byte-identical to the `--force` case
  * except for the two fields the adapter used to drop.
  */
-const PINNED: RuntimeFacts = { ...DETACHED, node: "Mac", pinnedNode: "Sergeys-Mac-mini.local", liveNodeExcludedByPin: "Mac" };
+const PINNED: RuntimeFacts = { ...DETACHED, node: "Mac", pinnedNode: "runner-host.local", liveNodeExcludedByPin: "Mac" };
 
 function waitDeps(probes: RuntimeFacts[], overrides: Partial<RunnerWaitDeps> = {}): RunnerWaitDeps & { said: string[]; slept: string[]; ticks: number[] } {
 	const said: string[] = [];
@@ -159,7 +159,7 @@ describe("waitForRunner", () => {
 		const d = describeFacts(PINNED);
 		expect(d.state).toBe("pinned-machine-offline");
 		expect(d.remedy).toBeNull();
-		expect(d.message).toContain("Sergeys-Mac-mini.local");
+		expect(d.message).toContain("runner-host.local");
 		expect(d.message).toContain("Mac");
 	});
 

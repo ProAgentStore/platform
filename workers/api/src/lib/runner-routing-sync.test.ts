@@ -5,8 +5,8 @@
 import { describe, expect, it } from "vitest";
 import { actionsMinutesUsed, INCLUDED_MINUTES_BY_PLAN, minuteMultiplier, readOrgMinutes, type RouteFlip, type RouteRepo, type RouteSyncDeps, syncRepoRoutes } from "./runner-routing-sync.js";
 
-const NODE = "Sergeys-Mac-mini.local";
-const LABELS = JSON.stringify(["self-hosted", "pags-sergeys-mac-mini-local"]);
+const NODE = "runner-host.local";
+const LABELS = JSON.stringify(["self-hosted", "pags-runner-host-local"]);
 const REPO = "proappstore-online/interns";
 
 interface Sim extends RouteSyncDeps {
@@ -107,7 +107,7 @@ describe("PAGS_RUNNER follows the minutes, and flips back on reset (#1212 accept
 		const [r] = await syncRepoRoutes([repo()], online, g);
 		expect(r).toMatchObject({ status: "flipped", flip: { from: "github-hosted", to: "self-hosted", reason: "minutes_low", value: LABELS } });
 		expect(g.calls).toContainEqual({ method: "POST", url: `https://api.github.com/repos/${REPO}/actions/variables` });
-		expect(JSON.parse(g.variables.get(REPO) as string)).toEqual(["self-hosted", "pags-sergeys-mac-mini-local"]);
+		expect(JSON.parse(g.variables.get(REPO) as string)).toEqual(["self-hosted", "pags-runner-host-local"]);
 	});
 
 	it("it is idempotent: the same state again writes nothing and flips nothing", async () => {
@@ -182,7 +182,7 @@ describe("every flip is traced and notified; a refused write claims nothing", ()
 		const g = sim({ used: linux(2800) });
 		await syncRepoRoutes([repo()], online, g);
 		expect(g.flips).toHaveLength(1);
-		expect(g.flips[0].summary).toMatch(/interns now runs its jobs on self-hosted, pags-sergeys-mac-mini-local.*93\.3%/);
+		expect(g.flips[0].summary).toMatch(/interns now runs its jobs on self-hosted, pags-runner-host-local.*93\.3%/);
 	});
 
 	it("GitHub refusing the write (the App lacks Variables: Read and write) is 'denied' with the permission to grant — no flip, no variable", async () => {

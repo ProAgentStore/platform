@@ -80,8 +80,8 @@ describe("checkWorkdir", () => {
  */
 describe("parseSshIdentity", () => {
 	it("extracts a user-account login from the GitHub welcome banner", () => {
-		expect(parseSshIdentity("Hi serge-ivo! You've successfully authenticated, but GitHub does not provide shell access."))
-			.toBe("serge-ivo");
+		expect(parseSshIdentity("Hi owner-login! You've successfully authenticated, but GitHub does not provide shell access."))
+			.toBe("owner-login");
 	});
 
 	it("extracts a deploy-key identity (org/repo) from the GitHub welcome banner", () => {
@@ -91,8 +91,8 @@ describe("parseSshIdentity", () => {
 	});
 
 	it("handles ANSI escape sequences some SSH versions prepend", () => {
-		expect(parseSshIdentity("\x1b[32mHi serge-ivo! You've successfully authenticated, but GitHub does not provide shell access.\x1b[0m"))
-			.toBe("serge-ivo");
+		expect(parseSshIdentity("\x1b[32mHi owner-login! You've successfully authenticated, but GitHub does not provide shell access.\x1b[0m"))
+			.toBe("owner-login");
 	});
 
 	it("returns null when authentication failed (wrong key, no key)", () => {

@@ -44,13 +44,13 @@ describe("OS detection", () => {
 describe("browser launch probes", () => {
 	it("records, per engine, whether it actually launched and why not — with any path removed", async () => {
 		const launch = vi.fn(async (b: string) => {
-			if (b === "webkit") throw new Error("browserType.launch: Executable doesn't exist at /Users/serge/Library/Caches/ms-playwright/webkit-2123/pw_run.sh");
+			if (b === "webkit") throw new Error("browserType.launch: Executable doesn't exist at /Users/former/Library/Caches/ms-playwright/webkit-2123/pw_run.sh");
 			if (b === "chromium") throw new Error("Chromium does not support macOS 12");
 		});
 		const probes = await probeBrowsers(deps({ launch }));
 		expect(probes.map((p) => [p.browser, p.success])).toEqual([["chromium", false], ["firefox", true], ["webkit", false]]);
 		expect(probes[2].error).toBe("browserType.launch: Executable doesn't exist at <path>");
-		expect(JSON.stringify(probes)).not.toContain("serge");
+		expect(JSON.stringify(probes)).not.toContain("owner");
 		expect(probes[0].error).toBe("Chromium does not support macOS 12");
 	});
 	it(`is skipped entirely with ${SKIP_PROBE_ENV}=1 — nothing is launched`, async () => {
@@ -119,7 +119,7 @@ describe("the whole record", () => {
 		const allowed = new Set(INVENTORY_TOOLS.map(([n]) => n));
 		expect(c.inventory.every((i) => allowed.has(i.name))).toBe(true);
 		expect(c.inventory.length).toBeLessThanOrEqual(INVENTORY_CAP);
-		expect(JSON.stringify(c)).not.toMatch(/\/Users|\/home|C:\\|serge|@|token|secret/i);
+		expect(JSON.stringify(c)).not.toMatch(/\/Users|\/home|C:\\|owner|@|token|secret/i);
 	});
 	it("runs iOS detection on macOS only, and survives every probe failing", async () => {
 		const linux = await detectMachineCapabilities(deps({ platform: "linux", release: "6.8.0", env: { [SKIP_PROBE_ENV]: "1" } }));

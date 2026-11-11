@@ -22,7 +22,7 @@ const GITHUB: Record<string, unknown> = {
 	"/issues/5": { number: 5, title: "Table design system", body: "Decided: every list uses the COMPACT layout.", labels: [], state: "closed" },
 	"/issues/9": { number: 9, title: "Import fixtures from the league", body: "Import the league's fixtures. Open question: hold imported fixtures back from members until a club admin reviews them, or publish them at once?", labels: [], state: "open" },
 	"/issues/7/comments": [],
-	"/issues/9/comments": [{ user: { login: "serge-ivo" }, body: "Not sure yet — admins want control, members want speed." }],
+	"/issues/9/comments": [{ user: { login: "owner-login" }, body: "Not sure yet — admins want control, members want speed." }],
 	"/issues?state=open": [{ number: 7, title: "Members table", state: "open", labels: [], comments: 0, updated_at: "2026-10-12T00:00:00Z", html_url: "x" }, { number: 9, title: "Import fixtures from the league", state: "open", labels: [{ name: "epic:fixtures" }], comments: 1, updated_at: "2026-10-12T00:00:00Z", html_url: "x" }],
 	"/issues?state=closed": [{ number: 5, title: "Table design system", state: "closed", labels: [{ name: "design" }], comments: 0, updated_at: "2026-10-01T00:00:00Z", html_url: "x" }],
 	"/contents/docs": [{ type: "file", path: "docs/table-layout.md" }, { type: "file", path: "docs/billing.md" }],

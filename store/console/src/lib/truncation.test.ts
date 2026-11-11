@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
  * ── The defect, measured
  *
  * The Terminals machine card renders the other hostnames a machine has answered to — `also
- * RLs-MacBook-Air · Sergeys-MacBook-Air.local` — as `truncate shrink-0` inside a `flex-wrap` row.
+ * RLs-MacBook-Air · runner-host-b.local` — as `truncate shrink-0` inside a `flex-wrap` row.
  * At 320px in WebKit that string did not truncate. It drew straight out of the card and was
  * painted OVER by the Forget button beside it: two overlapping controls, one unreadable.
  *

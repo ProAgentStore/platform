@@ -18,7 +18,7 @@ const job = (): CloneJob => ({ path: "/w/grass-karma", slug: "acme/grass-karma",
 describe("which transport a cold-start clone uses (#858)", () => {
 	it("https first — and when it works, the SSH probe never runs", async () => {
 		const clone = vi.fn(async () => undefined);
-		const sshIdentity = vi.fn(() => "serge-ivo");
+		const sshIdentity = vi.fn(() => "owner-login");
 		const out = await runCloneJob(job(), "auto", { clone, sshIdentity, now: () => 2 });
 		expect(out).toMatchObject({ state: "done", via: "https", finishedAt: 2 });
 		expect(clone).toHaveBeenCalledWith("/w/grass-karma", "https://github.com/acme/grass-karma.git");
@@ -29,7 +29,7 @@ describe("which transport a cold-start clone uses (#858)", () => {
 		const clone = vi.fn(async (_dir: string, url: string) => {
 			if (url.startsWith("https://")) throw new Error("fatal: could not read Username for 'https://github.com': terminal prompts disabled");
 		});
-		const out = await runCloneJob(job(), "auto", { clone, sshIdentity: () => "serge-ivo", now: () => 2 });
+		const out = await runCloneJob(job(), "auto", { clone, sshIdentity: () => "owner-login", now: () => 2 });
 		expect(out).toMatchObject({ state: "done", via: "ssh" });
 		expect(clone.mock.calls.map(([, url]) => url)).toEqual(["https://github.com/acme/grass-karma.git", "git@github.com:acme/grass-karma.git"]);
 		expect(out.attempts[0]).toMatch(/^https: fatal: could not read Username/);

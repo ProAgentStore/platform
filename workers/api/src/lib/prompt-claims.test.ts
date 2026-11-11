@@ -186,10 +186,10 @@ const RUNNER_FACTS: Record<AttachmentState, Parameters<typeof describeFacts>[0]>
 	"pinned-machine-offline": {
 		hasRuntimeRow: true,
 		relayConnected: false,
-		node: "Sergeys-Mac-mini.local",
+		node: "runner-host.local",
 		runnerVersion: null,
 		lastSeenAt: heartbeat(5_000),
-		pinnedNode: "Sergeys-Mac-mini.local",
+		pinnedNode: "runner-host.local",
 		liveNodeExcludedByPin: "RLs-MacBook-Air",
 	},
 };
@@ -361,14 +361,14 @@ describe("the incidents that motivated this", () => {
 			indexedRepos: false,
 			lowTechnicality: false,
 		});
-		expect(coder).toContain("pinned to Sergeys-Mac-mini.local");
+		expect(coder).toContain("pinned to runner-host.local");
 		expect(coder).toContain("RLs-MacBook-Air has a relay connection");
 		expect(coder).not.toContain("pags up");
 
 		// The runtime diagnosis remains gated on hasRunner even now that it no longer
 		// prescribes "start the runner" from missing transport evidence (#1485).
 		const cloud = assemblePrompt(PLAIN_CHAT, { technicalSeed: false, hasRepos: false, runner: pinned ?? null, activeSession: true, indexedRepos: false, lowTechnicality: false });
-		expect(cloud).not.toContain("pinned to Sergeys-Mac-mini.local");
+		expect(cloud).not.toContain("pinned to runner-host.local");
 		expect(cloud).not.toContain("RLs-MacBook-Air has a relay connection");
 	});
 

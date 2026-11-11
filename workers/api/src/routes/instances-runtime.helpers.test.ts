@@ -660,8 +660,8 @@ describe("PUT/GET /v1/instances/:id/runner-node (integration — the 'runs on' p
 	// because the repin left no trace. The record now goes to the same trace as every other
 	// instance event, so `GET /v1/instances/:id/trace` and MCP `agent_trace` read it.
 	it("records the repin to the trace, carrying the previous and new machine", async () => {
-		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]], instanceConfig: JSON.stringify({ runnerNode: "RLs-MacBook-Air.local" }), nodes: [mockRow({ runner_node: "Sergeys-Mac-mini.local", instance_id: "inst-1", user_id: "u1", machine_id: "machine-mini0001" })] });
-		const res = await put(app, env, "/v1/instances/inst-1/runner-node", { runnerNode: "Sergeys-Mac-mini.local" }, await tokenFor("u1"));
+		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]], instanceConfig: JSON.stringify({ runnerNode: "RLs-MacBook-Air.local" }), nodes: [mockRow({ runner_node: "runner-host.local", instance_id: "inst-1", user_id: "u1", machine_id: "machine-mini0001" })] });
+		const res = await put(app, env, "/v1/instances/inst-1/runner-node", { runnerNode: "runner-host.local" }, await tokenFor("u1"));
 		expect(res.status).toBe(200);
 
 		const events = writes.filter((w) => w.sql.startsWith("INSERT INTO agent_events"));

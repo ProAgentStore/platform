@@ -49,7 +49,7 @@ function deps(over: Partial<ProvisionDeps> & { githubStatus?: number; visibility
 		call: async <T>(_conn: RunnerConn, path: string, body: unknown) => {
 			f.relayed.push({ path, body: body as Record<string, unknown> });
 			if (path.endsWith("/status")) return { job: null, installed: [{ dir: "/x", managed: false, name: "pink-laptop", url: "https://github.com/proappstore-online/interns" }] } as T;
-			return { id: "job-1", action: path.endsWith("install") ? "install" : "remove", url: (body as { url: string }).url, name: (body as { name: string }).name, state: "running", steps: [], prerequisites: [], runsAs: "serge", service: "not_installed" } as T;
+			return { id: "job-1", action: path.endsWith("install") ? "install" : "remove", url: (body as { url: string }).url, name: (body as { name: string }).name, state: "running", steps: [], prerequisites: [], runsAs: "owner", service: "not_installed" } as T;
 		},
 		...over,
 	};

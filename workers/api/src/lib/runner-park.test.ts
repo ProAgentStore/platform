@@ -33,7 +33,7 @@ import type { Env } from "../types.js";
 
 const HOUR = 60 * 60_000;
 const T0 = Date.UTC(2026, 9, 17, 22, 37);
-const OFFLINE: RuntimeFacts = { hasRuntimeRow: true, relayConnected: false, node: "Sergeys-Mac-mini.local", runnerVersion: null, lastSeenAt: "2026-10-17 22:37:00" };
+const OFFLINE: RuntimeFacts = { hasRuntimeRow: true, relayConnected: false, node: "runner-host.local", runnerVersion: null, lastSeenAt: "2026-10-17 22:37:00" };
 const ONLINE: RuntimeFacts = { ...OFFLINE, relayConnected: true };
 
 /**

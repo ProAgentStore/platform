@@ -51,12 +51,12 @@ describe("repoFreshnessLabel", () => {
 
 describe("staleListNotice", () => {
 	it("says the rows are last-known when the list could not re-check", () => {
-		const note = staleListNotice({ ran: false, checked: 0, reason: "This agent is pinned to Sergeys-Mac-mini.local, which isn't connected." }, 7);
+		const note = staleListNotice({ ran: false, checked: 0, reason: "This agent is pinned to runner-host.local, which isn't connected." }, 7);
 		expect(note).toMatch(/last known/i);
 		// The server's diagnosis is carried verbatim: it is the only thing that can name a stale
 		// "Runs on" pin, and a hardcoded "run `pags up`" here would be the #341 mistake — telling
 		// someone to run the command they are already running.
-		expect(note).toContain("Sergeys-Mac-mini.local");
+		expect(note).toContain("runner-host.local");
 	});
 
 	it("says nothing when the list DID re-check — silence is the healthy state", () => {

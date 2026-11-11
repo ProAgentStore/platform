@@ -74,7 +74,7 @@ that window).
 
 - **About 40k are `commit-close-watch` noise**: no GitHub App installation for vibecodeqa/*,
   freemarketingstore-online, proagentstore-online, carsads and ChessClubs, plus 404s for
-  chess-academy and serge-ivo/stores-workspace. Not an MCP usability problem, but it buries
+  chess-academy and owner-login/stores-workspace. Not an MCP usability problem, but it buries
   everything else in `list_errors`. Follow-up (§7).
 - Usability signatures that reach MCP callers:
   - `"X" is not one of this agent's tools` (`workers/api/src/lib/tool-refusal.ts:42`), a 403

@@ -12,8 +12,8 @@ import { ancestorGroupNames, fabricationBlockReason, numbersAreSourced, numbersI
 
 const JOB: CandidateFacts = {
 	candidate: {
-		fullName: "Sergey Ivochkin",
-		email: "sergey@example.com",
+		fullName: "Owner Name",
+		email: "other@example.com",
 		phone: "+61 412 345 678",
 		location: "Sydney, NSW, Australia",
 		salaryExpectation: "120000 AUD",
@@ -182,13 +182,13 @@ describe("typed identity values", () => {
 	});
 
 	it("allows the candidate's email and refuses another one", () => {
-		expect(fabricationBlockReason(type("Email address", "sergey@example.com"), JOB)).toBeNull();
-		expect(fabricationBlockReason(type("Confirm email", "SERGEY@EXAMPLE.COM"), JOB)).toBeNull();
-		expect(fabricationBlockReason(type("Email address", "s.ivochkin@gmail.com"), JOB)).toMatch(/REFUSED/);
+		expect(fabricationBlockReason(type("Email address", "other@example.com"), JOB)).toBeNull();
+		expect(fabricationBlockReason(type("Confirm email", "OTHER@EXAMPLE.COM"), JOB)).toBeNull();
+		expect(fabricationBlockReason(type("Email address", "o.name@gmail.com"), JOB)).toMatch(/REFUSED/);
 	});
 
 	it("does not read a shorter fabricated address out of the real one", () => {
-		// A bare `includes` finds "y@example.com" inside "sergey@example.com" and waves through an
+		// A bare `includes` finds "y@example.com" inside "other@example.com" and waves through an
 		// address the candidate does not own. The same word-boundary rule that stops Male/Female.
 		expect(fabricationBlockReason(type("Email address", "y@example.com"), JOB)).toMatch(/REFUSED/);
 	});
@@ -229,7 +229,7 @@ describe("typed identity values", () => {
 		expect(fabricationBlockReason(type("Years of Python experience", "8"), JOB)).toBeNull();
 		expect(fabricationBlockReason(type("Why do you want this role?", "I have shipped…"), JOB)).toBeNull();
 		expect(fabricationBlockReason(type("LinkedIn profile", "https://linkedin.com/in/someone"), JOB)).toBeNull();
-		expect(fabricationBlockReason(type("Full name", "Sergey Ivochkin"), JOB)).toBeNull();
+		expect(fabricationBlockReason(type("Full name", "Owner Name"), JOB)).toBeNull();
 	});
 
 	it("does NOT guard the postcode, on purpose — the answer would never come back", () => {

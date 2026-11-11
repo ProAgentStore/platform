@@ -7,7 +7,7 @@
  * `proappstore-online/platform`. Given an objective to implement that repo's issue #137, session
  * `csess_f686f1ff` ran, at 2026-08-16T01:55:44Z:
  *
- *     cd /Users/serge-ivo/dev/stores/pags/platform && gh pr create --repo ProAgentStore/platform …
+ *     cd /Users/owner-login/dev/stores/pags/platform && gh pr create --repo ProAgentStore/platform …
  *
  * — opening PR #675 in a DIFFERENT GitHub organisation. The intended repo received nothing, and
  * the run reported success, describing its target as "the PAGS platform repo". The Engine's model

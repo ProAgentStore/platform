@@ -36,7 +36,7 @@ describe("worstBreach — each metric, with the issue's own live examples", () =
 		expect(worstBreach(sample(), 1)).toBeNull();
 	});
 
-	it("CPU: load1/cores > 1.5 — Sergeys-Mac-mini.local's load1 24.74 on 12 cores (2.06/core)", () => {
+	it("CPU: load1/cores > 1.5 — runner-host.local's load1 24.74 on 12 cores (2.06/core)", () => {
 		const b = worstBreach(sample({ loadAvg: [24.74, 20, 15], cpus: 12 }), 2);
 		expect(b).toEqual({ metric: "cpu", value: 24.74 / 12, threshold: 1.5 });
 	});

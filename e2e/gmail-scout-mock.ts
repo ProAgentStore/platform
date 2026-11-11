@@ -63,7 +63,7 @@ export async function installScansRoutes(page: Page, opts: ScansMockOptions = se
 				return json({ error: "Gmail status unavailable" }, 500);
 			}
 			return json({
-				config: { pinnedEmail: "serge.pro.job@gmail.com", enabled: opts.enabled ?? true },
+				config: { pinnedEmail: "owner@example.com", enabled: opts.enabled ?? true },
 				state: { lastScanAt, candidateCount: 1, dedupeCount: 0, failureCount: opts.failureCount ?? 0, lastFailureAt: opts.lastFailureAt ?? null, lastFailureMessage: opts.failureCount ? "Gmail 401" : null },
 				leadCount: 4, newLeadCount: 2, receipts,
 			});
@@ -72,7 +72,7 @@ export async function installScansRoutes(page: Page, opts: ScansMockOptions = se
 			const receipt = { ...SCOUT_RECEIPT, id: `scan-${receipts.length + 1}`, trigger: "on_demand", startedAt: "2026-11-08T01:00:00.000Z", jobsPush: { sent: 1, failed: 0, reason: null } };
 			receipts.unshift(receipt);
 			lastScanAt = receipt.startedAt;
-			return json({ scan: { mailbox: "serge.pro.job@gmail.com", candidates: 1, added: 1, deduped: 0, lastMessageId: "m", rejected: {}, receipt, reused: false, handoff: "none" } });
+			return json({ scan: { mailbox: "owner@example.com", candidates: 1, added: 1, deduped: 0, lastMessageId: "m", rejected: {}, receipt, reused: false, handoff: "none" } });
 		}
 		if (rest === "/gmail-scout/scan-log") return json({ scan: SCOUT_RECEIPT, total: 0, nextCursor: null, items: [] });
 		if (rest === "/job-leads/browser-verifications") return json({ leads: verifications });

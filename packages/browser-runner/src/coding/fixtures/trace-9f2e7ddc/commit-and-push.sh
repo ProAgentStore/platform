@@ -1,4 +1,4 @@
-cd /Users/serge/.config/proagentstore/browser-runner/repos/repo_2b2657fb-31e5-48a4-99f3-147fffde0925; git fetch origin 2>&1 | tail -1; echo "upstream since start:"; git log --oneline HEAD..origin/main; git add -A && git commit -q -F - <<'EOF'
+cd /Users/former/.config/proagentstore/browser-runner/repos/repo_2b2657fb-31e5-48a4-99f3-147fffde0925; git fetch origin 2>&1 | tail -1; echo "upstream since start:"; git log --oneline HEAD..origin/main; git add -A && git commit -q -F - <<'EOF'
 fix(coding): the repo-scope guard judges the remote write, not the commit message (#872)
 
 A CRM run registered for proappstore-online/crm added CRM files and

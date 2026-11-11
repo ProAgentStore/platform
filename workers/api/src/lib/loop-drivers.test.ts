@@ -282,7 +282,7 @@ describe("the coding driver refuses a checkout the platform has already condemne
 		user_id: "u1",
 		workdir: "~/dev/aipa",
 		clone_status: "needs_attention",
-		clone_error: "The configured checkout `/Users/serge-ivo/dev/aipa` has files but is not inside a git working tree — it is a plain folder, not a clone of a repository.",
+		clone_error: "The configured checkout `/Users/owner-login/dev/aipa` has files but is not inside a git working tree — it is a plain folder, not a clone of a repository.",
 	};
 
 	it("409s with the folder verdict, and opens NOTHING", async () => {
@@ -296,7 +296,7 @@ describe("the coding driver refuses a checkout the platform has already condemne
 		expect(out.ok).toBe(false);
 		if (!out.ok) {
 			expect(out.status).toBe(409);
-			expect(out.error).toContain("/Users/serge-ivo/dev/aipa");
+			expect(out.error).toContain("/Users/owner-login/dev/aipa");
 			expect(out.error).toMatch(/git working tree/);
 		}
 		expect(created).toHaveLength(0);
@@ -371,9 +371,9 @@ describe("the coding driver admits an absent or EMPTY checkout it can clone into
 		github_repo: "freeappstore-online/platform",
 		web_url: "https://github.com/freeappstore-online/platform",
 		clone_status: "needs_attention",
-		clone_error: "The configured checkout `/Users/serge/dev/stores/fas/platform` exists but is EMPTY — nothing was ever cloned into it, or its contents were moved away. There is no code at that path to read.",
+		clone_error: "The configured checkout `/Users/former/dev/stores/fas/platform` exists but is EMPTY — nothing was ever cloned into it, or its contents were moved away. There is no code at that path to read.",
 	};
-	const check = (over: Record<string, unknown>) => ({ checked: true, path: "/Users/serge/dev/stores/fas/platform", exists: true, isDirectory: true, entryCount: 0, insideWorkTree: false, gitChecked: true, ...over });
+	const check = (over: Record<string, unknown>) => ({ checked: true, path: "/Users/former/dev/stores/fas/platform", exists: true, isDirectory: true, entryCount: 0, insideWorkTree: false, gitChecked: true, ...over });
 
 	it("starts a repair run when the machine about to run still reports the folder EMPTY", async () => {
 		const { env, created } = stubEnv({ repos: [emptyRepo], session: { id: "s1", client_type: "claude", status: "active" }, repoCheck: check({}) });

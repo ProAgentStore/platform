@@ -66,7 +66,7 @@ function act(over: Partial<EngineActReport> = {}): EngineActReport {
  * SUCCESS. This is the command string from the `act.consequential` row, not a reconstruction.
  */
 const INCIDENT_COMMAND =
-	"cd /Users/serge-ivo/dev/stores/pags/platform && gh pr create --repo ProAgentStore/platform --base main --head feat/update-board-ticket";
+	"cd /Users/owner-login/dev/stores/pags/platform && gh pr create --repo ProAgentStore/platform --base main --head feat/update-board-ticket";
 
 describe("the run that landed in the wrong organisation (#676)", () => {
 	it("refuses the write and names the repository it was aimed at", () => {

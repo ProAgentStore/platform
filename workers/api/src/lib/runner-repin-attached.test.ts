@@ -16,7 +16,7 @@ beforeEach(() => {
 	const row = (node: string, machine: string, seen: string) =>
 		d1.exec(`INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, machine_id, last_seen_at, updated_at)
 		         VALUES ('i1', 'u1', '${node}', 'relay://', '${machine}', '${seen}', '${seen}')`);
-	row("Sergeys-Mac-mini.local", "mini-0000-machine-id", "2026-10-05 06:06:10");
+	row("runner-host.local", "mini-0000-machine-id", "2026-10-05 06:06:10");
 	row("Macmini", "mini-0000-machine-id", "2026-09-11 23:35:32");
 	row("pink-laptop", "pink-0000-machine-id", "2026-10-05 06:04:19");
 });
@@ -30,7 +30,7 @@ const env = (live: string[]) =>
 
 describe("attachedOnMachine (#922)", () => {
 	it("is true when the socket sits under another name of the same machine", async () => {
-		expect(await attachedOnMachine(env(["i1:node:Macmini"]), "i1", "u1", "Sergeys-Mac-mini.local")).toBe(true);
+		expect(await attachedOnMachine(env(["i1:node:Macmini"]), "i1", "u1", "runner-host.local")).toBe(true);
 	});
 
 	it("is false when only a different machine holds one", async () => {

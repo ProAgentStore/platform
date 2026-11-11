@@ -53,7 +53,7 @@ describe("the re-auth relay signs Grok in with its device code (#1156)", () => {
 		expect(reading).toEqual({ state: "device_code", url: "https://accounts.x.ai/oauth2/device?user_code=BCDF-GHJK", deviceCode: "BCDF-GHJK" });
 		expect(reauthNextStep(reading, "grok-device-auth")).toMatch(/Grok \(grok\.com\) account and enter the code BCDF-GHJK/);
 		// "Signed in as <account>" — the string xAI's binary prints on success (read from the binary, not observed live).
-		expect(readReauthPane(`${GROK_DEVICE_PANE}\n Signed in as serge@example.com`, "grok-device-auth").state).toBe("succeeded");
+		expect(readReauthPane(`${GROK_DEVICE_PANE}\n Signed in as other@example.com`, "grok-device-auth").state).toBe("succeeded");
 		// Codex's wording is unchanged.
 		expect(reauthNextStep({ state: "device_code", url: "https://auth.openai.com/device", deviceCode: "AB12-CD34" }, "codex-device-auth")).toMatch(/ChatGPT account/);
 	});
@@ -69,7 +69,7 @@ describe("Grok blocked on sign-in is recognised (#1156)", () => {
 
 describe("what a machine has, for coding_engine_get (#1156)", () => {
 	const env = {} as never;
-	const conn = { runnerNode: "Sergeys-Mac-mini.local" } as never;
+	const conn = { runnerNode: "runner-host.local" } as never;
 	const engines = [
 		{ id: "grok", command: "grok --permission-mode bypassPermissions -p", clientType: "grok" as const },
 		{ id: "codex", command: "codex exec --json --sandbox danger-full-access", clientType: "codex" as const },
@@ -77,17 +77,17 @@ describe("what a machine has, for coding_engine_get (#1156)", () => {
 	];
 
 	it("installed, which file, which version, signed in — and the fix when a session would not start", async () => {
-		runner.answers.set("grok", { checked: true, bin: "grok", binaryFound: true, binaryPath: "/Users/serge/.grok/bin/grok", version: "1.0.62", vendor: "xai", login: "missing" });
+		runner.answers.set("grok", { checked: true, bin: "grok", binaryFound: true, binaryPath: "/Users/former/.grok/bin/grok", version: "1.0.62", vendor: "xai", login: "missing" });
 		runner.answers.set("codex", { checked: true, bin: "codex", binaryFound: true, binaryPath: "/usr/local/bin/codex", version: "0.162.1", login: "found" });
 		runner.answers.set("gemini", { checked: true, bin: "gemini", binaryFound: false, login: "unknown" });
 		const out = await machineEngineChecks(env, "inst", "u1", engines, async () => conn);
-		expect(out.node).toBe("Sergeys-Mac-mini.local");
+		expect(out.node).toBe("runner-host.local");
 		expect(out.unavailable).toBeNull();
-		expect(out.engines.grok).toMatchObject({ installed: true, path: "/Users/serge/.grok/bin/grok", version: "1.0.62", vendor: "xai", login: "missing" });
+		expect(out.engines.grok).toMatchObject({ installed: true, path: "/Users/former/.grok/bin/grok", version: "1.0.62", vendor: "xai", login: "missing" });
 		expect(out.engines.grok.problem).toMatch(/not signed in there.*grok login/);
 		expect(out.engines.codex).toEqual({ installed: true, path: "/usr/local/bin/codex", version: "0.162.1", login: "found", problem: null });
 		expect(out.engines.gemini).toMatchObject({ installed: false, path: null, version: null, login: "unknown" });
-		expect(out.engines.gemini.problem).toContain('Gemini CLI is unavailable to the runner on machine "Sergeys-Mac-mini.local"');
+		expect(out.engines.gemini.problem).toContain('Gemini CLI is unavailable to the runner on machine "runner-host.local"');
 		expect(out.engines.gemini.problem).toContain("`gemini`");
 		expect(out.engines.gemini.problem).toContain("It may be installed");
 		expect(out.engines.gemini.problem).not.toMatch(/is not installed|not signed in|restart `pags up`/);
@@ -96,7 +96,7 @@ describe("what a machine has, for coding_engine_get (#1156)", () => {
 	it("a community `grok` is named as such, with xAI's installer as the fix", async () => {
 		runner.answers.set("grok", { checked: true, bin: "grok", binaryFound: true, binaryPath: "/x/bin/grok", version: "1.0.1", vendor: "community", login: "missing" });
 		const out = await machineEngineChecks(env, "inst", "u1", engines.slice(0, 1), async () => conn);
-		expect(out.engines.grok.problem).toBe(grokCommunityMessage('machine "Sergeys-Mac-mini.local"'));
+		expect(out.engines.grok.problem).toBe(grokCommunityMessage('machine "runner-host.local"'));
 		expect(out.engines.grok.problem).toMatch(/@vibe-kit\/grok-cli.*x\.ai\/cli\/install\.sh.*install\.ps1/);
 	});
 

@@ -41,11 +41,11 @@ describe("the command set is closed and its arguments are validated (#1320)", ()
 
 describe("status is clamped and carries no path or secret (#1320)", () => {
 	it("keeps good fields, nulls the rest, scrubs paths in the last error and never throws", () => {
-		const s = parseWatchdogStatus({ ...status, lastError: "ENOENT /Users/serge/.config/proagentstore/session.json", cpuLoad1: -4, memUsedPct: 400, version: "not a version", payloads: ["0.4.1", "x", "0.4.2", "0.4.3", "0.4.4", "0.4.5", "0.4.6"], token: "sk-secret", service: "cron" });
+		const s = parseWatchdogStatus({ ...status, lastError: "ENOENT /Users/former/.config/proagentstore/session.json", cpuLoad1: -4, memUsedPct: 400, version: "not a version", payloads: ["0.4.1", "x", "0.4.2", "0.4.3", "0.4.4", "0.4.5", "0.4.6"], token: "sk-secret", service: "cron" });
 		expect(s).toMatchObject({ version: null, cpuLoad1: null, memUsedPct: null, service: null, running: "0.4.177", crashes24h: 3 });
 		expect(s.payloads).toHaveLength(5);
 		expect(s.lastError).toBe("ENOENT <path>");
-		expect(JSON.stringify(s)).not.toMatch(/serge|sk-secret/);
+		expect(JSON.stringify(s)).not.toMatch(/owner|sk-secret/);
 		expect(parseWatchdogStatus(null).runner).toEqual({ alive: null, aliveObserved: false, uptimeSec: null });
 	});
 });
@@ -97,7 +97,7 @@ describe("queue → deliver → result, once (#1320)", () => {
 		// Another machine of the same account cannot settle it; neither can a made-up id.
 		await watchdogHeartbeat(env, "u1", OTHER, { status, results: [{ id: q.command.id, state: "done", detail: "forged" }, { id: "nope", state: "done" }] }, NOW + 2000);
 		expect((await readWatchdog(env, "u1", M, NOW + 2000)).commands[0]).toMatchObject({ state: "delivered", result: null });
-		await watchdogHeartbeat(env, "u1", M, { status, results: [{ id: q.command.id, state: "failed", detail: "launchctl kickstart failed: /Users/serge/x not loaded" }] }, NOW + 3000);
+		await watchdogHeartbeat(env, "u1", M, { status, results: [{ id: q.command.id, state: "failed", detail: "launchctl kickstart failed: /Users/former/x not loaded" }] }, NOW + 3000);
 		await watchdogHeartbeat(env, "u1", M, { status, results: [{ id: q.command.id, state: "done", detail: "second" }] }, NOW + 4000);
 		const c = (await readWatchdog(env, "u1", M, NOW + 4000)).commands[0];
 		expect(c).toMatchObject({ state: "failed", finishedAt: NOW + 3000 });

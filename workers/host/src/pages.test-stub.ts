@@ -19,7 +19,6 @@ export const deletePage = page;
 export const widgetJs = "";
 export const authWidgetJs = "";
 export const swJs = "";
-export const developerProfilePage = page;
 export const adminPage = page;
 export const notFoundPage = page;
 export const changelogPage = page;

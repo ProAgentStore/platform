@@ -29,7 +29,7 @@ beforeEach(() => {
 	register("inst-1", "RLs-MacBook-Air.local", LAPTOP, "2026-10-19 10:00:00");
 	register("inst-2", "Mac.modem", LAPTOP, "2026-10-20 00:40:00");
 	register("inst-1", "Macmini", MINI, "2026-10-20 00:30:00");
-	register("inst-2", "Sergeys-Mac-mini.local", MINI, "2026-10-19 00:30:00");
+	register("inst-2", "runner-host.local", MINI, "2026-10-19 00:30:00");
 	register("inst-1", "dell-laptop", null, "2026-10-20 00:10:00"); // an old CLI: no machine id
 	register("inst-1", "Mac", LAPTOP, "2026-10-18 00:00:00");
 	register("inst-2", "Mac", "a-second-machine-called-mac", "2026-10-18 00:00:00"); // two machines both called Mac
@@ -38,9 +38,9 @@ afterEach(() => d1.close());
 
 describe("setRunnerNodePin — the pin is a machine id (#1250)", () => {
 	it("pins by hostname of one machine: stores the machine id, removes the hostname key, routes by the machine's CURRENT hostname", async () => {
-		d1.sqlite.prepare("UPDATE agent_instances SET config = ? WHERE id = 'inst-1'").run(JSON.stringify({ runnerNode: "Sergeys-Mac-mini.local", settings: { keep: 1 } }));
+		d1.sqlite.prepare("UPDATE agent_instances SET config = ? WHERE id = 'inst-1'").run(JSON.stringify({ runnerNode: "runner-host.local", settings: { keep: 1 } }));
 		const res = await setRunnerNodePin(env, "inst-1", "u1", "RLs-MacBook-Air.local");
-		expect(res).toEqual({ from: "Sergeys-Mac-mini.local", to: "Mac.modem", machineId: LAPTOP, displayName: null, changed: true });
+		expect(res).toEqual({ from: "runner-host.local", to: "Mac.modem", machineId: LAPTOP, displayName: null, changed: true });
 		expect(config()).toEqual({ runnerMachineId: LAPTOP, settings: { keep: 1 } });
 		expect(await readInstanceRunnerNode(env, "inst-1", "u1")).toBe("Mac.modem");
 	});
@@ -54,9 +54,9 @@ describe("setRunnerNodePin — the pin is a machine id (#1250)", () => {
 
 	it("a hostname change keeps the pin: the machine registers under a new name and routing follows it", async () => {
 		await setRunnerNodePin(env, "inst-1", "u1", "Mac.modem");
-		register("inst-1", "SergeysRLLaptop", LAPTOP, "2026-10-20 02:00:00");
+		register("inst-1", "OwnerRLLaptop", LAPTOP, "2026-10-20 02:00:00");
 		expect(config()).toEqual({ runnerMachineId: LAPTOP });
-		expect(await readInstanceRunnerNode(env, "inst-1", "u1")).toBe("SergeysRLLaptop");
+		expect(await readInstanceRunnerNode(env, "inst-1", "u1")).toBe("OwnerRLLaptop");
 	});
 
 	it("a rename keeps the pin: the display name changes, the stored machine id does not", async () => {
@@ -81,12 +81,12 @@ describe("setRunnerNodePin — the pin is a machine id (#1250)", () => {
 
 	it("records the previous AND new machine, scoped to the instance and the account that changed it", async () => {
 		await setMachineDisplayName(env, "u1", LAPTOP, "rl-laptop");
-		d1.sqlite.prepare("UPDATE agent_instances SET config = ? WHERE id = 'inst-1'").run(JSON.stringify({ runnerNode: "Sergeys-Mac-mini.local" }));
+		d1.sqlite.prepare("UPDATE agent_instances SET config = ? WHERE id = 'inst-1'").run(JSON.stringify({ runnerNode: "runner-host.local" }));
 		const before = Date.now();
 		await setRunnerNodePin(env, "inst-1", "u1", "rl-laptop");
 		const [row] = events();
-		expect(row).toMatchObject({ user_id: "u1", instance_id: "inst-1", source: RUNNER_PIN_EVENT_SOURCE, level: "info", message: `Runs on: Sergeys-Mac-mini.local → rl-laptop (${LAPTOP})` });
-		expect(row.context).toMatchObject({ from: "Sergeys-Mac-mini.local", to: `rl-laptop (${LAPTOP})`, machineId: LAPTOP, via: "api" });
+		expect(row).toMatchObject({ user_id: "u1", instance_id: "inst-1", source: RUNNER_PIN_EVENT_SOURCE, level: "info", message: `Runs on: runner-host.local → rl-laptop (${LAPTOP})` });
+		expect(row.context).toMatchObject({ from: "runner-host.local", to: `rl-laptop (${LAPTOP})`, machineId: LAPTOP, via: "api" });
 		expect(row.ts).toBeGreaterThanOrEqual(before);
 	});
 

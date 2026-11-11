@@ -15,7 +15,7 @@ import { registerReauthRoutes } from "./coding-reauth.js";
 const SECRET = "install-test-secret";
 const UID = "user-1";
 const INSTANCE = "inst-1";
-const conn = { endpointUrl: "http://mini", token: "t", instanceId: INSTANCE, userId: UID, env: {} as Env, runnerNode: "Sergeys-Mac-mini.local", relayName: `${INSTANCE}:node:mini` };
+const conn = { endpointUrl: "http://mini", token: "t", instanceId: INSTANCE, userId: UID, env: {} as Env, runnerNode: "runner-host.local", relayName: `${INSTANCE}:node:mini` };
 const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
 let pane: string | null = "";
 let check: Record<string, unknown> = {};
@@ -41,7 +41,7 @@ beforeEach(() => {
 	getBoundRunnerConn.mockReset().mockResolvedValue(conn);
 	calls.length = 0;
 	pane = "";
-	check = { checked: true, binaryFound: true, bin: "grok", binaryPath: "/Users/serge/.grok/bin/grok", version: "1.0.62", login: "missing", vendor: "xai" };
+	check = { checked: true, binaryFound: true, bin: "grok", binaryPath: "/Users/former/.grok/bin/grok", version: "1.0.62", login: "missing", vendor: "xai" };
 	callRunner.mockImplementation(async (_c: unknown, path: string, body: Record<string, unknown>) => {
 		calls.push({ path, body });
 		if (path === "/tmux/capture") {
@@ -58,7 +58,7 @@ describe("the engine-install relay (#1156)", () => {
 	it("start: opens a fresh terminal on the runner and runs the FIXED installer in it — the caller chose only the engine", async () => {
 		const r = await call("POST", "", { clientType: "grok", command: "rm -rf ~" });
 		expect(r.status).toBe(200);
-		expect(r.body).toMatchObject({ status: "running", clientType: "grok", runs: "curl -fsSL https://x.ai/cli/install.sh | bash", runnerNode: "Sergeys-Mac-mini.local" });
+		expect(r.body).toMatchObject({ status: "running", clientType: "grok", runs: "curl -fsSL https://x.ai/cli/install.sh | bash", runnerNode: "runner-host.local" });
 		const run = calls.find((c) => c.path === "/tmux/run");
 		expect(run?.body).toEqual({ session: "pags-install-grok", command: '( curl -fsSL https://x.ai/cli/install.sh | bash ); echo "PAGS_INSTALL_EXIT=$?"' });
 		expect(calls.map((c) => c.path).slice(0, 3)).toEqual(["/tmux/session", "/tmux/session", "/tmux/run"]);

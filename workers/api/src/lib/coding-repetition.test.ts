@@ -18,7 +18,7 @@ import {
 
 /** The command run 3c83b0e9 sent over and over. Verbatim from the issue's string comparison. */
 const E2E_CMD =
-	'cd /Users/serge/dev/stores/pas/apps/chess-academy/web && E2E_FULL=1 E2E_ALLOW_PROD=1 E2E_BASE_URL=https://chess-ideas.chess-academy.app npx playwright test --reporter=list 2>&1 | tee /tmp/playwright-full-results.txt; echo "EXIT:$?"';
+	'cd /Users/former/dev/stores/pas/apps/chess-academy/web && E2E_FULL=1 E2E_ALLOW_PROD=1 E2E_BASE_URL=https://chess-ideas.chess-academy.app npx playwright test --reporter=list 2>&1 | tee /tmp/playwright-full-results.txt; echo "EXIT:$?"';
 
 const fenced = (prose: string, cmd = E2E_CMD) => `${prose}\n\n\`\`\`bash\n${cmd}\n\`\`\``;
 

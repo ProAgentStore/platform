@@ -24,7 +24,7 @@ let d1: RealSchemaD1;
 
 const rec = (over: Record<string, unknown> = {}) => ({
 	detectedAt: "2026-10-23T00:00:00.000Z", os: { name: "macOS", version: "12.7.6", arch: "x64" }, cpuCount: 4, memoryGb: 8, diskGb: 250, nodeVersion: "22.4.0",
-	playwright: { version: "1.58.2", probes: [{ browser: "webkit", success: false, error: "Executable doesn't exist at /Users/serge/x", durationMs: 40 }] },
+	playwright: { version: "1.58.2", probes: [{ browser: "webkit", success: false, error: "Executable doesn't exist at /Users/former/x", durationMs: 40 }] },
 	ios: false, android: false, docker: false, inventory: [{ name: "git", version: "2.45.2" }], ...over,
 });
 
@@ -92,7 +92,7 @@ describe("the heartbeat carries the record (#1312)", () => {
 		await beat("i-a", "Laptop", LAPTOP, { capabilities: rec() });
 		const raw = (d1.sqlite.prepare("SELECT raw_json FROM machine_capabilities").get() as { raw_json: string }).raw_json;
 		expect(raw).toContain("Executable doesn't exist at <path>");
-		expect(raw).not.toMatch(/serge|\/Users/);
+		expect(raw).not.toMatch(/owner|\/Users/);
 	});
 });
 

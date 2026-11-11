@@ -25,20 +25,20 @@ function mockEnv(): Env {
 describe("user profile", () => {
 	it("upsert → get round-trips known fields + custom", async () => {
 		const env = mockEnv();
-		await upsertProfile(env, "u1", { firstName: "Sergey", lastName: "Ivochkin", email: "serge.pro.job@gmail.com", phone: "+61404453580", gitHubHandle: "serge-ivo" });
+		await upsertProfile(env, "u1", { firstName: "Owner", lastName: "Name", email: "owner@example.com", phone: "+61400123456", gitHubHandle: "owner-login" });
 		const p = await getProfile(env, "u1");
-		expect(p.firstName).toBe("Sergey");
-		expect(p.email).toBe("serge.pro.job@gmail.com");
-		expect(p.phone).toBe("+61404453580");
-		expect(p.gitHubHandle).toBe("serge-ivo"); // custom field
+		expect(p.firstName).toBe("Owner");
+		expect(p.email).toBe("owner@example.com");
+		expect(p.phone).toBe("+61400123456");
+		expect(p.gitHubHandle).toBe("owner-login"); // custom field
 	});
 
 	it("setProfileField merges without clobbering other fields", async () => {
 		const env = mockEnv();
-		await upsertProfile(env, "u1", { firstName: "Sergey", email: "x@y.com" });
+		await upsertProfile(env, "u1", { firstName: "Owner", email: "x@y.com" });
 		await setProfileField(env, "u1", "salaryExpectation", "120000");
 		const p = await getProfile(env, "u1");
-		expect(p.firstName).toBe("Sergey"); // preserved
+		expect(p.firstName).toBe("Owner"); // preserved
 		expect(p.email).toBe("x@y.com"); // preserved
 		expect(p.salaryExpectation).toBe("120000"); // added
 	});
@@ -53,7 +53,7 @@ describe("user profile", () => {
 
 	it("#1066 saveReusableAnswer never writes a standard column — even an EMPTY one a question names", async () => {
 		const env = mockEnv();
-		await upsertProfile(env, "u1", { firstName: "Sergey" });
+		await upsertProfile(env, "u1", { firstName: "Owner" });
 		// saveAskAndHoldAnswer would map this to `linkedin` and write "The one on my résumé" as the URL.
 		const key = await saveReusableAnswer(env, "u1", "Your résumé and profile list different LinkedIn URLs — which one is right?", "The one on my résumé");
 		const p = await getProfile(env, "u1");
@@ -67,9 +67,9 @@ describe("user profile", () => {
 
 	it("saveAskAndHoldAnswer fills an EMPTY standard field directly", async () => {
 		const env = mockEnv();
-		await upsertProfile(env, "u1", { firstName: "Sergey" });
-		await saveAskAndHoldAnswer(env, "u1", "Phone number", "+61404453580");
-		expect((await getProfile(env, "u1")).phone).toBe("+61404453580"); // mapped to the standard key
+		await upsertProfile(env, "u1", { firstName: "Owner" });
+		await saveAskAndHoldAnswer(env, "u1", "Phone number", "+61400123456");
+		expect((await getProfile(env, "u1")).phone).toBe("+61400123456"); // mapped to the standard key
 	});
 
 	it("saveAskAndHoldAnswer does NOT clobber a POPULATED standard field — routes to custom instead", async () => {
@@ -103,8 +103,8 @@ describe("user profile", () => {
 	});
 
 	it("profileToCandidate derives fullName + location", () => {
-		const c = profileToCandidate({ firstName: "Sergey", lastName: "Ivochkin", email: "x@y.com", city: "Melbourne", state: "VIC", country: "Australia", phone: "123" });
-		expect(c.fullName).toBe("Sergey Ivochkin");
+		const c = profileToCandidate({ firstName: "Owner", lastName: "Name", email: "x@y.com", city: "Melbourne", state: "VIC", country: "Australia", phone: "123" });
+		expect(c.fullName).toBe("Owner Name");
 		expect(c.location).toBe("Melbourne, VIC, Australia");
 		expect(c.email).toBe("x@y.com");
 		expect(c.phone).toBe("123");

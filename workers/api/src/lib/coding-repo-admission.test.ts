@@ -12,7 +12,7 @@ const repo = (over: Partial<AdmissibleRepo> = {}): AdmissibleRepo => ({
 
 // The sentence #405 actually wrote to the row this issue is about, verbatim from production D1.
 const AIPA_ERROR =
-	"The configured checkout `/Users/serge-ivo/dev/aipa` has files but is not inside a git working tree — it is a plain folder, not a clone of a repository.";
+	"The configured checkout `/Users/owner-login/dev/aipa` has files but is not inside a git working tree — it is a plain folder, not a clone of a repository.";
 
 describe("admitRepoForRun — a run must not start on a folder the platform has already condemned (#548)", () => {
 	it("refuses a repo whose stored verdict is needs_attention", () => {
@@ -29,7 +29,7 @@ describe("admitRepoForRun — a run must not start on a folder the platform has 
 		expect(out.ok).toBe(false);
 		if (!out.ok) {
 			expect(out.message).toContain(AIPA_ERROR);
-			expect(out.message).toContain("/Users/serge-ivo/dev/aipa");
+			expect(out.message).toContain("/Users/owner-login/dev/aipa");
 			expect(out.message).toMatch(/git working tree/);
 		}
 	});
@@ -78,7 +78,7 @@ describe("admitRepoForRun — a run must not start on a folder the platform has 
 
 describe("admitRepoForRun — an absent or EMPTY checkout with a clone source is admitted, the start clones it (#828)", () => {
 	const empty = repo({ cloneStatus: "needs_attention", cloneError: "…exists but is EMPTY…", githubRepo: "freeappstore-online/platform" });
-	const live = (state: WorkdirVerdict["state"]): WorkdirVerdict => ({ state, path: "/Users/serge/dev/stores/fas/platform", detail: "" });
+	const live = (state: WorkdirVerdict["state"]): WorkdirVerdict => ({ state, path: "/Users/former/dev/stores/fas/platform", detail: "" });
 
 	it("admits on a LIVE empty or missing verdict", () => {
 		expect(admitRepoForRun(empty, live("empty"))).toEqual({ ok: true });

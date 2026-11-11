@@ -439,8 +439,8 @@ const instanceRow = (over: Partial<InstanceConnectorAccounts> = {}): InstanceCon
 	connector: "gmail",
 	label: "Gmail",
 	accounts: [
-		{ accountId: "sivochkin@gmail.com", label: "sivochkin@gmail.com", connectedAt: null },
-		{ accountId: "serge.pro.job@gmail.com", label: "serge.pro.job@gmail.com", connectedAt: null },
+		{ accountId: "owner-b@example.com", label: "owner-b@example.com", connectedAt: null },
+		{ accountId: "owner@example.com", label: "owner@example.com", connectedAt: null },
 	],
 	pinned: null,
 	resolves: null,
@@ -475,7 +475,7 @@ describe("agentAccountChoices — which connectors this agent must be told about
 	it("keeps offering it after the choice is made, so a set pin stays readable and changeable", () => {
 		// Gating on `blocked` instead would hide the control the moment it stopped being urgent,
 		// leaving the owner unable to see or change which mailbox the agent reaches.
-		const pinned = instanceRow({ pinned: "sivochkin@gmail.com", resolves: "sivochkin@gmail.com", blocked: null });
+		const pinned = instanceRow({ pinned: "owner-b@example.com", resolves: "owner-b@example.com", blocked: null });
 		expect(agentAccountChoices([pinned])).toHaveLength(1);
 	});
 });
@@ -506,8 +506,8 @@ describe("agentAccountNotice — the panel states the consequence, in the server
 	});
 
 	it("names the account in use once one resolves", () => {
-		const row = instanceRow({ pinned: "serge.pro.job@gmail.com", resolves: "serge.pro.job@gmail.com", blocked: null });
-		expect(agentAccountNotice(row)).toEqual({ blocked: false, message: "This agent uses serge.pro.job@gmail.com." });
+		const row = instanceRow({ pinned: "owner@example.com", resolves: "owner@example.com", blocked: null });
+		expect(agentAccountNotice(row)).toEqual({ blocked: false, message: "This agent uses owner@example.com." });
 	});
 
 	it("still names an account that has no captured label", () => {

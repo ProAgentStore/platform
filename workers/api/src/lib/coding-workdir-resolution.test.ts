@@ -27,15 +27,15 @@ describe("a repo stores its folder home-relative and keeps the translation as a 
 
 	it("records the absolute path and the rule beside the source-of-truth workdir, which it never changes", async () => {
 		const repo = await createRepo(env, "i1", "u1", { name: "hiring", workdir: "~/dev/stores/pas/apps/hiring" });
-		await recordWorkdirResolution(env, repo.id, { path: "/Users/sergeivo/dev/stores/pas/apps/hiring", via: "tilde" });
+		await recordWorkdirResolution(env, repo.id, { path: "/Users/owner/dev/stores/pas/apps/hiring", via: "tilde" });
 		const after = await getRepo(env, "i1", "u1", repo.id);
-		expect(after).toMatchObject({ workdir: "~/dev/stores/pas/apps/hiring", workdirResolved: "/Users/sergeivo/dev/stores/pas/apps/hiring", workdirResolvedVia: "tilde" });
+		expect(after).toMatchObject({ workdir: "~/dev/stores/pas/apps/hiring", workdirResolved: "/Users/owner/dev/stores/pas/apps/hiring", workdirResolvedVia: "tilde" });
 		expect(after?.workdirResolvedAt).toBeTruthy();
 	});
 
 	it("a coder moved to another machine shows the new machine's translation", async () => {
 		const repo = await createRepo(env, "i1", "u1", { name: "hiring", workdir: "~/dev/stores/pas/apps/hiring" });
-		await recordWorkdirResolution(env, repo.id, { path: "/Users/serge/dev/stores/pas/apps/hiring", via: "tilde" });
+		await recordWorkdirResolution(env, repo.id, { path: "/Users/former/dev/stores/pas/apps/hiring", via: "tilde" });
 		await recordWorkdirResolution(env, repo.id, { path: "C:\\Users\\Dell\\dev\\stores\\pas\\apps\\hiring", via: "tilde" });
 		expect((await getRepo(env, "i1", "u1", repo.id))?.workdirResolved).toBe("C:\\Users\\Dell\\dev\\stores\\pas\\apps\\hiring");
 	});

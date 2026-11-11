@@ -145,7 +145,7 @@ export interface GitSshIdentity {
 	 * authenticate at all (wrong key, no network, host not recognised).
 	 *
 	 * GitHub answers `Hi <name>!` for both user accounts AND deploy keys. The name differs:
-	 *   - user account → `serge-ivo`
+	 *   - user account → `owner-login`
 	 *   - deploy key   → `<org>/<repo>` (e.g. `jobsearch-works/shared`)
 	 *
 	 * A slash in the name is therefore the signature of a deploy key rather than a user account.

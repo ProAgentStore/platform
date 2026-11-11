@@ -29,7 +29,7 @@ function fake(over: Partial<ActionsRunnerDeps> = {}): Fake {
 		platform: "darwin",
 		arch: "arm64",
 		home: HOME,
-		user: "serge",
+		user: "owner",
 		isRoot: false,
 		exists: (p) => f.files.has(p),
 		mkdir: () => undefined,
@@ -73,7 +73,7 @@ describe("install (#1209)", () => {
 		const d = fake();
 		const job = await settle(startRunnerJob("install", { ...ORG, runnerGroup: "pags-pink-laptop", serviceMode: "macos_system" }, d));
 		const dir = join(HOME, ".proagentstore", "actions-runner", "proappstore-online");
-		expect(job).toMatchObject({ state: "done", service: "needs_admin", dir, runsAs: "serge", serviceNote: expect.stringContaining(`pags actions service install --dir ${dir}`) });
+		expect(job).toMatchObject({ state: "done", service: "needs_admin", dir, runsAs: "owner", serviceNote: expect.stringContaining(`pags actions service install --dir ${dir}`) });
 		expect(d.downloads).toEqual(["https://github.com/actions/runner/releases/download/v2.329.0/actions-runner-osx-arm64-2.329.0.tar.gz"]);
 		expect(d.ran.map((r) => r.file.split("/").pop())).toEqual(["tar", "config.sh"]);
 		const config = d.ran[1].args;
@@ -100,7 +100,7 @@ describe("install (#1209)", () => {
 	it("Linux without root: configured, and the service step is handed to the owner with the exact command", async () => {
 		const d = fake({ platform: "linux", arch: "x64" });
 		const job = await settle(startRunnerJob("install", ORG, d));
-		expect(job).toMatchObject({ state: "done", service: "needs_admin", serviceNote: expect.stringContaining("sudo ./svc.sh install serge") });
+		expect(job).toMatchObject({ state: "done", service: "needs_admin", serviceNote: expect.stringContaining("sudo ./svc.sh install owner") });
 		expect(d.ran.map((r) => r.file.split("/").pop())).toEqual(["tar", "config.sh"]);
 	});
 

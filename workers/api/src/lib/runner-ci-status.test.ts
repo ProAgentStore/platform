@@ -5,8 +5,8 @@
 import { describe, expect, it } from "vitest";
 import { ciRunnerHealth, DEFAULT_STUCK_QUEUE_MINUTES, routingModeView, stuckQueuedJobs, type QueuedJob } from "./runner-ci-status.js";
 
-const NODE = "Sergeys-Mac-mini.local";
-const LABEL = "pags-sergeys-mac-mini-local";
+const NODE = "runner-host.local";
+const LABEL = "pags-runner-host-local";
 const online = (...n: string[]) => new Set(n);
 
 describe("runner health", () => {

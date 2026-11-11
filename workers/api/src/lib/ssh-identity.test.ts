@@ -12,7 +12,7 @@ import {
 const probe = (over: Partial<GitIdentityProbe> = {}): GitIdentityProbe => ({
 	checked: true,
 	host: "github.com",
-	identity: "serge-ivo",
+	identity: "owner-login",
 	isDeployKey: false,
 	...over,
 });
@@ -144,10 +144,10 @@ describe("both transports, reported together (#684's actual complaint)", () => {
 		new Map<string, GitIdentityProbe | null>([["github-work", { checked: true, host: "github-work", ...over }]]);
 
 	it("reads the gh login only from a real answer", () => {
-		expect(httpsLoginFrom({ checked: true, login: "serge-ivo" })).toBe("serge-ivo");
+		expect(httpsLoginFrom({ checked: true, login: "owner-login" })).toBe("owner-login");
 		// An older runner, an empty login, or an error is NOT a login — treating any of them as one
 		// would put a fabricated account name into a remedy the owner is asked to act on.
-		expect(httpsLoginFrom({ login: "serge-ivo" })).toBeNull();
+		expect(httpsLoginFrom({ login: "owner-login" })).toBeNull();
 		expect(httpsLoginFrom({ checked: true, login: "   " })).toBeNull();
 		expect(httpsLoginFrom({ checked: true, error: "gh: not authenticated" })).toBeNull();
 		expect(httpsLoginFrom(null)).toBeNull();
@@ -157,17 +157,17 @@ describe("both transports, reported together (#684's actual complaint)", () => {
 		// Routing two accounts through two ~/.ssh/config aliases necessarily disagrees with the one
 		// `gh` login. Warning about it would be the false-positive class this module removed, one
 		// layer up. `info` is excluded from summary.issueCount.
-		const [issue] = sshIdentityIssues(onWork, probed({ identity: "work-bot", isDeployKey: false }), "serge-ivo");
+		const [issue] = sshIdentityIssues(onWork, probed({ identity: "work-bot", isDeployKey: false }), "owner-login");
 		expect(issue.severity).toBe("info");
 		expect(issue.message).toContain("SSH to github-work authenticates as work-bot");
-		expect(issue.message).toContain("HTTPS (`gh`) authenticates as serge-ivo");
+		expect(issue.message).toContain("HTTPS (`gh`) authenticates as owner-login");
 		expect(issue.fix).toContain("If that is deliberate");
 	});
 
 	it("says nothing when the two transports agree", () => {
-		expect(sshIdentityIssues(onWork, probed({ identity: "serge-ivo", isDeployKey: false }), "serge-ivo")).toEqual([]);
+		expect(sshIdentityIssues(onWork, probed({ identity: "owner-login", isDeployKey: false }), "owner-login")).toEqual([]);
 		// Case is not identity: GitHub logins are case-insensitive.
-		expect(sshIdentityIssues(onWork, probed({ identity: "Serge-Ivo", isDeployKey: false }), "serge-ivo")).toEqual([]);
+		expect(sshIdentityIssues(onWork, probed({ identity: "Owner-Login", isDeployKey: false }), "owner-login")).toEqual([]);
 	});
 
 	it("says nothing about a difference it could not measure", () => {
@@ -177,9 +177,9 @@ describe("both transports, reported together (#684's actual complaint)", () => {
 	it("names the HTTPS account in the deploy-key remedy — the fix #684 watched succeed", () => {
 		// The issue's own observation: `gh repo clone` over HTTPS cloned the repo SSH had just
 		// refused. Naming the account turns generic advice into that remedy.
-		const [issue] = sshIdentityIssues(onWork, probed({ identity: "jobsearch-works/shared", isDeployKey: true }), "serge-ivo");
+		const [issue] = sshIdentityIssues(onWork, probed({ identity: "jobsearch-works/shared", isDeployKey: true }), "owner-login");
 		expect(issue.severity).toBe("warn");
-		expect(issue.fix).toContain("authenticates as serge-ivo on this machine");
+		expect(issue.fix).toContain("authenticates as owner-login on this machine");
 	});
 
 	it("falls back to generic advice when no gh login was established", () => {
@@ -191,7 +191,7 @@ describe("both transports, reported together (#684's actual complaint)", () => {
 	it("treats a slash as a deploy key even from a runner that omits the flag", () => {
 		// The flag is the runner's; the slash is what it derives it from. A runner reporting the
 		// identity but not the flag must not be read as a healthy user account.
-		const [issue] = sshIdentityIssues(onWork, probed({ identity: "org/repo" }), "serge-ivo");
+		const [issue] = sshIdentityIssues(onWork, probed({ identity: "org/repo" }), "owner-login");
 		expect(issue.severity).toBe("warn");
 		expect(issue.message).toContain("is a deploy key");
 	});

@@ -8,7 +8,7 @@ import type { Page } from "@playwright/test";
  */
 const API = "https://api.proagentstore.online";
 const INSTANCE = { id: "inst-1", agent_id: "agent-1", name: "Job Search Scout 2", status: "active", slug: "job-search-scout", category: "productivity", icon_bg: "#7c3aed", sourceMode: "gmail", capabilities: { surfaces: [], runtime: null } };
-const LINK = "https://mail.google.com/mail/u/serge.pro.job@gmail.com/#all/m-digest";
+const LINK = "https://mail.google.com/mail/u/owner@example.com/#all/m-digest";
 const RECEIPT = { id: "scan-1", instanceId: "inst-1", trigger: "schedule", triggeredBy: null, status: "completed", startedAt: "2026-10-20T00:00:00Z", completedAt: "2026-10-20T00:00:05Z", hits: 2, candidates: 1, added: 1, deduped: 0, rejected: { digest: 1 }, errorMessage: null, lastMessageId: "m-job", query: "(subject:(job)) newer_than:2d", window: { newerThanDays: 2 }, scanLog: { path: "/v1/instances/inst-1/gmail-scout/scan-log?scan_id=scan-1", tool: "gmail_scout_scan_log", scan_id: "scan-1" }, handoff: "none" };
 const item = (over: Record<string, unknown>) => ({ seq: 0, messageId: "m", threadId: "t", gmailLink: null, sender: "SEEK <noreply@s.seek.com.au>", subject: "s", receivedAt: "Mon, 20 Oct 2026", snippet: null, read: null, classification: "single_posting", evidence: null, decision: "added", rejection: null, reason: "r", leadId: null, leadUrl: null, job: null, ...over });
 const LOG = {
@@ -16,7 +16,7 @@ const LOG = {
 	total: 2,
 	nextCursor: null,
 	items: [
-		item({ seq: 0, messageId: "m-job", gmailLink: "https://mail.google.com/mail/u/serge.pro.job@gmail.com/#all/m-job", subject: "Platform Engineer at Acme", reason: "Added as an unverified lead: one specific job posting.", leadId: "lead-7", leadUrl: "https://proagentstore.online/console/instances/inst-1/data" }),
+		item({ seq: 0, messageId: "m-job", gmailLink: "https://mail.google.com/mail/u/owner@example.com/#all/m-job", subject: "Platform Engineer at Acme", reason: "Added as an unverified lead: one specific job posting.", leadId: "lead-7", leadUrl: "https://proagentstore.online/console/instances/inst-1/data" }),
 		item({
 			seq: 1, messageId: "m-digest", gmailLink: LINK, subject: "20 new jobs for Platform Engineer", classification: "digest", decision: "rejected", rejection: "digest",
 			reason: "This is a digest or recommendation email listing several jobs.", evidence: 'subject contains "20 new jobs"',
@@ -33,7 +33,7 @@ async function mock(page: Page) {
 		const json = (data: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
 		if (url.pathname === "/v1/auth/me") return json({ id: "user-1", login: "tester", name: "Test User", display_name: "Test User", avatar: "https://example.com/a.png", roles: ["user"], boardConfig: null });
 		if (url.pathname === "/v1/instances/my/instances") return json({ instances: [INSTANCE] });
-		if (url.pathname === "/v1/instances/inst-1/gmail-scout/status") return json({ config: { pinnedEmail: "serge.pro.job@gmail.com", enabled: true }, state: { lastScanAt: null, candidateCount: 1, dedupeCount: 0, failureCount: 0, lastFailureAt: null, lastFailureMessage: null }, leadCount: 1, newLeadCount: 1, receipts: [RECEIPT] });
+		if (url.pathname === "/v1/instances/inst-1/gmail-scout/status") return json({ config: { pinnedEmail: "owner@example.com", enabled: true }, state: { lastScanAt: null, candidateCount: 1, dedupeCount: 0, failureCount: 0, lastFailureAt: null, lastFailureMessage: null }, leadCount: 1, newLeadCount: 1, receipts: [RECEIPT] });
 		if (url.pathname === "/v1/instances/inst-1/gmail-scout/scan-log") {
 			logReads.push(url.search);
 			return json(LOG);

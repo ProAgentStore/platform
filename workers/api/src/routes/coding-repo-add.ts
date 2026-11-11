@@ -133,7 +133,7 @@ export async function addPairedRepo(
 	// binding getting its GitHub half. That row is completed IN PLACE, keeping its id, sessions and
 	// timeline; a second binding on one checkout left two repos for session and engine resolution to
 	// choose between. A folder bound to some OTHER repo is refused by name, never rebound.
-	// The folder is STORED home-relative when the machine said where its home is (#1379): `~/dev/x` holds on every machine, `/Users/serge/dev/x` on one.
+	// The folder is STORED home-relative when the machine said where its home is (#1379): `~/dev/x` holds on every machine, `/Users/former/dev/x` on one.
 	const storedPath = verdict.homeRelative ?? localPath;
 	const sameFolder = await findRepoByWorkdir(c.env, instanceId, [...new Set([localPath, verdict.path, storedPath])]);
 	if (sameFolder?.githubRepo) {

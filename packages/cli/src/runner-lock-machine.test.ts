@@ -19,7 +19,7 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(home, { recursive: true, force: true }));
 
-const input = (env: NodeJS.ProcessEnv, account = "serge-ivo") => ({ account, node: "mac-mini", machineId: "m-mini", version: "0.4.170", port: null, env });
+const input = (env: NodeJS.ProcessEnv, account = "owner-login") => ({ account, node: "mac-mini", machineId: "m-mini", version: "0.4.170", port: null, env });
 
 describe("the lock does not move with PAGS_CONFIG_DIR (#1180)", () => {
 	it("a dev runner with its own config dir meets the installed runner's lock and is refused, naming the holder", async () => {

@@ -20,7 +20,7 @@ const LOCK = (over: Partial<RunnerLockFile> = {}): RunnerLockFile => ({
 	port: 49171,
 	node: "pink-laptop",
 	machineId: "m-pink",
-	account: "serge-ivo",
+	account: "owner-login",
 	version: "0.4.88",
 	launch: "tty",
 	launchDetail: "ttys003",

@@ -25,7 +25,7 @@ const ORPHAN_CMD =
 /** The user's everyday browser — same executable, real profile. */
 const REAL_CHROME_CMD =
 	"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome " +
-	"--user-data-dir=/Users/serge-ivo/Library/Application Support/Google/Chrome --profile-directory=Default";
+	"--user-data-dir=/Users/owner-login/Library/Application Support/Google/Chrome --profile-directory=Default";
 
 const orphan = { pid: 4212, ppid: 1, ageSeconds: 4310, userDataDir: `${TMP}/playwright_chromiumdev_profile-QygdDy` };
 

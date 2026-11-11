@@ -5,7 +5,7 @@
  * `instance_runner_node` reads a machine under EVERY name it is provably known by (#949).
  *
  * The live state on 2026-10-07, reproduced over the real schema: the FreeGameStore coder had
- * registered on the Mac mini only under its OLD hostname `Sergeys-Mac-mini.local`, while the Mac
+ * registered on the Mac mini only under its OLD hostname `runner-host.local`, while the Mac
  * mini's runner held its sockets under its current name `Macmini.modem`. `list_runner_nodes` (which
  * folds every name, #922) showed the machine connected; this route probed the one old name and
  * reported `nodeOnline: false` with the old row's version — the symptom of freegamestore #126.
@@ -42,7 +42,7 @@ beforeEach(() => {
 		d1.exec(`INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, runner_version, machine_id, status, last_seen_at)
 		         VALUES ('${inst}', 'u1', '${node}', 'relay://', '${version}', '${machine}', 'online', '${seen}')`);
 	row("fgs", "pink-laptop", PINK, "0.4.69", "2026-10-06 22:07:52");
-	row("fgs", "Sergeys-Mac-mini.local", MINI, "0.4.68", "2026-09-11 23:35:32"); // the old name, never re-registered
+	row("fgs", "runner-host.local", MINI, "0.4.68", "2026-09-11 23:35:32"); // the old name, never re-registered
 	row("other", "Macmini.modem", MINI, "0.4.69", "2026-10-06 22:07:30"); // the Mac mini as it is now
 });
 afterEach(() => d1.close());

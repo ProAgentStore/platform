@@ -1,13 +1,13 @@
 /**
  * A working folder as the OWNER writes it, resolved on THE MACHINE it runs on (#1379).
  *
- * A folder used to be stored as the absolute path of the machine it was added from (`/Users/serge/dev/stores/pas/apps/hiring`).
+ * A folder used to be stored as the absolute path of the machine it was added from (`/Users/former/dev/stores/pas/apps/hiring`).
  * Moved to a machine with another user name, the clone failed on a parent folder that machine could not create. The stored value is now
  * home-relative (`~/dev/stores/pas/apps/hiring`) and every machine expands it against ITS OWN home folder, on its own separators.
  *
  *   tilde          `~`, `~/x`, `~\x`     → under this machine's home
  *   relative       `dev/x`, `.\dev\x`    → under this machine's home (a bare relative path means "from home", never "from wherever the runner started")
- *   foreign-home   `/Users/serge/x`, `/home/serge/x`, `C:\Users\serge\x` when that user's home does not exist HERE → the same path under THIS home.
+ *   foreign-home   `/Users/former/x`, `/home/former/x`, `C:\Users\owner\x` when that user's home does not exist HERE → the same path under THIS home.
  *                  An absolute path of another account was how rows were stored before this; it is carried over, not refused.
  *   absolute       anything else, as written
  *

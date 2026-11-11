@@ -5,7 +5,7 @@
 import {
 	homepage, aboutPage, getStartedPage, skillsPage, skillMcpOperatorPage, consolePage, agentDetailPage,
 	privacyPage, termsPage, supportPage, deletePage,
-	widgetJs, authWidgetJs, swJs, developerProfilePage, adminPage, notFoundPage, changelogPage, openapiYaml,
+	widgetJs, authWidgetJs, swJs, adminPage, notFoundPage, changelogPage, openapiYaml,
 	llmsTxt, llmsFullTxt, skillsJson, mcpServerJson, docsFiles,
 	faviconSvg, manifestJson,
 	icon16, icon32, icon180, icon192, icon512, ogImage,
@@ -395,10 +395,9 @@ async function route(request: Request, env: Env): Promise<Response> {
 		return publicListingResponse(env.API, "agents", agentMatch[1], agentDetailPage, HTML_HEADERS);
 	}
 
-	// Developer profile pages
-	const developerMatch = path.match(/^\/developers\/([a-zA-Z0-9_-]+)\/?$/);
-	if (developerMatch) {
-		return publicListingResponse(env.API, "developers", developerMatch[1], developerProfilePage, HTML_HEADERS);
+	// Developer profiles are retired (#1632): the store is anonymous, so /developers[/...] goes home.
+	if (/^\/developers(\/.*)?$/.test(path)) {
+		return Response.redirect(`${url.origin}/`, 301);
 	}
 
 	if (path === "/index.html") {

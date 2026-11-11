@@ -96,7 +96,7 @@ describe("concrete-job-only extraction (#1022)", () => {
 		expect(candidateFromMessage({ ...LIVE_DIGEST, subject: "Head of IT Engineering, Data & AI" })).toBeNull(); // sender
 		const twoJobs = "https://au.seek.com/job/95135491?tracking=a\nhttps://au.seek.com/job/95164755?tracking=b";
 		expect(candidateFromMessage({ ...LIVE_DIGEST, from: "SEEK <noreply@s.seek.com.au>", subject: "Head of IT Engineering", text: twoJobs })).toBeNull();
-		for (const subject of ["20 new jobs for Project manager in All Melbourne VIC", "Sergey, we found 3 new ethical jobs for you", "EthicalJobs.com.au weekly email update - top tips", "Your saved search: Scrum Master", "Your job recommendations"]) {
+		for (const subject of ["20 new jobs for Project manager in All Melbourne VIC", "Owner, we found 3 new ethical jobs for you", "EthicalJobs.com.au weekly email update - top tips", "Your saved search: Scrum Master", "Your job recommendations"]) {
 			expect(candidateFromMessage({ ...LIVE_DIGEST, from: "Jobs <jobs@example.com>", subject, text: "https://jobs.example.com/job/1" })).toBeNull();
 		}
 	});
@@ -125,7 +125,7 @@ describe("stored leads judged by today's intake rules (#1022)", () => {
 		const cases: Array<[Record<string, unknown>, string]> = [
 			[{ title: "20 new jobs for Project manager in All Melbourne VIC", url: "https://au.seek.com/job/95126251?savedSearchID=x" }, "digest"],
 			[{ title: "Solution Designer [Very strong applicant] + 11 new jobs", url: "https://au.seek.com/job/95080412" }, "digest"],
-			[{ title: "Sergey, we found 3 new ethical jobs for you", url: "https://mandrillapp.com/track/click/1/www.ethicaljobs.com.au?p=x" }, "digest"],
+			[{ title: "Owner, we found 3 new ethical jobs for you", url: "https://mandrillapp.com/track/click/1/www.ethicaljobs.com.au?p=x" }, "digest"],
 			[{ title: "EthicalJobs.com.au weekly email update - top tips & advice + 516 new jobs on the site", url: "https://www.ethicaljobs.com.au/ethical-jobs-in-melbourne" }, "digest"],
 			[{ title: "Security alert", url: "https://accounts.google.com/AccountChooser?continue=x" }, "security_alert"],
 			[{ title: "New jobs posted from careers.racv.com.au", url: "http://careers.racv.com.au/?eid=1&from=email" }, "no_specific_job_url"],

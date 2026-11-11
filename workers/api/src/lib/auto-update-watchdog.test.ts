@@ -24,7 +24,7 @@ const errorRows = () => d1.DB.prepare("SELECT source, level, message FROM error_
 
 beforeEach(async () => {
 	d1 = realSchemaD1();
-	d1.exec("INSERT INTO users (id, github_login) VALUES ('u1', 'serge'), ('u2', 'other')");
+	d1.exec("INSERT INTO users (id, github_login) VALUES ('u1', 'owner'), ('u2', 'other')");
 	for (const m of [MINI, PINK, DELL]) await setMachinePolicy(env(), "u1", m, true);
 });
 afterEach(() => {

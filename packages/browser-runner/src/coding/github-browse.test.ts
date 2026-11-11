@@ -57,7 +57,7 @@ function ghRepo(overrides: Partial<{
 	language: string;
 }> = {}) {
 	return {
-		full_name: "serge-ivo/my-app",
+		full_name: "owner-login/my-app",
 		visibility: "public",
 		default_branch: "main",
 		pushed_at: "2026-08-01T10:00:00Z",
@@ -99,8 +99,8 @@ describe("listGithubRepos — personal repos", () => {
 
 	it("returns repos with the expected fields", () => {
 		mockSpawn.mockReturnValue(success([
-			ghRepo({ full_name: "serge-ivo/alpha", visibility: "public", language: "TypeScript", pushed_at: "2026-08-10T00:00:00Z" }),
-			ghRepo({ full_name: "serge-ivo/beta", visibility: "private", language: null, pushed_at: "2026-07-01T00:00:00Z" }),
+			ghRepo({ full_name: "owner-login/alpha", visibility: "public", language: "TypeScript", pushed_at: "2026-08-10T00:00:00Z" }),
+			ghRepo({ full_name: "owner-login/beta", visibility: "private", language: null, pushed_at: "2026-07-01T00:00:00Z" }),
 		]));
 		const result = listGithubRepos({ limit: 10 });
 		expect(result).not.toHaveProperty("error");
@@ -108,9 +108,9 @@ describe("listGithubRepos — personal repos", () => {
 		expect(result.checked).toBe(true);
 		expect(result.repos).toHaveLength(2);
 		expect(result.repos[0]).toMatchObject({
-			owner: "serge-ivo",
+			owner: "owner-login",
 			name: "alpha",
-			full_name: "serge-ivo/alpha",
+			full_name: "owner-login/alpha",
 			visibility: "public",
 			default_branch: "main",
 			pushed_at: "2026-08-10T00:00:00Z",
@@ -301,7 +301,7 @@ function ghSearchRepo(overrides: Partial<{
 	private: boolean;
 }> = {}) {
 	return {
-		full_name: "serge-ivo/my-repo",
+		full_name: "owner-login/my-repo",
 		visibility: "public",
 		language: "TypeScript",
 		pushed_at: "2026-08-20T10:00:00Z",
@@ -333,7 +333,7 @@ describe("searchGithubRepos — basic", () => {
 
 	it("returns repos with the expected search fields", () => {
 		mockSpawn.mockReturnValue(searchSuccess([
-			ghSearchRepo({ full_name: "serge-ivo/alpha", language: "TypeScript", stargazers_count: 10 }),
+			ghSearchRepo({ full_name: "owner-login/alpha", language: "TypeScript", stargazers_count: 10 }),
 		]));
 		const result = searchGithubRepos({ query: "alpha" });
 		expect(result).not.toHaveProperty("error");
@@ -341,8 +341,8 @@ describe("searchGithubRepos — basic", () => {
 		expect(result.checked).toBe(true);
 		expect(result.repos).toHaveLength(1);
 		const repo = result.repos[0];
-		expect(repo.full_name).toBe("serge-ivo/alpha");
-		expect(repo.owner).toBe("serge-ivo");
+		expect(repo.full_name).toBe("owner-login/alpha");
+		expect(repo.owner).toBe("owner-login");
 		expect(repo.name).toBe("alpha");
 		expect(repo.language).toBe("TypeScript");
 		expect(typeof repo.stars).toBe("number");
@@ -685,11 +685,11 @@ function setupDetailMocks(issues: object[], pulls: object[], branches: object[])
 describe("getGithubRepoDetail — basic", () => {
 	it("returns checked:true with the expected shape", () => {
 		setupDetailMocks([ghIssue()], [ghPull()], [ghBranch()]);
-		const result = getGithubRepoDetail({ repo: "serge-ivo/my-app" });
+		const result = getGithubRepoDetail({ repo: "owner-login/my-app" });
 		expect(result).not.toHaveProperty("error");
 		if ("error" in result) return;
 		expect(result.checked).toBe(true);
-		expect(result.repo).toBe("serge-ivo/my-app");
+		expect(result.repo).toBe("owner-login/my-app");
 		expect(Array.isArray(result.issues)).toBe(true);
 		expect(Array.isArray(result.pulls)).toBe(true);
 		expect(Array.isArray(result.branches)).toBe(true);
@@ -1030,7 +1030,7 @@ describe("getGithubCredentialScope (#688)", () => {
 		// First call: gh api user → returns the user object
 		mockSpawn.mockReturnValueOnce({
 			status: 0,
-			stdout: JSON.stringify({ login: "serge-ivo", id: 12345, type: "User" }),
+			stdout: JSON.stringify({ login: "owner-login", id: 12345, type: "User" }),
 			stderr: "",
 			error: undefined,
 		});
@@ -1045,7 +1045,7 @@ describe("getGithubCredentialScope (#688)", () => {
 		expect(result).not.toHaveProperty("error");
 		if ("error" in result) return;
 		expect(result.checked).toBe(true);
-		expect(result.login).toBe("serge-ivo");
+		expect(result.login).toBe("owner-login");
 		expect(result.orgs).toEqual(["ProAgentStore", "my-org"]);
 	});
 

@@ -102,9 +102,9 @@ describe("verdictFromCheck — a runner too old to check says so (#853 finding 1
 
 
 describe("verdictFromCheck carries the machine's home-relative spelling (#1379)", () => {
-	const ok = { checked: true, path: "/Users/sergeivo/dev/x", exists: true, isDirectory: true, entryCount: 3, insideWorkTree: true, gitChecked: true };
+	const ok = { checked: true, path: "/Users/owner/dev/x", exists: true, isDirectory: true, entryCount: 3, insideWorkTree: true, gitChecked: true };
 	it("passes it through on a checked path", () => {
-		expect(verdictFromCheck("/Users/serge/dev/x", { ...ok, homeRelative: "~/dev/x" })).toMatchObject({ state: "ok", path: "/Users/sergeivo/dev/x", homeRelative: "~/dev/x" });
+		expect(verdictFromCheck("/Users/former/dev/x", { ...ok, homeRelative: "~/dev/x" })).toMatchObject({ state: "ok", path: "/Users/owner/dev/x", homeRelative: "~/dev/x" });
 	});
 	it("ignores null (a path outside home), a non-tilde value, and an unverified answer", () => {
 		expect(verdictFromCheck("/srv/x", { ...ok, homeRelative: null }).homeRelative).toBeUndefined();

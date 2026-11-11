@@ -452,8 +452,8 @@ describe("the queue tick reads the whole range and every workflow run (#1349)", 
 
 // ── #1350: the tick re-proves each reported PR merge from GitHub before a note can post ──
 
-const ev = (method: "merge" | "squash" | "rebase", over: Record<string, unknown> = {}) => ({ v: 1, repo: "acme/app", pr: 42, baseRef: "main", method, beforeSha: BASE_SHA, afterSha: SHA, mergedAt: "2026-10-25T10:00:05Z", mergedBy: "serge", actor: "serge", ...over });
-const prBody = (over: Record<string, unknown> = {}) => ({ merged: true, merged_at: "2026-10-25T10:00:05Z", merge_commit_sha: SHA, merged_by: { login: "serge" }, base: { ref: "main", repo: { full_name: "acme/app" } }, head: { sha: sha40(2) }, commits: 1, ...over });
+const ev = (method: "merge" | "squash" | "rebase", over: Record<string, unknown> = {}) => ({ v: 1, repo: "acme/app", pr: 42, baseRef: "main", method, beforeSha: BASE_SHA, afterSha: SHA, mergedAt: "2026-10-25T10:00:05Z", mergedBy: "owner", actor: "owner", ...over });
+const prBody = (over: Record<string, unknown> = {}) => ({ merged: true, merged_at: "2026-10-25T10:00:05Z", merge_commit_sha: SHA, merged_by: { login: "owner" }, base: { ref: "main", repo: { full_name: "acme/app" } }, head: { sha: sha40(2) }, commits: 1, ...over });
 const c = (sha: string, parents: string[], message = "feat: change") => ({ sha, commit: { message }, parents: parents.map((p) => ({ sha: p })) });
 /** The three shapes GitHub produces for one PR: one squashed commit, N rebased commits, or the PR's commits plus a merge commit. */
 const SHAPES = {

@@ -14,7 +14,7 @@
  *
  * That already cost a diagnosis. On 2026-08-12 the owner asked why an agent reported "runner
  * offline" while the picker showed the node online; #530 and #531 shipped the mechanism and the
- * remedies, but the investigation's central claim — that the pin held `Sergeys-Mac-mini.local` at
+ * remedies, but the investigation's central claim — that the pin held `runner-host.local` at
  * 07:44:10 — had to be filed as INFERRED rather than measured, because the repin left nothing
  * behind. A platform that cannot say when its own routing changed cannot fully diagnose a routing
  * failure.

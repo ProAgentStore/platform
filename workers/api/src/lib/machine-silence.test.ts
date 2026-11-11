@@ -101,8 +101,8 @@ describe("a machine that stops reporting is told to its owner (#1162)", () => {
 	});
 
 	it("one stale agent on a machine that is still up is not the machine going down", async () => {
-		node("i1", "Sergeys-Mac-mini.local", 3 * 60 * MIN);
-		node("i2", "Sergeys-Mac-mini.local", 30_000);
+		node("i1", "runner-host.local", 3 * 60 * MIN);
+		node("i2", "runner-host.local", 30_000);
 		expect(await notifySilentMachines(env, NOW)).toBe(0);
 	});
 
@@ -122,7 +122,7 @@ describe("a machine that stops reporting is told to its owner (#1162)", () => {
 
 describe("mid-update silence is told too, and says so (#1162 covering #1141's sweep)", () => {
 	it("a machine silent while installing an update names the update and the restart remedy", async () => {
-		node("i1", "Sergeys-Mac-mini.local", 20 * MIN, { machineId: "mac-mini-0001" });
+		node("i1", "runner-host.local", 20 * MIN, { machineId: "mac-mini-0001" });
 		d1.sqlite
 			.prepare(`INSERT INTO machine_policies (user_id, machine_id, auto_update, status, latest_version, last_heartbeat_at, updated_at) VALUES ('u1', ?, 1, 'installing', '0.4.149', ?, ?)`)
 			.run("mac-mini-0001", NOW - 20 * MIN, NOW - 20 * MIN);
@@ -145,11 +145,11 @@ describe("mid-update silence is told too, and says so (#1162 covering #1141's sw
 
 describe("a machine's WATCHDOG going silent is told too — worse news than the runner alone (#1416)", () => {
 	it("silent past the threshold: one notification naming the watchdog specifically, with its last report", async () => {
-		watchdog("mac-mini-0001", 20 * MIN, { version: "0.4.188", label: "Sergeys-Mac-mini" });
+		watchdog("mac-mini-0001", 20 * MIN, { version: "0.4.188", label: "Owner-Mac-mini" });
 		expect(await notifySilentWatchdogs(env, NOW)).toBe(1);
 		const [n] = received();
 		expect(n).toMatchObject({ user: "u1", type: "machine", url: "/console/terminals/machines/mac-mini-0001" });
-		expect(n.title).toContain("Sergeys-Mac-mini's watchdog stopped reporting");
+		expect(n.title).toContain("Owner-Mac-mini's watchdog stopped reporting");
 		expect(n.body).toContain("Last heard from 20 minutes ago, running pags 0.4.188");
 		expect(n.body).toContain("nothing on that machine can be reached remotely");
 		expect(n.body).toContain("pags watchdog install");

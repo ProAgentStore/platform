@@ -1,8 +1,8 @@
 /**
  * #1095: an Application Runner can read the mailbox its confirmations go to — and only read it.
  *
- * The live state: the owner has two Gmail mailboxes connected (sivochkin@ and serge.pro.job@ — the job-search
- * one), and the Runner instance 2e85124f is already pinned to serge.pro.job@ (#715). What it lacked was a
+ * The live state: the owner has two Gmail mailboxes connected (sname@ and owner.pro.job@ — the job-search
+ * one), and the Runner instance 2e85124f is already pinned to owner.pro.job@ (#715). What it lacked was a
  * declaration: its template, a `local_apply` agent the owner created, declared no tools, so Gmail was
  * `no_tools` on it. The change is the template declaring the two READ tools, through the same route the
  * console and MCP's set_agent_capabilities use. Over the real schema and routes; the Agent DO is faked only
@@ -24,8 +24,8 @@ const { toolRoutes } = await import("./tools.js");
 
 const RUNNER_AGENT = "a5b1c8c3-e01c-465b-9cfc-67fb3a2c5460";
 const RUNNER = "2e85124f-4946-49d2-b922-8636ba92ca6a";
-const JOB_MAILBOX = "serge.pro.job@gmail.com";
-const OTHER_MAILBOX = "sivochkin@gmail.com";
+const JOB_MAILBOX = "owner@example.com";
+const OTHER_MAILBOX = "owner-b@example.com";
 const READ_TOOLS = ["gmail_search", "gmail_read_message"];
 
 let d1: RealSchemaD1;

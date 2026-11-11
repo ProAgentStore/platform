@@ -115,7 +115,7 @@ describe("GET /v1/admin/me", () => {
 	});
 
 	it("honors ADMIN_ALLOWLIST by github_login/email (case-insensitive)", async () => {
-		const { app, env } = testApp({ dbRoles: '["user"]', dbLogin: "Serge-Ivo", allowlist: "serge.the.dev@gmail.com,serge-ivo" });
+		const { app, env } = testApp({ dbRoles: '["user"]', dbLogin: "Owner-Login", allowlist: "owner-a@example.com,owner-login" });
 		const res = await req(app, env, "/v1/admin/me", await token("someHashUid", ["user"]));
 		expect(await res.json()).toEqual({ admin: true });
 	});

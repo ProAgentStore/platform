@@ -59,7 +59,7 @@ afterEach(() => {
 
 describe("no standing authority: every call is an approval card", () => {
 	it("under \"Always allow\" a filter call is QUEUED with the full card, and Gmail is not contacted", async () => {
-		account("serge@example.com", `${READONLY} ${SETTINGS_BASIC}`);
+		account("other@example.com", `${READONLY} ${SETTINGS_BASIC}`);
 		consent("always");
 		const res = await runRegistryTool("gmail_create_filter", ctx(), FILTER);
 
@@ -72,26 +72,26 @@ describe("no standing authority: every call is an approval card", () => {
 		expect(t.type).toBe(TOOL_APPROVAL_TASK_TYPE);
 		expect(t.status).toBe("needs_approval");
 		const payload = JSON.parse(t.payload);
-		expect(payload.title).toBe("Approve Gmail filter on serge@example.com");
-		expect(payload.description).toContain("Mailbox: serge@example.com");
+		expect(payload.title).toBe("Approve Gmail filter on other@example.com");
+		expect(payload.description).toContain("Mailbox: other@example.com");
 		expect(payload.description).toContain("from: news@shop.com");
 		expect(payload.description).toContain('add label "Shopping"');
 		expect(payload.description).toContain(FILTER.reason);
 		expect(payload.reasoning).toMatch(/ALL FUTURE mail/);
 		expect(payload.reasoning).toMatch(/never forwards mail/);
 		// The call the ticket carries is fixed by the platform and bound to the mailbox shown.
-		expect(payload.action).toEqual({ action: "call_tool", config: {}, params: { tool: "gmail_create_filter", args: { ...FILTER, mailbox_account: "serge@example.com" } } });
+		expect(payload.action).toEqual({ action: "call_tool", config: {}, params: { tool: "gmail_create_filter", args: { ...FILTER, mailbox_account: "other@example.com" } } });
 	});
 
 	it("a model cannot pre-bind a mailbox: its own mailbox_account is replaced by the resolved one", async () => {
-		account("serge@example.com", `${READONLY} ${SETTINGS_BASIC}`);
+		account("other@example.com", `${READONLY} ${SETTINGS_BASIC}`);
 		consent("always");
 		await runRegistryTool("gmail_create_filter", ctx(), { ...FILTER, mailbox_account: "attacker@evil.com" });
-		expect(JSON.parse(tickets()[0].payload).action.params.args.mailbox_account).toBe("serge@example.com");
+		expect(JSON.parse(tickets()[0].payload).action.params.args.mailbox_account).toBe("other@example.com");
 	});
 
 	it("still needs write consent — no consent row, no card", async () => {
-		account("serge@example.com", `${READONLY} ${SETTINGS_BASIC}`);
+		account("other@example.com", `${READONLY} ${SETTINGS_BASIC}`);
 		const res = await runRegistryTool("gmail_create_filter", ctx(), FILTER);
 		expect(res.success).toBe(false);
 		expect(tickets().filter((t) => t.type === TOOL_APPROVAL_TASK_TYPE)).toEqual([]);
@@ -105,7 +105,7 @@ describe("refused before anything reaches the owner", () => {
 		["a trash filter", { ...FILTER, actions: ["trash"] }, /not allowed/],
 		["a rule matching all mail", { actions: ["skip_inbox"], reason: "x" }, /match ALL mail/],
 	])("%s", async (_why, input, msg) => {
-		account("serge@example.com", `${READONLY} ${SETTINGS_BASIC}`);
+		account("other@example.com", `${READONLY} ${SETTINGS_BASIC}`);
 		consent("always");
 		const res = await runRegistryTool("gmail_create_filter", ctx(), input);
 		expect(res.success).toBe(false);
@@ -114,7 +114,7 @@ describe("refused before anything reaches the owner", () => {
 	});
 
 	it("a mailbox without the filter permission: refused, naming the Allow action", async () => {
-		account("serge@example.com", READONLY);
+		account("other@example.com", READONLY);
 		consent("always");
 		const res = await runRegistryTool("gmail_create_filter", ctx(), FILTER);
 		expect(res.success).toBe(false);
@@ -130,7 +130,7 @@ describe("the approved call", () => {
 	}
 
 	it("creates exactly the filter on the card, once", async () => {
-		account("serge@example.com", `${READONLY} ${SETTINGS_BASIC}`);
+		account("other@example.com", `${READONLY} ${SETTINGS_BASIC}`);
 		consent("always");
 		const args = await queueAndApprove();
 		const res = await runRegistryTool("gmail_create_filter", ctx({ preApprovedTicketId: "t-1" }), args);
@@ -147,7 +147,7 @@ describe("the approved call", () => {
 	});
 
 	it("is refused if the agent now uses a different mailbox than the one the owner approved for", async () => {
-		account("serge@example.com", `${READONLY} ${SETTINGS_BASIC}`);
+		account("other@example.com", `${READONLY} ${SETTINGS_BASIC}`);
 		consent("always");
 		const args = await queueAndApprove();
 		account("work@example.com", `${READONLY} ${SETTINGS_BASIC}`);
@@ -159,7 +159,7 @@ describe("the approved call", () => {
 	});
 
 	it("a label that does not exist is refused, never created", async () => {
-		account("serge@example.com", `${READONLY} ${SETTINGS_BASIC}`);
+		account("other@example.com", `${READONLY} ${SETTINGS_BASIC}`);
 		consent("always");
 		const args = { ...(await queueAndApprove()), label: "Nope" };
 		const res = await runRegistryTool("gmail_create_filter", ctx({ preApprovedTicketId: "t-1" }), args);

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { macRunnerServiceRemoved } from "./actions-runner-mac-removal.js";
 
-const dir = "/Users/serge/.proagentstore/actions-runner/proappstore-online";
-const home = "/Users/serge";
+const dir = "/Users/former/.proagentstore/actions-runner/proappstore-online";
+const home = "/Users/former";
 const oldPath = "/Library/LaunchDaemons/actions.runner.proappstore-online.pags-tiny-laptop.plist";
 const empty = {
 	exists: () => false,

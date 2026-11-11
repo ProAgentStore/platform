@@ -58,7 +58,7 @@ describe("detectAuthPrompt", () => {
 	});
 
 	it("does not fire on 'logged in as …'", () => {
-		expect(detectAuthPrompt("✓ logged in as serge@example.com")).toBeNull();
+		expect(detectAuthPrompt("✓ logged in as other@example.com")).toBeNull();
 	});
 
 	it("DOES fire when a success marker is followed by a real prompt", () => {

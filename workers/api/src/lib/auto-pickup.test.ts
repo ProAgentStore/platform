@@ -49,7 +49,7 @@ describe("the picker is deterministic and never random (#1233)", () => {
 			cand(issue(4, ["question", "P0"])),
 			cand(issue(5, ["wontfix", "P0"])),
 			cand(issue(6, ["design", "P0"])),
-			cand(issue(7, ["P0"], ["serge-ivo"])),
+			cand(issue(7, ["P0"], ["owner-login"])),
 			cand(issue(8, ["P0"]), { inFlight: true }),
 			cand(issue(9, ["P0"]), { failures: 2 }),
 		];

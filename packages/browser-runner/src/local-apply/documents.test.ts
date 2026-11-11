@@ -33,9 +33,9 @@ describe("attachment filenames (#1574)", () => {
 	const facts = (identity: Record<string, string>) => ({ schemaVersion: 1 as const, source: "account_profile" as const, instanceId: "runner-1", applicationId: "app-1", runId: "run-1", capturedAt: "2026-11-07T00:00:00.000Z", revision: "r", identity, savedAnswers: {} });
 
 	it("names each document after the candidate and the job", () => {
-		const input = { job: { title: "Program Director" }, ownerFacts: facts({ firstName: "Sergey", lastName: "Ivochkin" }) };
-		expect(documentFileName("resume", input)).toBe("Sergey-Ivochkin-Resume-Program-Director.pdf");
-		expect(documentFileName("cover_letter", input)).toBe("Sergey-Ivochkin-Cover-Letter-Program-Director.pdf");
+		const input = { job: { title: "Program Director" }, ownerFacts: facts({ firstName: "Owner", lastName: "Name" }) };
+		expect(documentFileName("resume", input)).toBe("Owner-Name-Resume-Program-Director.pdf");
+		expect(documentFileName("cover_letter", input)).toBe("Owner-Name-Cover-Letter-Program-Director.pdf");
 	});
 
 	it("keeps the generic name when the candidate's name is unknown", () => {
@@ -52,9 +52,9 @@ describe("attachment filenames (#1574)", () => {
 
 	it("stages the PDF under that name", async () => {
 		const dir = temp();
-		const input = { ...parseApplyEnvelope(envelope()), job: { title: "Program Director" }, ownerFacts: facts({ firstName: "Sergey", lastName: "Ivochkin" }) };
+		const input = { ...parseApplyEnvelope(envelope()), job: { title: "Program Director" }, ownerFacts: facts({ firstName: "Owner", lastName: "Name" }) };
 		const prepared = await prepareApplyDocuments(input, dir, join(dir, "no-home"), () => {}, fakePdf);
-		expect(prepared.artifactPath("resume")).toMatchObject({ path: expect.stringMatching(/\/Sergey-Ivochkin-Resume-Program-Director\.pdf$/) });
+		expect(prepared.artifactPath("resume")).toMatchObject({ path: expect.stringMatching(/\/Owner-Name-Resume-Program-Director\.pdf$/) });
 	});
 });
 

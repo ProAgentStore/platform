@@ -92,9 +92,9 @@ function buildApp(row: AgentRow) {
 							async all() {
 								// The Library page query. `visibility = 'published'` is the whole
 								// predicate, applied here exactly as the route writes it.
-								if (sql.includes("FROM agents a LEFT JOIN users u")) {
+								if (sql.includes("FROM agents a")) {
 									const visible = row.visibility === "published";
-									return { results: visible ? [{ ...row, creator_login: null, creator_name: "Creator", creator_avatar: null, subscriber_count: 0 }] : [] };
+									return { results: visible ? [{ ...row,  subscriber_count: 0 }] : [] };
 								}
 								return { results: [] };
 							},

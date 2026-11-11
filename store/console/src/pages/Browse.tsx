@@ -14,7 +14,6 @@ interface CatalogAgent {
 	name: string;
 	description?: string;
 	category?: string;
-	creator_login?: string;
 	subscriber_count?: number;
 }
 
@@ -105,7 +104,6 @@ export default function Browse() {
 								<p className="text-sm text-muted mb-2 leading-relaxed line-clamp-3 flex-1">{a.description || "No description"}</p>
 								<div className="flex gap-2 text-xs mb-3 flex-wrap">
 									{a.category && <span className="px-1.5 py-0.5 rounded font-medium bg-accent-soft text-purple-400">{a.category}</span>}
-									{a.creator_login && <span className="px-1.5 py-0.5 rounded font-medium bg-muted/15 text-muted">@{a.creator_login}</span>}
 									{typeof a.subscriber_count === "number" && <span className="px-1.5 py-0.5 rounded font-medium bg-muted/15 text-muted">{a.subscriber_count} subscriber{a.subscriber_count === 1 ? "" : "s"}</span>}
 								</div>
 								{naming?.id === a.id ? (

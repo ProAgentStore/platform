@@ -17,7 +17,7 @@ Actions `Runner.Listener` processes stayed alive but did not log a fresh
 `Listening for Jobs` during the first nine minutes after AC returned. A remote
 service restart brought all three back. The observed failure and temporary
 fleet repair are tracked in
-[machine-setup#15](https://github.com/serge-ivo/machine-setup/issues/15).
+[machine-setup#15](https://github.com/owner-login/machine-setup/issues/15).
 
 The temporary repair is a `machine-setup` LaunchDaemon and shell script on
 each laptop that notices battery-to-AC transitions and restarts idle Actions
@@ -137,7 +137,7 @@ outcome rather than using a broad process kill.
    remove another scope's runner.
 
 Once the PAGS service passes a physical AC-wake test on both laptops, remove
-their `online.serge.actions-acwake-recover` temporary watchers and generated
+their `online.owner.actions-acwake-recover` temporary watchers and generated
 machine-setup source. The PAGS runtime service can then be migrated separately
 to the built-in `pags up --install-service --daemon` path, after checking that
 no agent work is active.

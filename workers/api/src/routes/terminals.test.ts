@@ -181,8 +181,8 @@ describe("groupTerminalNodes — one machine, several names (#393)", () => {
 
 	it("does not mark an instance bound to a DIFFERENT machine", () => {
 		const nodes = groupTerminalNodes([
-			nodeRow({ instance_id: "i1", runner_node: "Mac", machine_id: "machine-aaaa1111", instance_config: JSON.stringify({ runnerNode: "Sergeys-Mac-mini.local" }) }),
-			nodeRow({ instance_id: "i2", runner_node: "Sergeys-Mac-mini.local", machine_id: "machine-bbbb2222" }),
+			nodeRow({ instance_id: "i1", runner_node: "Mac", machine_id: "machine-aaaa1111", instance_config: JSON.stringify({ runnerNode: "runner-host.local" }) }),
+			nodeRow({ instance_id: "i2", runner_node: "runner-host.local", machine_id: "machine-bbbb2222" }),
 		], []);
 		const mac = nodes.find((n) => n.node === "Mac");
 		expect(mac?.instances[0].bound).toBe(false);

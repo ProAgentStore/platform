@@ -187,8 +187,8 @@ function quickApplyPage(): string {
     <main>
       <section class="job"><h1>Ingénieur logiciel</h1><p class="company">Fixture Labs</p></section>
       <form action="/apply" method="post" enctype="multipart/form-data" class="application-form">
-        <input type="hidden" name="fullName" value="Sergey Ivochkin" />
-        <input type="hidden" name="email" value="sergey@example.com" />
+        <input type="hidden" name="fullName" value="Owner Name" />
+        <input type="hidden" name="email" value="other@example.com" />
         <label>Recherche <input name="coverNote" aria-label="Recherche" /></label>
         <button type="submit">Envoyer ma candidature</button>
       </form>

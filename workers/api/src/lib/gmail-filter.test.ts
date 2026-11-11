@@ -68,10 +68,10 @@ describe("filterApprovalCard — what the owner reads before deciding", () => {
 	it("names the mailbox, the exact rule, the actions, the reason, the scope and the risks", () => {
 		const r = parseFilterRequest({ ...base, subject: "weekly deals", actions: ["skip_inbox", "add_label"], label: "Shopping" });
 		if (!r.ok) throw new Error(r.error);
-		const card = filterApprovalCard(r.request, "serge@example.com");
+		const card = filterApprovalCard(r.request, "other@example.com");
 		const text = `${card.title}\n${card.description}\n${card.reasoning}`;
-		expect(card.title).toBe("Approve Gmail filter on serge@example.com");
-		expect(card.description).toContain("Mailbox: serge@example.com");
+		expect(card.title).toBe("Approve Gmail filter on other@example.com");
+		expect(card.description).toContain("Mailbox: other@example.com");
 		expect(card.description).toContain("matches: from: news@shop.com AND subject: weekly deals");
 		expect(card.description).toContain('Gmail will: skip the inbox (archive), add label "Shopping"');
 		expect(card.description).toContain(`Agent's reason: ${base.reason}`);

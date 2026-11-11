@@ -5,11 +5,11 @@ import { SWITCH_BRANCH_MIN_CLI } from "./repo-policy-act.js";
 
 /**
  * #524, measured: two machines connected, `RLs-MacBook-Air` on 0.4.49 and
- * `Sergeys-Mac-mini.local` on 0.4.45, with the instance pinned to the Mac mini. The old sentence
+ * `runner-host.local` on 0.4.45, with the instance pinned to the Mac mini. The old sentence
  * said "Run `npm i -g @proagentstore/cli` on that machine", which the owner resolved to the laptop
  * he was sitting at — the one that needed nothing.
  */
-const MINI = "Sergeys-Mac-mini.local";
+const MINI = "runner-host.local";
 const AIR = "RLs-MacBook-Air";
 const search = { what: "search this repository", minCli: REPO_SEARCH_MIN_CLI };
 

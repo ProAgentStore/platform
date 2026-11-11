@@ -524,7 +524,7 @@ This is architecturally sound and should remain a hard rule.
 Risk:
 
 - `PLATFORM_AI_ENABLED=true` in production config is explicitly documented as
-  acceptable only while Serge is the sole user. This must be flipped off before
+  acceptable only while the owner is the sole user. This must be flipped off before
   real multi-user onboarding unless billing and policy intentionally change.
 
 ## Agent Behaviour (issues #223-#226)

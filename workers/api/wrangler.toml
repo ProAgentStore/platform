@@ -41,7 +41,7 @@ API_BUILD = "dev"
 GITHUB_CLIENT_ID = "Ov23lihFW7hnEXYHNmvK"  # ProAgentStore OAuth app (own — no FAS dependency)
 GITHUB_ORG = "ProAgentStore"
 # Master switch for platform-paid internal AI (knowledge embeddings + conversation
-# summary). "true" = ON for ALL users (platform pays). Currently ON because Serge is
+# summary). "true" = ON for ALL users (platform pays). Currently ON because the owner is
 # the sole user. FLIP TO "false" (or remove) before onboarding real users → BYOK-only.
 # LLM chat is always BYOK regardless.
 PLATFORM_AI_ENABLED = "true"

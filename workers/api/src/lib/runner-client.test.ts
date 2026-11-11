@@ -339,15 +339,15 @@ describe("getRunnerConn — the contract it always documented (#532)", () => {
 	// hours on instance f8ddc272, across the incident that produced #530 and #531. The row is
 	// present and `status != 'offline'` in EVERY case below; the only difference is the socket.
 	it("a stamped node with a stale row and NO live socket resolves to null", async () => {
-		const env = buildEnv({ nodes: ["Sergeys-Mac-mini.local"], liveNames: [] });
-		expect(await getRunnerConn(env, INST, "u1", "Sergeys-Mac-mini.local")).toBeNull();
+		const env = buildEnv({ nodes: ["runner-host.local"], liveNames: [] });
+		expect(await getRunnerConn(env, INST, "u1", "runner-host.local")).toBeNull();
 	});
 
 	it("the same stamped node resolves normally once its socket is live", async () => {
-		const env = buildEnv({ nodes: ["Sergeys-Mac-mini.local"], liveNames: [relayNameForInstance(INST, "Sergeys-Mac-mini.local")] });
-		const conn = await getRunnerConn(env, INST, "u1", "Sergeys-Mac-mini.local");
-		expect(conn?.endpointUrl).toBe("http://Sergeys-Mac-mini.local");
-		expect(conn?.relayName).toBe(relayNameForInstance(INST, "Sergeys-Mac-mini.local"));
+		const env = buildEnv({ nodes: ["runner-host.local"], liveNames: [relayNameForInstance(INST, "runner-host.local")] });
+		const conn = await getRunnerConn(env, INST, "u1", "runner-host.local");
+		expect(conn?.endpointUrl).toBe("http://runner-host.local");
+		expect(conn?.relayName).toBe(relayNameForInstance(INST, "runner-host.local"));
 	});
 
 	it("another machine being live does NOT make the stamped one resolve", async () => {
@@ -556,12 +556,12 @@ describe("getRunnerConnForStampedNode — resolving a PAST STAMP, not a live pin
 	});
 
 	it("renamed original machine: the stamp is dead, but a proven alias of the SAME machine is live", async () => {
-		// THE issue's exact shape: `Sergeys-Mac-mini.local` stamped a session; the machine now answers as `Macmini.modem`.
+		// THE issue's exact shape: `runner-host.local` stamped a session; the machine now answers as `Macmini.modem`.
 		const env = buildIdentityEnv({
-			rows: [idRow("Sergeys-Mac-mini.local", "mac-mini-id"), idRow("Macmini.modem", "mac-mini-id")],
+			rows: [idRow("runner-host.local", "mac-mini-id"), idRow("Macmini.modem", "mac-mini-id")],
 			liveNames: [relayNameForInstance(INST, "Macmini.modem")],
 		});
-		const conn = await getRunnerConnForStampedNode(env, INST, "u1", "Sergeys-Mac-mini.local");
+		const conn = await getRunnerConnForStampedNode(env, INST, "u1", "runner-host.local");
 		expect(conn?.endpointUrl).toBe("http://Macmini.modem");
 		expect(conn?.runnerNode).toBe("Macmini.modem");
 	});
@@ -638,8 +638,8 @@ describe("sameMachine — the independent proof before a lock is released on who
 	});
 
 	it("a renamed original machine proves the same via its recorded machine_id", async () => {
-		const env = buildIdentityEnv({ rows: [idRow("Sergeys-Mac-mini.local", "mac-mini-id"), idRow("Macmini.modem", "mac-mini-id")] });
-		expect(await sameMachine(env, "u1", "Sergeys-Mac-mini.local", "Macmini.modem")).toBe(true);
+		const env = buildIdentityEnv({ rows: [idRow("runner-host.local", "mac-mini-id"), idRow("Macmini.modem", "mac-mini-id")] });
+		expect(await sameMachine(env, "u1", "runner-host.local", "Macmini.modem")).toBe(true);
 	});
 
 	it("a different machine never proves the same, even though both are registered", async () => {
