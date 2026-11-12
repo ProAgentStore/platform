@@ -1,3 +1,4 @@
+import { ownerRuntimeNodes } from "../lib/owner-runtime-nodes.js";
 import { registerBrowserSettingsRoutes } from "./instances-browser-settings.js";
 import { registerWebsiteAccessRoutes } from "./instances-website-access.js";
 import { registerBrowserModeRoutes } from "./instances-browser-mode.js";
@@ -690,10 +691,7 @@ instanceRoutes.get("/:instanceId/runner-node", async (c) => {
 	// Terminals page shows. This lets the picker distinguish "machine offline" from
 	// "machine online but THIS agent isn't attached to it" (its `pags up` was started
 	// before this agent, so it never opened this instance's socket).
-	const allNodeRows = await c.env.DB.prepare(
-		"SELECT DISTINCT instance_id, runner_node, runner_version, machine_id, last_seen_at FROM instance_runtime_nodes WHERE user_id = ?1 ORDER BY updated_at",
-	).bind(session.uid).all<{ instance_id: string; runner_node: string; runner_version: string | null; machine_id: string | null; last_seen_at: string | null }>();
-	const userRows = allNodeRows.results ?? [];
+	const userRows = (await ownerRuntimeNodes(c.env, session.uid)).reverse();
 
 	// Distinct MACHINES (rows sharing a `machine_id` are one, #379): this agent's own first, then the
 	// owner's others, since a pin finds a carrier owner-wide (#1037). See `pinCandidates`.

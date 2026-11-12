@@ -1,3 +1,4 @@
+import { ownerRuntimeNodes } from "./owner-runtime-nodes.js";
 /**
  * Which of the owner's machines could run this instance's browser verification right now (#1031).
  *
@@ -49,11 +50,7 @@ interface Row {
 }
 
 export async function browserRuntimeCandidates(env: Env, instanceId: string, uid: string, opts: { engine: string; pinnedNode: string | null }): Promise<BrowserRuntimeCandidate[]> {
-	const rows = ((await env.DB.prepare(
-		"SELECT instance_id, runner_node, machine_id, runner_version, last_seen_at FROM instance_runtime_nodes WHERE user_id = ?1 AND runner_node IS NOT NULL AND runner_node != '' ORDER BY updated_at DESC",
-	)
-		.bind(uid)
-		.all<Row>()).results ?? []);
+	const rows = (await ownerRuntimeNodes(env, uid)).filter((r) => r.runner_node != null && r.runner_node !== "");
 	const registrations = rows.map((r) => ({ node: r.runner_node, machineId: r.machine_id, instanceId: r.instance_id, lastSeenAt: r.last_seen_at, version: r.runner_version }));
 	const reg = (r: Row) => ({ node: normalizeRunnerNode(r.runner_node), machineId: r.machine_id, lastSeenAt: r.last_seen_at });
 	const machines = pinCandidates(rows.filter((r) => r.instance_id === instanceId).map(reg), rows.map(reg)).filter((m) => m.node);

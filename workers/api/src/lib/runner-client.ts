@@ -1,3 +1,4 @@
+import { ownerRuntimeNodes } from "./owner-runtime-nodes.js";
 import { BROWSER_EVIDENCE_TIMEOUT_MS, refreshBrowserEvidence } from "./browser-evidence.js";
 import { type BrowserScreenshotsSetting, withBrowserCaptureSettings } from "./browser-screenshots.js";
 import { browserSettingsForDispatch } from "./browser-settings-dispatch.js";
@@ -237,12 +238,7 @@ export async function liveAliasForPin(env: Env, instanceId: string, userId: stri
  * nothing that treats a thrown identity check as a confirmed stop either way.
  */
 async function ownerNodeRegistrations(env: Env, userId: string): Promise<NodeRegistration[]> {
-	const { results } = await env.DB.prepare(
-		"SELECT runner_node AS node, machine_id AS machineId, instance_id AS instanceId, last_seen_at AS lastSeenAt FROM instance_runtime_nodes WHERE user_id = ?1",
-	)
-		.bind(userId)
-		.all<NodeRegistration>();
-	return results ?? [];
+	return (await ownerRuntimeNodes(env, userId)).map((r) => ({ node: r.runner_node, machineId: r.machine_id, instanceId: r.instance_id, lastSeenAt: r.last_seen_at }));
 }
 
 /**

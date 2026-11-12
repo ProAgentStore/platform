@@ -82,6 +82,7 @@ const env = {
 			bind: (...args: unknown[]) => ({
 				all: async () => {
 					if (/instance_id = \?2/.test(sql)) return { results: accountRows.filter((r) => r.instanceId === args[1]).map((r) => ({ node: r.node })) };
+					if (sql.includes("SELECT instance_id, runner_node, machine_id, runner_version")) return { results: accountRows.map((r) => ({ instance_id: r.instanceId, runner_node: r.node, machine_id: r.machineId, last_seen_at: r.lastSeenAt, updated_at: r.lastSeenAt, runner_version: null })) };
 					const limit = Number(/LIMIT (\d+)/.exec(sql)?.[1] ?? Number.POSITIVE_INFINITY);
 					return { results: accountRows.slice(0, limit) };
 				},

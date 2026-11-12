@@ -1,3 +1,4 @@
+import { ownerRuntimeNodes } from "../lib/owner-runtime-nodes.js";
 import { Hono } from "hono";
 import { installationTokenForOwner } from "../lib/github-app.js";
 import { ciRunnersForForget } from "../lib/runner-forget-ci.js";
@@ -713,9 +714,7 @@ export type ForgetNodePreflight =
 export async function preflightForgetNode(env: Env, uid: string, rawTarget: string): Promise<ForgetNodePreflight> {
 	const target = normalizeRunnerNode(rawTarget);
 
-	const rows = (await env.DB.prepare(
-		"SELECT instance_id, runner_node, machine_id, last_seen_at FROM instance_runtime_nodes WHERE user_id = ?1",
-	).bind(uid).all<{ instance_id: string; runner_node: string; machine_id: string | null; last_seen_at: string | null }>()).results ?? [];
+	const rows = await ownerRuntimeNodes(env, uid);
 
 	const resolved = machineNamesFor(target, rows.map((r) => ({ node: r.runner_node, machineId: r.machine_id, instanceId: r.instance_id, lastSeenAt: r.last_seen_at })));
 	if (!resolved.ok) {
@@ -867,9 +866,7 @@ terminalRoutes.get("/resources", async (c) => {
 terminalRoutes.get("/nodes/:node/resources", async (c) => {
 	const session = await requireUser(c);
 	const target = normalizeRunnerNode(c.req.param("node"));
-	const rows = (await c.env.DB.prepare("SELECT instance_id, runner_node, machine_id, last_seen_at FROM instance_runtime_nodes WHERE user_id = ?1")
-		.bind(session.uid)
-		.all<{ instance_id: string; runner_node: string; machine_id: string | null; last_seen_at: string | null }>()).results ?? [];
+	const rows = await ownerRuntimeNodes(c.env, session.uid);
 	const resolved = machineNamesFor(target, rows.map((r) => ({ node: r.runner_node, machineId: r.machine_id, instanceId: r.instance_id, lastSeenAt: r.last_seen_at })));
 	if (!resolved.ok) {
 		return resolved.reason === "unknown"
@@ -953,9 +950,8 @@ terminalRoutes.delete("/nodes/:node/claim", async (c) => {
 	if (!callerMachineId) return c.json({ error: "machineId is required (your machine's stable id from machine.json)." }, 400);
 
 	// Rows for the named node.
-	const nodeRows = (await c.env.DB.prepare(
-		"SELECT instance_id, runner_node, machine_id, last_seen_at FROM instance_runtime_nodes WHERE user_id = ?1 AND runner_node = ?2",
-	).bind(uid, target).all<{ instance_id: string; runner_node: string; machine_id: string | null; last_seen_at: string | null }>()).results ?? [];
+	const allRows = await ownerRuntimeNodes(c.env, uid);
+	const nodeRows = allRows.filter((r) => r.runner_node === target);
 
 	if (!nodeRows.length) return c.json({ error: "No machine is registered under that name." }, 404);
 
@@ -964,11 +960,6 @@ terminalRoutes.delete("/nodes/:node/claim", async (c) => {
 	if (!ownedRows.length) {
 		return c.json({ error: `The name "${target}" is not claimed by your machine (${callerMachineId}). Only the machine that made the claim can remove it.`, reason: "not-owned" }, 409);
 	}
-
-	// All rows for this user — needed to check if the machine id would disappear entirely.
-	const allRows = (await c.env.DB.prepare(
-		"SELECT instance_id, runner_node, machine_id, last_seen_at FROM instance_runtime_nodes WHERE user_id = ?1",
-	).bind(uid).all<{ instance_id: string; runner_node: string; machine_id: string | null; last_seen_at: string | null }>()).results ?? [];
 
 	// Names of this machine that would STILL carry the identity after un-claiming `target`.
 	const remainingIdentifiedNames = new Set(

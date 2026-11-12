@@ -1,3 +1,4 @@
+import { ownerRuntimeNodes } from "./owner-runtime-nodes.js";
 /**
  * A repin that MOVES the agent, not just the record (#850).
  *
@@ -157,15 +158,10 @@ async function agentNodes(env: Env, userId: string, instanceId: string): Promise
 
 /** The owner's node registrations — the map from a machine's names to the agents holding sockets there. */
 export async function nodeRegistrations(env: Env, userId: string): Promise<NodeRegistration[]> {
-	const { results } = await env.DB.prepare(
-		`SELECT runner_node AS node, machine_id AS machineId, instance_id AS instanceId, last_seen_at AS lastSeenAt
-		 FROM instance_runtime_nodes WHERE user_id = ?1 AND runner_node IS NOT NULL AND runner_node != ''
-		 ORDER BY updated_at DESC LIMIT 200`,
-	)
-		.bind(userId)
-		.all<NodeRegistration>()
-		.catch(() => ({ results: [] as NodeRegistration[] }));
-	return results ?? [];
+	return (await ownerRuntimeNodes(env, userId).catch(() => []))
+		.filter((r) => r.runner_node != null && r.runner_node !== "")
+		.slice(0, 200)
+		.map((r) => ({ node: r.runner_node, machineId: r.machine_id, instanceId: r.instance_id, lastSeenAt: r.last_seen_at }));
 }
 
 /**

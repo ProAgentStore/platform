@@ -315,6 +315,7 @@ function buildEnv(opts: {
 								return { results: id ? [{ id }] : [] };
 							}
 							// The machine-identity read (#379) — every node the USER has, with its id.
+							if (sql.includes("SELECT instance_id, runner_node, machine_id, runner_version")) return { results: (opts.nodes ?? []).map((n) => ({ runner_node: n, machine_id: opts.machines?.[n] ?? null, instance_id: INST, last_seen_at: null, updated_at: "", runner_version: null })) };
 							if (sql.includes("machine_id AS machineId")) {
 								return { results: (opts.nodes ?? []).map((n) => ({ node: n, machineId: opts.machines?.[n] ?? null, instanceId: INST, lastSeenAt: null })) };
 							}
@@ -493,7 +494,7 @@ function buildIdentityEnv(opts: { rows: ReturnType<typeof idRow>[]; liveNames?: 
 							return null;
 						},
 						async all() {
-							if (sql.includes("machine_id AS machineId")) return { results: opts.rows };
+							if (sql.includes("SELECT instance_id, runner_node, machine_id, runner_version")) return { results: opts.rows.map((r) => ({ runner_node: r.node, machine_id: r.machineId, instance_id: r.instanceId, last_seen_at: r.lastSeenAt, updated_at: "", runner_version: null })) };
 							return { results: [] };
 						},
 						async run() {
@@ -527,7 +528,7 @@ function buildFailingRegistryEnv(): { env: Env; relayAsked: string[] } {
 							return null;
 						},
 						async all() {
-							if (sql.includes("machine_id AS machineId")) throw new Error("D1_ERROR: network");
+							if (sql.includes("SELECT instance_id, runner_node, machine_id, runner_version")) throw new Error("D1_ERROR: network");
 							return { results: [] };
 						},
 						async run() {
