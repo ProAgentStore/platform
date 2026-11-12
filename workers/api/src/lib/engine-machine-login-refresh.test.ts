@@ -1,4 +1,5 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -70,13 +71,20 @@ describe("a fresh interactive /login on the pinned machine reaches the spawned e
 	const sessions: HeadlessSession[] = [];
 
 	beforeAll(() => {
-		dir = mkdtempSync(join(tmpdir(), "pags-login-refresh-"));
-		bin = join(dir, "fake-claude.js");
+		// Spaces exercise the native shim target's argument boundaries too.
+		dir = mkdtempSync(join(tmpdir(), "pags login refresh-"));
+		const scriptDir = join(dir, "node_modules", "fake-claude");
+		mkdirSync(scriptDir, { recursive: true });
+		const script = join(scriptDir, "index.cjs");
 		storedLogin = join(dir, "stored-login");
-		writeFileSync(bin, FAKE_CLAUDE);
-		chmodSync(bin, 0o755);
+		writeFileSync(script, FAKE_CLAUDE, { mode: 0o755 });
+		// Exercise the installed-engine launcher on Windows as well as the real
+		// stream-json protocol; a shebang script is not a Windows executable.
+		bin = process.platform === "win32" ? join(dir, "fake-claude.cmd") : script;
+		if (process.platform === "win32") writeFileSync(bin, '@"node" "%dp0%\\node_modules\\fake-claude\\index.cjs" %*\r\n');
 	});
-	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+	// stop() signals the real child; Windows retains its cwd until it exits.
+	afterAll(() => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
 	beforeEach(() => {
 		// `pags up` started in a shell that exported a subscription token, since expired.
 		process.env.CLAUDE_CODE_OAUTH_TOKEN = "expired";

@@ -139,6 +139,30 @@ describe("cloneIntoOwnFolder — real git, the owner-folder guards (#858)", () =
 	it("fails with git's reason for a repository it cannot reach", async () => {
 		await expect(cloneIntoOwnFolder(join(tmp, "missing"), join(tmp, "no-such.git"))).rejects.toThrow(/repository|does not exist|not found/i);
 	});
+
+	it("bounds a long-path failure while retaining Git's final explanation", async () => {
+		const parent = join(tmp, "long-path-".repeat(7));
+		mkdirSync(parent);
+		const dir = join(parent, "missing");
+		const source = join(parent, `${"no-such-".repeat(20)}.git`);
+		let gitReason = "";
+		try {
+			execFileSync("git", ["clone", source, dir], { encoding: "utf8", stdio: "pipe" });
+		} catch (error) {
+			gitReason = String((error as { stderr?: string }).stderr).trim();
+		}
+		expect(gitReason.length).toBeGreaterThan(300);
+		let failure = "";
+		try {
+			await cloneIntoOwnFolder(dir, source);
+		} catch (error) {
+			failure = (error as Error).message;
+		}
+		expect(failure.length).toBeLessThanOrEqual(300);
+		expect(failure).toContain("[...truncated...]");
+		expect(failure).toContain(gitReason.slice(-120));
+		expect(failure).toMatch(/repository|does not exist|not found/i);
+	});
 });
 
 describe("CloneJobs durability across a runner crash or forced restart (#1459)", () => {

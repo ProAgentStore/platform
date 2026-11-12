@@ -111,7 +111,9 @@ export async function cloneIntoOwnFolder(dir: string, url: string, onPid?: (pid:
 		await pending;
 	} catch (e) {
 		const stderr = String((e as { stderr?: unknown }).stderr ?? "").trim() || (e instanceof Error ? e.message : "git clone failed");
-		throw new Error(stderr.slice(0, 300));
+		// Keep the reason at the end too: a long destination/source path can otherwise
+		// consume the entire receipt before Git explains why the clone failed.
+		throw new Error(stderr.length <= 300 ? stderr : `${stderr.slice(0, 100)}\n[...truncated...]\n${stderr.slice(-180)}`);
 	}
 }
 

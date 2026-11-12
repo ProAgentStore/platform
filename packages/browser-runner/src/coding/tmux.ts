@@ -146,7 +146,7 @@ export function killSession(sessionName: string): boolean {
 /** List names of all live sessions. */
 export function listSessions(): string[] {
 	try {
-		const out = execFileSync("tmux", ["list-sessions", "-F", "#{session_name}"], {
+		const out = execFileSync("tmux", ["list-sessions", "-F", "#{session_name} "], {
 			encoding: "utf8",
 			stdio: "pipe",
 		});
@@ -184,7 +184,10 @@ const FIELD_SEP = "|";
 export function listSessionsDetailed(): TmuxSessionInfo[] {
 	try {
 		// `|`-separated — see FIELD_SEP's comment for why not tab.
-		const fmt = `#{session_name}${FIELD_SEP}#{session_windows}${FIELD_SEP}#{session_attached}${FIELD_SEP}#{pane_current_command}${FIELD_SEP}#{window_name}${FIELD_SEP}#{session_created}`;
+		// The trailing space makes Node quote this argument on Windows. Without it,
+		// MSYS tmux expands the unquoted braces before tmux sees the format, yielding
+		// literal #session_name instead of a session. Output is trimmed below.
+		const fmt = `#{session_name}${FIELD_SEP}#{session_windows}${FIELD_SEP}#{session_attached}${FIELD_SEP}#{pane_current_command}${FIELD_SEP}#{window_name}${FIELD_SEP}#{session_created} `;
 		const out = execFileSync("tmux", ["list-sessions", "-F", fmt], { encoding: "utf8", stdio: "pipe" });
 		return out
 			.split("\n")

@@ -210,9 +210,9 @@ describe("account ceiling vs pool exhaustion — distinguishable, because they m
 		// Three today: the chat loop's workflow, the coding Pilot's spend gate, and the apply run's
 		// (#516, the third arriving exactly the way this predicate was written to catch).
 		expect(callers.map((f) => path.relative(root, f)).sort(), "callers of markExhausted").toEqual([
-			"lib/apply-decide-budget.ts",
-			"lib/coding-decide-budget.ts",
-			"workflows/agent-loop.ts",
+			path.join("lib", "apply-decide-budget.ts"),
+			path.join("lib", "coding-decide-budget.ts"),
+			path.join("workflows", "agent-loop.ts"),
 		]);
 		for (const f of callers) {
 			expect(fs.readFileSync(f, "utf8"), `${path.relative(root, f)} must not markExhausted on account_ceiling`).toMatch(

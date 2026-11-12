@@ -33,18 +33,27 @@ import { registryConnectorGroups, registryTools } from "./tool-registry.js";
 import { TERMINAL_CLI_PROTOCOL, TOOL_LIST_CLOSED, connectorToolsPrompt, type PromptTool } from "./connector-tool-prompt.js";
 import { toolNamesFor } from "../agent-do-tools.js";
 
-const SQL = readFileSync(fileURLToPath(new URL("../../migrations/0123_seed_tmux_coder_agent.sql", import.meta.url).href), "utf8");
+const SQL = readFileSync(fileURLToPath(new URL("../../migrations/0123_seed_tmux_coder_agent.sql", import.meta.url).href), "utf8").replace(/\r\n/g, "\n");
 
 /** Pull the agent's config JSON back out of the INSERT's `json('…')` literal. */
-function seededConfig(): Record<string, unknown> {
-	const start = SQL.indexOf("json('{");
-	const end = SQL.indexOf("'),\n  datetime('now')", start);
+function seededConfig(source = SQL): Record<string, unknown> {
+	const sql = source.replace(/\r\n/g, "\n");
+	const start = sql.indexOf("json('{");
+	const end = sql.indexOf("'),\n  datetime('now')", start);
 	expect(start).toBeGreaterThan(-1);
 	expect(end).toBeGreaterThan(start);
 	// SQL escapes a single quote by doubling it.
-	const literal = SQL.slice(start + "json('".length, end).replace(/''/g, "'");
+	const literal = sql.slice(start + "json('".length, end).replace(/''/g, "'");
 	return JSON.parse(literal) as Record<string, unknown>;
 }
+
+describe("migration config scanning", () => {
+	it("extracts identical config from LF and CRLF SQL, including escaped quotes", () => {
+		const lf = SQL.replace(/\r\n/g, "\n");
+		expect(seededConfig(lf.replace(/\n/g, "\r\n"))).toEqual(seededConfig(lf));
+		expect(seededConfig(lf).identity).toBeDefined();
+	});
+});
 
 const CONFIG = seededConfig();
 const CAPS_LITERAL = CONFIG.capabilities as Record<string, unknown>;

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	capturePane,
@@ -8,6 +8,7 @@ import {
 	extractBetweenMarkers,
 	killSession,
 	listSessionsDetailed,
+	listSessions,
 	makeRunMarkers,
 	runCommand,
 	sessionExists,
@@ -36,6 +37,7 @@ const SESSION = `pags-tmux-connector-test-${process.pid}`;
  * file points both at a private directory (short: a unix socket path is capped near 104 characters) and kills that server after.
  */
 let tmuxTmp = "";
+let ownsServer = false;
 const saved = { TMUX_TMPDIR: process.env.TMUX_TMPDIR, TMUX: process.env.TMUX };
 const restoreEnv = (k: "TMUX_TMPDIR" | "TMUX") => {
 	if (saved[k] === undefined) delete process.env[k];
@@ -54,13 +56,15 @@ async function until(cond: () => boolean, what: string, timeoutMs = 45_000): Pro
 describe.runIf(HAS_TMUX)("tmux connector primitives", () => {
 	beforeAll(() => {
 		tmuxTmp = mkdtempSync("/tmp/ptc-");
-		process.env.TMUX_TMPDIR = tmuxTmp;
+		// Native Node's /tmp is not MSYS's /tmp. Give tmux the actual directory;
+		// an inaccessible TMUX_TMPDIR can silently fall back to the owner's server.
+		process.env.TMUX_TMPDIR = realpathSync(tmuxTmp).replace(/\\/g, "/");
 		delete process.env.TMUX;
 	});
 	afterAll(() => {
 		killSession(SESSION);
 		try {
-			execFileSync("tmux", ["kill-server"], { stdio: "ignore" });
+			if (ownsServer) execFileSync("tmux", ["kill-server"], { stdio: "ignore" });
 		} catch {
 			/* no server left to stop */
 		}
@@ -74,7 +78,12 @@ describe.runIf(HAS_TMUX)("tmux connector primitives", () => {
 		// This fixture tests tmux primitives, not the owner's interactive shell profile.
 		// A login shell can spend the marker deadline loading nvm under suite load.
 		createSession(SESSION, process.cwd(), "/bin/sh");
+		const expectedRoot = process.env.TMUX_TMPDIR?.replace(/^([A-Za-z]):/, (_drive, letter: string) => `/${letter.toLowerCase()}`);
+		const socket = execFileSync("tmux", ["display-message", "-p", "-t", SESSION, "#{socket_path} "], { encoding: "utf8" }).trim();
+		expect(socket.startsWith(`${expectedRoot}/tmux-`), `unexpected tmux socket: ${socket}`).toBe(true);
+		ownsServer = true;
 		expect(sessionExists(SESSION)).toBe(true);
+		expect(listSessions()).toContain(SESSION);
 		const found = listSessionsDetailed().find((s) => s.name === SESSION);
 		expect(found).toBeTruthy();
 		expect(found?.windows).toBeGreaterThanOrEqual(1);

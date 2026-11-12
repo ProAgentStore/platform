@@ -26,8 +26,8 @@ import { getRegistryTool } from "../tool-registry.js";
 const MIGRATION = fileURLToPath(new URL("../../../migrations/0057_seed_site_builder_agent.sql", import.meta.url).href);
 
 /** Pull the agent's config JSON back out of the migration's `json('…')` literal. */
-function seededAgentConfig(): Record<string, unknown> {
-	const sql = readFileSync(MIGRATION, "utf8");
+function seededAgentConfig(source = readFileSync(MIGRATION, "utf8")): Record<string, unknown> {
+	const sql = source.replace(/\r\n/g, "\n");
 	const start = sql.indexOf("json('");
 	const end = sql.indexOf("'),\n  datetime('now')", start);
 	expect(start).toBeGreaterThan(-1);
@@ -36,6 +36,14 @@ function seededAgentConfig(): Record<string, unknown> {
 	const literal = sql.slice(start + "json('".length, end).replace(/''/g, "'");
 	return JSON.parse(literal) as Record<string, unknown>;
 }
+
+describe("migration config scanning", () => {
+	it("extracts identical config from LF and CRLF SQL, including escaped quotes", () => {
+		const lf = readFileSync(MIGRATION, "utf8").replace(/\r\n/g, "\n");
+		expect(seededAgentConfig(lf.replace(/\n/g, "\r\n"))).toEqual(seededAgentConfig(lf));
+		expect(seededAgentConfig(lf).pipelines).toBeDefined();
+	});
+});
 
 /** 0057's copy with the three #805 param names rewritten — the ONLY edit 0151 is allowed to be. */
 function withSnakeParams(def: unknown): unknown {
