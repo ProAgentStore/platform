@@ -12,7 +12,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync as writeSyncFs } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as helper from "./fail-before.mjs";
@@ -27,13 +27,24 @@ vi.setConfig({ testTimeout: 60_000 });
 const _io = helper._io ?? { writeSync: (...a) => writeSyncFs(...a), lstatSync: (...a) => lstatSync(...a) };
 
 const CLI = resolve(import.meta.dirname, "..", "fail-before.mjs");
-const installed = (bin) => spawnSync("sh", ["-c", `command -v ${bin}`]).status === 0;
+// Windows may resolve bash to the WSL launcher even when its distribution is unavailable.
+// Probe execution and keep looking on PATH so a functioning MSYS/Git Bash can still run the fixture.
+function findShell(bin, run = spawnSync, path = process.env.PATH ?? "") {
+	const names = process.platform === "win32" ? [`${bin}.exe`, bin] : [bin];
+	const candidates = [bin, ...path.split(delimiter).flatMap((dir) => names.map((name) => join(dir, name)))];
+	return candidates.find((candidate) => {
+		const result = run(candidate, ["-c", "printf pags-shell-ready"], { encoding: "utf8", timeout: 5_000 });
+		return result.status === 0 && result.stdout === "pags-shell-ready";
+	});
+}
+const shells = Object.fromEntries(["sh", "bash", "zsh"].map((bin) => [bin, findShell(bin)]));
 /**
  * A missing shell skips its test — except where PAGS_REQUIRE_SHELLS is set (ci.yml, which installs
  * zsh), so there the test fails instead of silently skipping. Not plain `CI`: the API deploy workflow
  * also runs the suite, without zsh, and a skip there must not block a deploy.
  */
-const has = (bin) => installed(bin) || !!process.env.PAGS_REQUIRE_SHELLS;
+const has = (bin) => !!shells[bin] || !!process.env.PAGS_REQUIRE_SHELLS;
+const shellPath = (bin) => shells[bin] ?? bin;
 const repos = [];
 afterEach(() => {
 	for (const d of repos.splice(0)) rmSync(d, { recursive: true, force: true });
@@ -94,7 +105,18 @@ function state(dir) {
  * and only reproduced on a bare machine. Dropping the guard directories makes the reproduction the same
  * everywhere; the guard itself is tested in packages/browser-runner/src/coding/git-guard.test.ts.
  */
-const UNGUARDED = { ...process.env, PATH: (process.env.PATH ?? "").split(":").filter((d) => !d.includes("/proagentstore/git-guard/")).join(":") };
+const UNGUARDED = { ...process.env, PATH: (process.env.PATH ?? "").split(delimiter).filter((d) => !d.replaceAll("\\", "/").includes("/proagentstore/git-guard/")).join(delimiter) };
+
+describe("shell fixture capability detection", () => {
+	it("rejects an installed launcher that cannot execute and selects a working later candidate", () => {
+		const run = vi.fn((candidate) => candidate === "bash" ? { status: 1, stdout: "" } : { status: 0, stdout: "pags-shell-ready" });
+		expect(findShell("bash", run, "tools")).toBe(join("tools", process.platform === "win32" ? "bash.exe" : "bash"));
+		expect(run).toHaveBeenCalledTimes(2);
+	});
+	it("does not treat a successful process without the shell output as functional", () => {
+		expect(findShell("bash", () => ({ status: 0, stdout: "" }), "tools")).toBeUndefined();
+	});
+});
 
 describe("the observed defect, reproduced in a temp repo", () => {
 	/** The compound command from the incident: an unquoted space-separated variable, then an unconditional pop. */
@@ -122,14 +144,14 @@ describe("the observed defect, reproduced in a temp repo", () => {
 	it.skipIf(!has("bash"))("bash, with the variable quoted: the same single pathspec, the same failed save, the same foreign pop", () => {
 		const dir = fixture();
 		const before = state(dir);
-		spawnSync("bash", ["-c", 'SRC="a.txt b.txt"; git stash push -q -- "$SRC"; git stash pop -q'], { cwd: dir, env: UNGUARDED, encoding: "utf8" });
+		spawnSync(shellPath("bash"), ["-c", 'SRC="a.txt b.txt"; git stash push -q -- "$SRC"; git stash pop -q'], { cwd: dir, env: UNGUARDED, encoding: "utf8" });
 		expectForeignStashConsumed(before, state(dir));
 	});
 
 	it.skipIf(!has("zsh"))("zsh passes the variable as ONE pathspec, the save fails, and the pop consumes the unrelated stash", () => {
 		const dir = fixture();
 		const before = state(dir);
-		spawnSync("zsh", ["-c", OBSERVED_UNSAFE], { cwd: dir, env: UNGUARDED, encoding: "utf8" });
+		spawnSync(shellPath("zsh"), ["-c", OBSERVED_UNSAFE], { cwd: dir, env: UNGUARDED, encoding: "utf8" });
 		const after = state(dir);
 		// The foreign stash was popped: its change is in the working tree and the stash entry is gone.
 		expect(after.files["other.txt"]).toBe("other-FOREIGN-STASHED\n");
@@ -301,7 +323,7 @@ describe("path arrays reach each supported shell as one word per path", () => {
 	const INERT_PATHS = ["src/a b.ts", "it's.ts", "$HOME", "x;rm -rf y", "plain.ts"];
 	for (const shell of ["sh", "bash", "zsh"]) {
 		it.skipIf(!has(shell))(`${shell}: quoteForShell keeps every path whole and literal`, () => {
-			const r = spawnSync(shell, ["-c", `printf '%s\\n' ${quoteForShell(INERT_PATHS, shell)}`], { encoding: "utf8" });
+			const r = spawnSync(shellPath(shell), ["-c", `printf '%s\\n' ${quoteForShell(INERT_PATHS, shell)}`], { encoding: "utf8" });
 			expect(r.status).toBe(0);
 			expect(r.stdout.split("\n").slice(0, -1)).toEqual(INERT_PATHS);
 		});
@@ -309,8 +331,8 @@ describe("path arrays reach each supported shell as one word per path", () => {
 
 	it.skipIf(!has("zsh") || !has("bash"))("the observed difference: an unquoted variable is ONE word in zsh and split in bash", () => {
 		const INERT_VAR = 'P="a.txt b.txt"; printf "%s\\n" $P';
-		expect(spawnSync("zsh", ["-c", INERT_VAR], { encoding: "utf8" }).stdout.split("\n").filter(Boolean)).toHaveLength(1);
-		expect(spawnSync("bash", ["-c", INERT_VAR], { encoding: "utf8" }).stdout.split("\n").filter(Boolean)).toHaveLength(2);
+		expect(spawnSync(shellPath("zsh"), ["-c", INERT_VAR], { encoding: "utf8" }).stdout.split("\n").filter(Boolean)).toHaveLength(1);
+		expect(spawnSync(shellPath("bash"), ["-c", INERT_VAR], { encoding: "utf8" }).stdout.split("\n").filter(Boolean)).toHaveLength(2);
 	});
 });
 

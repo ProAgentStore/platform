@@ -55,6 +55,20 @@ by hand with `node scripts/pre-commit.mjs` or `node scripts/pre-push.mjs` (the l
 against `origin/main`). What each hook runs is decided in `scripts/lib/hook-plan.mjs`, and its
 test fails if the guard list stops matching CI's (#902).
 
+## Windows validation prerequisites
+
+After updating a checkout, run `pnpm install --frozen-lockfile` before diagnosing missing
+modules or runner type errors. The browser runner uses the exact Playwright version and
+`unpdf` declared in the lockfile; stale workspace links can otherwise report missing APIs.
+Do not change source declarations or loosen dependency versions to hide that mismatch.
+
+Use `pnpm -w test:full` for the JSON-backed suite verdict. On Windows the launcher runs
+Vitest through Node, and hooks resolve pnpm to its native executable or Node entry point.
+A shell found on PATH is not necessarily usable (for example a WSL launcher without a
+configured distribution); shell-dependent fixtures must verify the executable they run.
+Missing optional shells are reported as skipped, and `PAGS_REQUIRE_SHELLS` retains CI's
+requirement that those checks run. Skipped tests do not prove the missing capability.
+
 ## Tests that lock an invariant
 
 Test the behaviour, not the spelling: call the code and assert what it does, or — for a genuine

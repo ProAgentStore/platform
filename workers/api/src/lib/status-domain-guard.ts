@@ -33,7 +33,7 @@ export function parseDeclaredColumns(files: { name: string; sql: string }[]): De
 	const out: DeclaredColumn[] = [];
 	for (const { name, sql } of files) {
 		let table = "";
-		for (const rawLine of sql.split("\n")) {
+		for (const rawLine of sql.split(/\r?\n/)) {
 			const create = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["`]?(\w+)/i.exec(rawLine);
 			if (create) table = create[1];
 			if (!table) continue;

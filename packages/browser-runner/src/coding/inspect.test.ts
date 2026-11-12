@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	gitArgv,
@@ -22,10 +22,10 @@ import {
 } from "./inspect.js";
 
 describe("resolveInside (traversal guard)", () => {
-	const root = "/home/u/repo";
+	const root = resolve("/home/u/repo");
 	it("accepts paths inside the repo", () => {
-		expect(resolveInside(root, "src/a.ts")).toBe("/home/u/repo/src/a.ts");
-		expect(resolveInside(root, "./README.md")).toBe("/home/u/repo/README.md");
+		expect(resolveInside(root, "src/a.ts")).toBe(join(root, "src/a.ts"));
+		expect(resolveInside(root, "./README.md")).toBe(join(root, "README.md"));
 		expect(resolveInside(root, ".")).toBe(root);
 	});
 	it("rejects ../ traversal, absolute escape, and sibling-prefix", () => {
@@ -165,8 +165,15 @@ describe("readRepoFile / runRepoGit / repoTree (on a real temp repo)", () => {
 		expect(() => readRepoFile(dir, "../../../etc/passwd")).toThrow(InspectError);
 	});
 	it("refuses a symlink that escapes the repo", () => {
-		symlinkSync("/etc/passwd", join(dir, "escape"));
-		expect(() => readRepoFile(dir, "escape")).toThrow(InspectError);
+		const outside = mkdtempSync(join(tmpdir(), "pags-inspect-outside-"));
+		try {
+			writeFileSync(join(outside, "private.txt"), "outside repo");
+			symlinkSync(join(outside, "private.txt"), join(dir, "escape"));
+			expect(() => readRepoFile(dir, "escape")).toThrow(InspectError);
+		} finally {
+			rmSync(join(dir, "escape"), { force: true });
+			rmSync(outside, { recursive: true, force: true });
+		}
 	});
 	it("git diff reflects an uncommitted change; git status too", () => {
 		writeFileSync(join(dir, "src", "app.ts"), "export const x = 2; // changed\n");
@@ -251,7 +258,7 @@ describe("readRepoFile / runRepoGit / repoTree (on a real temp repo)", () => {
 			// The measured case. `a/b/c/d/e/event_form_dialog.ts` is deeper than the tree's four-level
 			// cap, so browsing could never surface it without already knowing where it was.
 			const r = repoSearch(dir, { pattern: "event_form", mode: "path" });
-			expect(r.matches.map((m) => m.path)).toContain(join("a", "b", "c", "d", "e", "event_form_dialog.ts"));
+			expect(r.matches.map((m) => m.path)).toContain("a/b/c/d/e/event_form_dialog.ts");
 			expect(r.mode).toBe("path");
 		});
 
@@ -260,7 +267,7 @@ describe("readRepoFile / runRepoGit / repoTree (on a real temp repo)", () => {
 			const r = repoSearch(dir, { pattern: "needleXYZ", mode: "content" });
 			expect(r.total).toBe(12);
 			expect(r.matches).toHaveLength(5);
-			expect(r.omittedPerFile).toEqual({ [join("src", "many.ts")]: 7 });
+			expect(r.omittedPerFile).toEqual({ "src/many.ts": 7 });
 			expect(r.truncated).toBe(true);
 		});
 

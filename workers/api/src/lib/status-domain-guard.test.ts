@@ -82,6 +82,22 @@ describe("parseDeclaredColumns reads the schema's own convention", () => {
 		expect(got.find((d) => d.table === "t")?.values).toEqual(["registered", "online", "offline"]);
 	});
 
+	it.each(["\n", "\r\n"])("preserves declared domains with %j line endings", (newline) => {
+		const sql = [
+			"CREATE TABLE agents (",
+			"  status TEXT NOT NULL DEFAULT 'inactive', -- inactive, active, error",
+			");",
+			"CREATE TABLE pipeline_runs (",
+			"  status TEXT NOT NULL DEFAULT 'running', -- 'running' | 'completed' | 'failed'",
+			");",
+			"",
+		].join(newline);
+		expect(parseDeclaredColumns([{ name: "fixture.sql", sql }])).toEqual([
+			{ table: "agents", column: "status", values: ["inactive", "active", "error"], source: "fixture.sql" },
+			{ table: "pipeline_runs", column: "status", values: ["running", "completed", "failed"], source: "fixture.sql" },
+		]);
+	});
+
 	it("does not turn a prose comment into a domain", () => {
 		// `-- JSON array` is two words, not two values. Treating prose as a declaration is how a
 		// guard acquires nonsense entries and then an allowlist to silence them.
