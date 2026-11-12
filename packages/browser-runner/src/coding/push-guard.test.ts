@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { engineSpawnEnv, writeGuardReport } from "./engine-env.js";
 import { gitGuardRoot } from "./git-guard.js";
@@ -29,9 +29,9 @@ const SCOPE = ["proappstore-online/template-app"];
 const BASE_ENV: NodeJS.ProcessEnv = {
 	...process.env,
 	PATH: (process.env.PATH ?? "")
-		.split(":")
+		.split(delimiter)
 		.filter((d) => !d.startsWith(gitGuardRoot()) && !d.startsWith(pushGuardRoot()))
-		.join(":"),
+		.join(delimiter),
 	GIT_CONFIG_GLOBAL: "/dev/null",
 	GIT_CONFIG_NOSYSTEM: "1",
 	GIT_AUTHOR_NAME: "t",
@@ -49,10 +49,16 @@ let remotes: string;
 let work: string;
 let env: NodeJS.ProcessEnv;
 
+// Git for Windows executes these fixtures through its POSIX shell. Native backslashes
+// inside a quoted shell command are escapes, so use shell paths and single-quote safely.
+function shellPath(path: string): string {
+	return `'${path.replaceAll("\\", "/").replaceAll("'", "'\"'\"'")}'`;
+}
+
 /** A fake ssh: run `git-receive-pack '<owner>/<repo>.git'` (or upload-pack) against `$remotes/<owner>/<repo>.git`. */
 function fakeSsh(): string {
 	const path = join(dir, "fake-ssh");
-	writeFileSync(path, `#!/bin/sh\nfor last in "$@"; do :; done\ncd ${JSON.stringify(remotes)} && eval "git \${last#git-}"\n`, { mode: 0o755 });
+	writeFileSync(path, `#!/bin/sh\nfor last in "$@"; do :; done\ncd ${shellPath(remotes)} && eval "git \${last#git-}"\n`, { mode: 0o755 });
 	return path;
 }
 
@@ -70,7 +76,7 @@ beforeEach(() => {
 	remotes = join(dir, "remotes");
 	work = join(dir, "work");
 	mkdirSync(work, { recursive: true });
-	env = pushGuardEnv({ ...BASE_ENV, GIT_SSH_COMMAND: fakeSsh() }, SCOPE, join(dir, "guard"));
+	env = pushGuardEnv({ ...BASE_ENV, GIT_SSH_COMMAND: shellPath(fakeSsh()) }, SCOPE, join(dir, "guard"));
 	spawnSync("git", ["init", "-q", "-b", "main"], { cwd: work, env: BASE_ENV });
 	writeFileSync(join(work, "a.txt"), "a\n");
 	spawnSync("git", ["add", "."], { cwd: work, env: BASE_ENV });
@@ -78,6 +84,20 @@ beforeEach(() => {
 });
 
 describe("git push over ssh (#1252)", () => {
+	it("keeps allowed and refused SSH pushes scoped with spaces and apostrophes in local paths (#1650)", () => {
+		remotes = join(dir, "remote's roots");
+		env = pushGuardEnv({ ...BASE_ENV, GIT_SSH_COMMAND: shellPath(fakeSsh()) }, SCOPE, join(dir, "guard's space"));
+		const allowed = bare("proappstore-online/template-app");
+		const other = bare("proappstore-online/tennis-clubs");
+		const accepted = run(["push", "git@github-personal:proappstore-online/template-app.git", "main"]);
+		expect(accepted.status, accepted.stderr).toBe(0);
+		expect(head(allowed)).toBe(run(["rev-parse", "HEAD"]).stdout.trim());
+		const refused = run(["push", "git@github-personal:proappstore-online/tennis-clubs.git", "main"]);
+		expect(refused.status).not.toBe(0);
+		expect(refused.stderr).toContain(PUSH_REFUSED_MARKER);
+		expect(head(other)).toBe("");
+	});
+
 	it("a push to a REGISTERED repository goes through, through the machine's own ssh", () => {
 		const allowed = bare("proappstore-online/template-app");
 		const r = run(["push", "git@github-personal:proappstore-online/template-app.git", "main"]);
@@ -105,7 +125,7 @@ describe("git push over ssh (#1252)", () => {
 	it("force, --no-verify, a named remote, and git by absolute path are all the same transport — all refused", () => {
 		const other = bare("proappstore-online/tennis-clubs");
 		run(["remote", "add", "origin", "ssh://git@github.com/proappstore-online/tennis-clubs.git"]);
-		const realGit = spawnSync("sh", ["-c", "command -v git"], { env: BASE_ENV, encoding: "utf8" }).stdout.trim();
+		const realGit = spawnSync(process.platform === "win32" ? "where.exe" : "sh", process.platform === "win32" ? ["git"] : ["-c", "command -v git"], { env: BASE_ENV, encoding: "utf8" }).stdout.trim().split(/\r?\n/)[0];
 		for (const args of [["push", "--force", "origin", "main"], ["push", "--no-verify", "origin", "main"], ["push", "--mirror", "origin"]]) {
 			const r = spawnSync(realGit, args, { cwd: work, env, encoding: "utf8" });
 			expect(r.status, args.join(" ")).not.toBe(0);
@@ -139,7 +159,7 @@ describe("git push over https (#1252)", () => {
 		helperDir = join(dir, "libexec");
 		calls = join(dir, "https-calls");
 		mkdirSync(helperDir);
-		writeFileSync(join(helperDir, "git-remote-https"), `#!/bin/sh\necho "$1 $2" >> ${JSON.stringify(calls)}\nexit 1\n`, { mode: 0o755 });
+		writeFileSync(join(helperDir, "git-remote-https"), `#!/bin/sh\necho "$1 $2" >> ${shellPath(calls)}\nexit 1\n`, { mode: 0o755 });
 		env = pushGuardEnv(BASE_ENV, SCOPE, join(dir, "guard-https"), helperDir);
 	});
 
@@ -254,6 +274,22 @@ describe("a stalled real transport is bounded, not silent (#1403)", () => {
 });
 
 describe("the Engine's env (#1252)", () => {
+	it("retains the original SSH delegate when an already guarded native environment is wrapped again (#1650)", () => {
+		const root = join(dir, "repeated guard's root");
+		const original = shellPath(fakeSsh());
+		const once = pushGuardEnv({ ...BASE_ENV, GIT_SSH_COMMAND: original }, SCOPE, root);
+		const twice = pushGuardEnv(once, SCOPE, root);
+		expect(twice.PAGS_REAL_GIT_SSH_COMMAND).toBe(original);
+		expect(twice.PAGS_REAL_GIT_SSH_COMMAND).not.toBe(once.GIT_SSH_COMMAND);
+		const allowed = bare("proappstore-online/template-app");
+		const accepted = run(["push", "git@github-personal:proappstore-online/template-app.git", "main"], work, twice);
+		expect(accepted.status, accepted.stderr).toBe(0);
+		expect(head(allowed)).toBe(run(["rev-parse", "HEAD"]).stdout.trim());
+		const refused = run(["push", "git@github-personal:proappstore-online/tennis-clubs.git", "main"], work, twice);
+		expect(refused.status).not.toBe(0);
+		expect(refused.stderr).toContain(PUSH_REFUSED_MARKER);
+	});
+
 	it("no registered repository, no guard — the env is untouched", () => {
 		expect(pushGuardEnv(BASE_ENV, [], join(dir, "g"))).toBe(BASE_ENV);
 		expect(pushGuardEnv(BASE_ENV, undefined, join(dir, "g"))).toBe(BASE_ENV);
@@ -286,7 +322,7 @@ describe("the owner's own url rewrites survive the push guard (Grass Karma #33)"
 		const allowed = bare("proappstore-online/template-app");
 		const cfg = join(dir, "gitconfig");
 		writeFileSync(cfg, '[url "git@github-personal:"]\n\tinsteadOf = https://github.com/\n');
-		const machine = { ...BASE_ENV, GIT_CONFIG_GLOBAL: cfg, GIT_SSH_COMMAND: fakeSsh() };
+		const machine = { ...BASE_ENV, GIT_CONFIG_GLOBAL: cfg, GIT_SSH_COMMAND: shellPath(fakeSsh()) };
 		const e = pushGuardEnv(machine, SCOPE, join(dir, "guard-alias"), join(dir, "no-https-here"));
 		run(["remote", "add", "origin", "https://github.com/proappstore-online/template-app.git"]);
 		const r = run(["push", "origin", "main"], work, e);
@@ -298,7 +334,7 @@ describe("the owner's own url rewrites survive the push guard (Grass Karma #33)"
 		const other = bare("proappstore-online/tennis-clubs");
 		const cfg = join(dir, "gitconfig");
 		writeFileSync(cfg, '[url "git@github-personal:"]\n\tinsteadOf = https://github.com/\n');
-		const e = pushGuardEnv({ ...BASE_ENV, GIT_CONFIG_GLOBAL: cfg, GIT_SSH_COMMAND: fakeSsh() }, SCOPE, join(dir, "guard-alias2"), join(dir, "x"));
+		const e = pushGuardEnv({ ...BASE_ENV, GIT_CONFIG_GLOBAL: cfg, GIT_SSH_COMMAND: shellPath(fakeSsh()) }, SCOPE, join(dir, "guard-alias2"), join(dir, "x"));
 		const r = run(["push", "https://github.com/proappstore-online/tennis-clubs.git", "main"], work, e);
 		expect(r.stderr).toContain(`${PUSH_REFUSED_MARKER} git push to proappstore-online/tennis-clubs`);
 		expect(head(other)).toBe("");

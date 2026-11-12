@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -349,9 +349,14 @@ describe("CodingRuntime over the stream-json engine", () => {
 
 	beforeAll(() => {
 		dir = mkdtempSync(join(tmpdir(), "pags-coding-rt-"));
-		bin = join(dir, "fake-claude.js");
-		writeFileSync(bin, FAKE_CLAUDE);
-		chmodSync(bin, 0o755);
+		const scriptDir = join(dir, "node_modules", "fake-claude");
+		mkdirSync(scriptDir, { recursive: true });
+		const script = join(scriptDir, "index.cjs");
+		writeFileSync(script, FAKE_CLAUDE, { mode: 0o755 });
+		// Match an installed npm engine shim: Windows resolves its Node target
+		// without a shell, preserving the real protocol, registry and Stop path.
+		bin = process.platform === "win32" ? join(dir, "fake-claude.cmd") : script;
+		if (process.platform === "win32") writeFileSync(bin, '@"node" "%dp0%\\node_modules\\fake-claude\\index.cjs" %*\r\n');
 	});
 	afterEach(() => rt?.closeAll());
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -375,8 +380,9 @@ describe("CodingRuntime over the stream-json engine", () => {
 		const home = join(dir, "home-1379");
 		mkdirSync(join(home, "dev", "proj"), { recursive: true });
 		execFileSync("git", ["init", "-q"], { cwd: join(home, "dev", "proj") });
-		const was = process.env.HOME;
-		process.env.HOME = home;
+		const homeKey = process.platform === "win32" ? "USERPROFILE" : "HOME";
+		const was = process.env[homeKey];
+		process.env[homeKey] = home;
 		try {
 			rt = new CodingRuntime(join(dir, "base"));
 			const tilde = rt.start({ sessionId: "tilde-1379", repoId: "r1", workDir: "~/dev/proj", clientType: "claude", bin });
@@ -390,8 +396,8 @@ describe("CodingRuntime over the stream-json engine", () => {
 			// The guard answers with the REAL path (macOS /tmp is /private/tmp); the home-relative form must survive that.
 			expect(rt.checkRepo({ workDir: join(home, "dev", "proj") })).toMatchObject({ path: realpathSync(join(home, "dev", "proj")), homeRelative: "~/dev/proj" });
 		} finally {
-			if (was === undefined) delete process.env.HOME;
-			else process.env.HOME = was;
+			if (was === undefined) delete process.env[homeKey];
+			else process.env[homeKey] = was;
 		}
 	});
 

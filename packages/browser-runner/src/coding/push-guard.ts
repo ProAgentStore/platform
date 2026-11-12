@@ -44,7 +44,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { accessSync, constants, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { normalizeRepo } from "./gh-guard.js";
 
 /** Distinct from git's own statuses, like the other guards'. */
@@ -86,6 +86,8 @@ export const PUSH_GUARD_GAPS: readonly string[] = [
 export function pushGuardRoot(): string {
 	return join(homedir(), ".config", "proagentstore", "push-guard");
 }
+
+const shellPath = (value: string) => process.platform === "win32" ? value.replaceAll("\\", "/") : value;
 
 const sq = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
 
@@ -175,9 +177,9 @@ exit $?
 
 /** First executable `name` on `path`, skipping our own directories. */
 function findOnPath(name: string, path: string | undefined, skip: string): string | null {
-	for (const dir of (path ?? "").split(":")) {
+	for (const dir of (path ?? "").split(delimiter)) {
 		if (!dir || dir.startsWith(skip)) continue;
-		const candidate = join(dir, name);
+		const candidate = join(dir, process.platform === "win32" ? `${name}.exe` : name);
 		try {
 			accessSync(candidate, constants.X_OK);
 			return candidate;
@@ -215,8 +217,8 @@ export function installPushGuard(scope: readonly string[], env: NodeJS.ProcessEn
 	const realSsh = findOnPath("ssh", env.PATH, root) ?? "ssh";
 	const helperDir = realHelperDir ?? gitExecPath(env, root);
 	if (!helperDir) return null;
-	const wrapper = renderSshWrapper({ scope: repos, realSsh });
-	const helper = renderPushHelper({ scope: repos, realHelperDir: helperDir, timeoutSeconds });
+	const wrapper = renderSshWrapper({ scope: repos, realSsh: shellPath(realSsh) });
+	const helper = renderPushHelper({ scope: repos, realHelperDir: shellPath(helperDir), timeoutSeconds });
 	const key = createHash("sha256").update(`${root} ${wrapper} ${helper}`).digest("hex").slice(0, 16);
 	const cached = installed.get(key);
 	if (cached) return cached;
@@ -244,10 +246,10 @@ export function installPushGuard(scope: readonly string[], env: NodeJS.ProcessEn
 export function pushGuardEnv(env: NodeJS.ProcessEnv, scope: readonly string[] | undefined, root = pushGuardRoot(), realHelperDir?: string, timeoutSeconds?: number): NodeJS.ProcessEnv {
 	const dirs = installPushGuard(scope ?? [], env, root, realHelperDir, timeoutSeconds);
 	if (!dirs) return env;
-	const out: NodeJS.ProcessEnv = { ...env, PATH: `${dirs.bin}:${env.PATH ?? ""}`, GIT_SSH_COMMAND: sq(join(dirs.ssh, "ssh")) };
+	const out: NodeJS.ProcessEnv = { ...env, PATH: `${dirs.bin}${delimiter}${env.PATH ?? ""}`, GIT_SSH_COMMAND: sq(shellPath(join(dirs.ssh, "ssh"))) };
 	// The machine's own choice of ssh, so the wrapper delegates exactly as git would have — never to itself.
 	// An env that is already guarded keeps the delegate it recorded.
-	if (env.GIT_SSH_COMMAND && !env.GIT_SSH_COMMAND.includes(root)) out.PAGS_REAL_GIT_SSH_COMMAND = env.GIT_SSH_COMMAND;
+	if (env.GIT_SSH_COMMAND && !env.GIT_SSH_COMMAND.startsWith(`${sq(shellPath(root)).slice(0, -1)}/`)) out.PAGS_REAL_GIT_SSH_COMMAND = env.GIT_SSH_COMMAND;
 	if (env.GIT_SSH) out.PAGS_REAL_GIT_SSH = env.GIT_SSH;
 	let count = Number.parseInt(env.GIT_CONFIG_COUNT ?? "0", 10) || 0;
 	for (const [base, value] of pushRewrites(machineUrlRewrites(env))) {

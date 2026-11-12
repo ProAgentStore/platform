@@ -1,5 +1,6 @@
 import path from "node:path";
 import { configDefaults, defineConfig } from "vitest/config";
+import { createWorkerTestDeps } from "./scripts/lib/worker-test-deps.mjs";
 
 /**
  * The heavy-integration set (#253). Everything under `packages/browser-runner` drives
@@ -75,15 +76,11 @@ const SDK_ALIASES = [
 const API_ENTRY = path.resolve(import.meta.dirname, "workers/api/src/index.ts");
 const HOST_INDEX = path.resolve(import.meta.dirname, "workers/host/src/index.ts");
 const HOST_PAGES_STUB = path.resolve(import.meta.dirname, "workers/host/src/pages.test-stub.ts");
-const workerTestDeps = {
-	name: "worker-test-deps",
-	enforce: "pre" as const,
-	async resolveId(this: { resolve: (s: string, i: string, o: { skipSelf: boolean }) => Promise<unknown> }, source: string, importer?: string) {
-		if (source === "./pages.js" && importer === HOST_INDEX) return HOST_PAGES_STUB;
-		if (source !== "hono" || !importer?.includes(`${path.sep}templates${path.sep}`)) return null;
-		return this.resolve(source, API_ENTRY, { skipSelf: true });
-	},
-};
+const workerTestDeps = createWorkerTestDeps({
+	apiEntry: API_ENTRY,
+	hostIndex: HOST_INDEX,
+	hostPagesStub: HOST_PAGES_STUB,
+});
 
 export default defineConfig({
 	plugins: [workerTestDeps],

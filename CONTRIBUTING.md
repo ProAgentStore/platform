@@ -76,6 +76,12 @@ supported POSIX environment. Existing journals are not made portable by this ref
 Windows suite checks refusal and evidence preservation. POSIX recovery tests remain enabled on
 POSIX and are explicitly skipped on Windows; those skips do not establish Windows support.
 
+Windows secret-file writes use a protected DACL for the current account, verified before
+any secret bytes are written. This is native ACL protection, not POSIX mode bits. The
+Windows writer supports the default owner-only mode `600`; requests for other POSIX modes
+are refused. If PowerShell ACL setup or verification fails, the target is kept and the
+empty temporary file is removed. Secret values never reach the ACL subprocess.
+
 ## Tests that lock an invariant
 
 Test the behaviour, not the spelling: call the code and assert what it does, or — for a genuine

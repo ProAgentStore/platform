@@ -1,6 +1,7 @@
 import { closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { protectWindowsSecretFile } from "./windows-secret-acl.js";
 import { RunnerInputError } from "../errors.js";
 import { isWithin, realPathOf } from "./workdir-guard.js";
 
@@ -11,8 +12,8 @@ import { isWithin, realPathOf } from "./workdir-guard.js";
  * The value crosses the relay between the API worker and this process and goes nowhere else. Both
  * functions are built so it cannot leak by accident:
  *
- *   • no shell, no tmux, no subprocess — a pane or a process table is exactly where a secret is
- *     visible to everything that later reads the machine (`tmux_capture_pane`, `ps`);
+ *   • secret bytes stay in this process; Windows ACL setup receives only the empty file path,
+ *     never the value in shell commands, panes, process arguments or subprocess input;
  *   • every error names the PATH and never the bytes, because a runner error becomes the cloud's
  *     error string, and that string reaches the model;
  *   • `readSecretFile` returns the value to its caller (the relay) and `writeSecretFile` returns
@@ -85,6 +86,7 @@ export function writeSecretFile(input: { path?: unknown; value?: unknown; mode?:
 	const path = resolvePath(input.path, home);
 	if (typeof input.value !== "string" || !input.value) throw new RunnerInputError("Nothing to write.");
 	const mode = parseMode(input.mode);
+	if (process.platform === "win32" && mode !== 0o600) throw new RunnerInputError("Windows secret writes support owner-only mode 600; POSIX group or read-only modes are not supported.");
 	let replaced = false;
 	try {
 		const st = lstatSync(path);
@@ -102,6 +104,7 @@ export function writeSecretFile(input: { path?: unknown; value?: unknown; mode?:
 	const data = Buffer.from(input.value, "utf8");
 	const fd = openSync(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, mode);
 	try {
+		if (process.platform === "win32") protectWindowsSecretFile(tmp);
 		writeSync(fd, data);
 		fsyncSync(fd);
 	} catch (e) {

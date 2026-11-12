@@ -50,6 +50,7 @@ import { execFileSync } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { windowsProcessStartedAt } from "./windows-process-start.js";
 
 /** Where a runner process was started from — it decides what `--replace` may do to it. */
 export type RunnerLaunch = "tty" | "tmux" | "service" | "headless" | "background";
@@ -235,15 +236,14 @@ export function pidAlive(pid: number): boolean {
  * The pid's start time as the OS states it, or "" when it will not say.
  *
  * The one defence against a reused pid, and it has to be cheap: this runs on every `pags up`. On
- * Windows there is no `ps`, so `wmic` is tried and an empty answer is accepted — the pid then
+ * Windows there is no `ps`, so CIM supplies the creation time and an empty answer is accepted — the pid then
  * stands on its own, which is the safe direction (a live holder is never mistaken for a dead one).
  */
 export function pidStartedAt(pid: number): string {
 	if (!pidAlive(pid)) return "";
 	try {
 		if (process.platform === "win32") {
-			const out = execFileSync("wmic", ["process", "where", `ProcessId=${pid}`, "get", "CreationDate", "/value"], { encoding: "utf-8", timeout: 4000, stdio: ["ignore", "pipe", "ignore"] });
-			return (out.match(/CreationDate=(\S+)/)?.[1] ?? "").trim();
+			return windowsProcessStartedAt(pid);
 		}
 		return execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf-8", timeout: 4000, stdio: ["ignore", "pipe", "ignore"] }).trim();
 	} catch {

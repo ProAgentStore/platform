@@ -1,7 +1,9 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import * as windowsAcl from "./windows-secret-acl.js";
 import { readSecretFile as readAt, SECRET_MAX_BYTES, secureFilesDir, writeSecretFile as writeAt } from "./secret-file.js";
 
 const SECRET = "FIREBASE_API_KEY=AIza-very-secret-value\nSERVER_KEY=s3cr3t\n";
@@ -30,6 +32,17 @@ function errorOf(fn: () => unknown): string {
 	throw new Error("expected a throw");
 }
 
+function expectPrivateFile(target: string): void {
+	if (process.platform === "win32") {
+		const acl = JSON.parse(execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `$a = Get-Acl -LiteralPath $env:PAGS_TEST_ACL; [pscustomobject]@{ protected=$a.AreAccessRulesProtected; owner=$a.GetOwner([System.Security.Principal.SecurityIdentifier]).Value; current=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; rules=@($a.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]) | ForEach-Object { [pscustomobject]@{sid=$_.IdentityReference.Value; inherited=$_.IsInherited; allow=($_.AccessControlType -eq 'Allow'); rights=[int]$_.FileSystemRights} }) } | ConvertTo-Json -Depth 4`], { env: { ...process.env, PAGS_TEST_ACL: target }, encoding: "utf8", windowsHide: true }));
+		expect(acl.protected).toBe(true);
+		expect(acl.owner).toBe(acl.current);
+		expect(acl.rules).toEqual([{ sid: acl.current, inherited: false, allow: true, rights: expect.any(Number) }]);
+		expect(acl.rules[0].rights & 0x20).toBe(0); // ExecuteFile is not granted.
+		expect(acl.rules[0].rights & 0x3).toBe(0x3); // ReadData and WriteData are granted.
+	} else expect(statSync(target).mode & 0o777).toBe(0o600);
+}
+
 describe("readSecretFile (#918)", () => {
 	it("returns the exact bytes of a text file and its size", () => {
 		const d = scratch();
@@ -55,14 +68,31 @@ describe("readSecretFile (#918)", () => {
 describe("writeSecretFile (#918)", () => {
 	it("writes the value with 0600 by default, creating parent dirs, and reports only a byte count", () => {
 		const d = scratch();
-		const target = join(d, "app", ".env.prod");
+		const target = join(d, "app [private] café", ".env.prod");
 		const r = writeSecretFile({ path: target, value: SECRET });
 		expect(r).toEqual({ path: target, bytes: Buffer.byteLength(SECRET), replaced: false });
 		expect(JSON.stringify(r)).not.toContain("very-secret");
 		expect(readFileSync(target, "utf8")).toBe(SECRET);
-		expect(statSync(target).mode & 0o777).toBe(0o600);
+		expectPrivateFile(target);
 		// The temp file is renamed away, not left beside the target.
-		expect(readdirSync(join(d, "app"))).toEqual([".env.prod"]);
+		expect(readdirSync(join(d, "app [private] café"))).toEqual([".env.prod"]);
+	});
+
+	it.skipIf(process.platform !== "win32")("a failed ACL check writes no secret bytes and preserves the target", () => {
+		const d = scratch();
+		const target = join(d, "secret.env");
+		writeFileSync(target, "previous");
+		const protect = vi.spyOn(windowsAcl, "protectWindowsSecretFile").mockImplementation((path) => {
+			expect(readFileSync(path)).toHaveLength(0);
+			throw new Error(SECRET);
+		});
+		try {
+			const message = errorOf(() => writeSecretFile({ path: target, value: SECRET, overwrite: true }));
+			expect(message).not.toContain("very-secret");
+			expect(readFileSync(target, "utf8")).toBe("previous");
+			expect(readdirSync(d)).toEqual(["secret.env"]);
+			expect(protect).toHaveBeenCalledOnce();
+		} finally { protect.mockRestore(); }
 	});
 
 	it("will not replace an existing file unless told to", () => {
@@ -73,12 +103,18 @@ describe("writeSecretFile (#918)", () => {
 		expect(readFileSync(target, "utf8")).toBe("OLD=1\n");
 		expect(writeSecretFile({ path: target, value: SECRET, overwrite: true }).replaced).toBe(true);
 		expect(readFileSync(target, "utf8")).toBe(SECRET);
+		expectPrivateFile(target);
 	});
 
-	it("accepts a stricter or owner+group-readable mode, refuses a writable or executable one", () => {
+	it("validates POSIX modes and refuses unsupported Windows modes", () => {
 		const d = scratch();
-		writeSecretFile({ path: join(d, "a"), value: SECRET, mode: "640" });
-		expect(statSync(join(d, "a")).mode & 0o777).toBe(0o640);
+		if (process.platform === "win32") {
+			expect(errorOf(() => writeSecretFile({ path: join(d, "a"), value: SECRET, mode: "640" }))).toMatch(/Windows.*owner-only/);
+			expect(readdirSync(d)).toEqual([]);
+		} else {
+			writeSecretFile({ path: join(d, "a"), value: SECRET, mode: "640" });
+			expect(statSync(join(d, "a")).mode & 0o777).toBe(0o640);
+		}
 		expect(errorOf(() => writeSecretFile({ path: join(d, "b"), value: SECRET, mode: "666" }))).toMatch(/writable or executable/);
 		expect(errorOf(() => writeSecretFile({ path: join(d, "c"), value: SECRET, mode: "700" }))).toMatch(/writable or executable/);
 		expect(errorOf(() => writeSecretFile({ path: join(d, "d"), value: SECRET, mode: "200" }))).toMatch(/unreadable/);
