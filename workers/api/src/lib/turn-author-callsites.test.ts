@@ -41,13 +41,13 @@
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { stripCommentsAndLiterals } from "./source-guard.js";
 
-// `.pathname` + `join`, never `readFileSync(new URL(…))`: the Worker tsconfig's
-// `@cloudflare/workers-types` supplies a `URL` that matches no node overload, which compiles
-// nowhere and is caught only by CI's separate test-typecheck step (#599, then #627).
-const SRC = new URL("../", import.meta.url).pathname; // workers/api/src
+// Convert the file URL through its href: Worker URL types differ from Node URL types,
+// and pathname alone is not a native filesystem path on Windows.
+const SRC = fileURLToPath(new URL("../", import.meta.url).href); // workers/api/src
 
 /** Every non-test .ts file under workers/api/src, raw and with comments/literals blanked. */
 function sources(): Array<{ rel: string; raw: string; code: string }> {
@@ -61,7 +61,7 @@ function sources(): Array<{ rel: string; raw: string; code: string }> {
 			}
 			if (!p.endsWith(".ts") || p.endsWith(".test.ts") || p.endsWith(".d.ts")) continue;
 			const raw = readFileSync(p, "utf-8");
-			out.push({ rel: p.slice(SRC.length), raw, code: stripCommentsAndLiterals(raw) });
+			out.push({ rel: p.slice(SRC.length).replaceAll("\\", "/"), raw, code: stripCommentsAndLiterals(raw) });
 		}
 	};
 	walk(SRC);

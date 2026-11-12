@@ -4,6 +4,7 @@
 // placeholder verbatim. Same reason `sql.test.ts` carries this line.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { findMoneyAggregates, findMoneyClaimViolations, stringLiterals } from "./usage-aggregates.js";
 
@@ -113,7 +114,7 @@ describe("stringLiterals", () => {
 
 // ── The guard ────────────────────────────────────────────────────────────────────────────────
 
-const SRC_ROOT = new URL("../", import.meta.url).pathname; // workers/api/src
+const SRC_ROOT = fileURLToPath(new URL("../", import.meta.url).href); // workers/api/src
 
 function sourceFiles(): Array<{ rel: string; src: string }> {
 	const out: Array<{ rel: string; src: string }> = [];
@@ -127,7 +128,7 @@ function sourceFiles(): Array<{ rel: string; src: string }> {
 			// Tests are excluded because their fixtures ARE the banned shape — the file you are
 			// reading would report itself, which is how a guard earns its own suppression.
 			if (!p.endsWith(".ts") || p.endsWith(".test.ts")) continue;
-			out.push({ rel: p.slice(SRC_ROOT.length), src: readFileSync(p, "utf-8") });
+			out.push({ rel: p.slice(SRC_ROOT.length).replaceAll("\\", "/"), src: readFileSync(p, "utf-8") });
 		}
 	};
 	walk(SRC_ROOT);

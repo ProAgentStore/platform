@@ -33,11 +33,12 @@
  */
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { stripCommentsAndLiterals } from "./source-guard.js";
 
-const SRC = new URL("../", import.meta.url).pathname; // workers/api/src
-const MCP_SRC = new URL("../../../mcp/src/", import.meta.url).pathname;
+const SRC = fileURLToPath(new URL("../", import.meta.url).href); // workers/api/src
+const MCP_SRC = fileURLToPath(new URL("../../../mcp/src/", import.meta.url).href);
 
 /**
  * The workflow bindings that drive a model repeatedly without a human in the loop. A one-shot
@@ -99,7 +100,7 @@ function createSites(): Site[] {
 			for (const m of code.matchAll(needle)) {
 				const open = m.index + m[0].length - 1;
 				sites.push({
-					rel: path.slice(SRC.length),
+					rel: path.slice(SRC.length).replaceAll("\\", "/"),
 					binding,
 					args: argsAt(code, open),
 					// Blanking preserves offsets, so the same span addresses both texts.
@@ -258,7 +259,7 @@ const RESERVE_CALLERS = new Set(
 /** The workflow CLASSES — `coding-session-params.ts` is a type leaf, not an entry point. */
 const WORKFLOWS = tsFiles(join(SRC, "workflows")).filter((f) => callsFn(f, /extends\s+WorkflowEntrypoint\b/));
 
-const rel = (f: string) => f.slice(SRC.length);
+const rel = (f: string) => f.slice(SRC.length).replaceAll("\\", "/");
 
 /**
  * Workflow classes that reach a model and legitimately draw on no pool.
@@ -360,7 +361,7 @@ describe("a workflow that can spend the user's tokens draws on a pool (#516)", (
  * There is one loop driver, and it is on the server.
  */
 describe("the MCP worker delegates loops, it does not run them (#502)", () => {
-	const mcp = tsFiles(MCP_SRC).map((p) => ({ rel: p.slice(MCP_SRC.length), code: stripCommentsAndLiterals(readFileSync(p, "utf-8")) }));
+	const mcp = tsFiles(MCP_SRC).map((p) => ({ rel: p.slice(MCP_SRC.length).replaceAll("\\", "/"), code: stripCommentsAndLiterals(readFileSync(p, "utf-8")) }));
 
 	it("scans the MCP worker at all", () => {
 		expect(mcp.length).toBeGreaterThan(5);

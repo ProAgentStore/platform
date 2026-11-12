@@ -12,6 +12,7 @@
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { HttpError } from "../lib/auth.js";
 import type { Env } from "../types.js";
 
@@ -135,7 +136,7 @@ describe("DELETE /:id/loop/queue/:entryId", () => {
 });
 
 describe("registration order in routes/tools.ts", () => {
-	const source = readFileSync(new URL("./tools.ts", import.meta.url).pathname, "utf8");
+	const source = readFileSync(fileURLToPath(new URL("./tools.ts", import.meta.url).href), "utf8");
 
 	it("registers the queue routes before the run-lookup route", () => {
 		const queue = source.indexOf("registerLoopQueueRoutes(toolRoutes)");

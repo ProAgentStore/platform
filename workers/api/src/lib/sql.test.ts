@@ -4,6 +4,7 @@
 // placeholder verbatim. Rewriting them to satisfy the rule would delete the thing under test.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
 	D1_MAX_COMPOUND_TERMS,
@@ -144,7 +145,7 @@ describe("findCompoundSelectOverruns", () => {
 
 // ── The guard ────────────────────────────────────────────────────────────────────────────────
 
-const SRC_ROOT = new URL("../", import.meta.url).pathname; // workers/api/src
+const SRC_ROOT = fileURLToPath(new URL("../", import.meta.url).href); // workers/api/src
 
 function sourceFiles(): Array<{ path: string; rel: string; src: string }> {
 	const out: Array<{ path: string; rel: string; src: string }> = [];
@@ -156,7 +157,7 @@ function sourceFiles(): Array<{ path: string; rel: string; src: string }> {
 				continue;
 			}
 			if (!p.endsWith(".ts") || p.endsWith(".test.ts")) continue;
-			out.push({ path: p, rel: p.slice(SRC_ROOT.length), src: readFileSync(p, "utf-8") });
+			out.push({ path: p, rel: p.slice(SRC_ROOT.length).replaceAll("\\", "/"), src: readFileSync(p, "utf-8") });
 		}
 	};
 	walk(SRC_ROOT);

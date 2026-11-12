@@ -14,6 +14,7 @@
  * of seconds, which a commit should not cost.
  */
 import { execFileSync, spawnSync } from "node:child_process";
+import { spawnPortableSync } from "./lib/portable-command.mjs";
 import { biomeTargets } from "./lib/hook-plan.mjs";
 
 const root = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
@@ -21,7 +22,7 @@ process.chdir(root);
 
 function run(cmd, args) {
 	console.log(`[pre-commit] ${cmd} ${args.join(" ")}`);
-	const r = spawnSync(cmd, args, { stdio: "inherit" });
+	const r = spawnPortableSync(cmd, args, { stdio: "inherit" });
 	if (r.error) console.error(r.error.message);
 	if (r.error || r.status !== 0) process.exit(r.status || 1);
 }

@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { toolBlurbFor, withPartialToolLog } from "./agent-think.js";
@@ -17,7 +18,7 @@ import type { AgentCapabilities } from "./lib/agent-capabilities.js";
  * They are diagnostics, never assertions — every check below is on content.
  */
 const THINKER_FILES = ["./agent-think.ts", "./agent-think-prompt.ts"] as const;
-const THINKER = THINKER_FILES.map((f) => readFileSync(new URL(f, import.meta.url).pathname, "utf-8")).join("\n");
+const THINKER = THINKER_FILES.map((f) => readFileSync(fileURLToPath(new URL(f, import.meta.url).href), "utf-8")).join("\n");
 const THINKER_CODE = stripCommentsAndLiterals(THINKER);
 
 describe("withPartialToolLog (#24 — surface committed side effects on a late failure)", () => {

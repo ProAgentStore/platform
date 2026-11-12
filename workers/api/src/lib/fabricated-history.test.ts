@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { isFabricatedRecord, redactFabricatedHistory, WITHHELD_TURN } from "./fabricated-history.js";
@@ -128,7 +129,7 @@ describe("redactFabricatedHistory — the model stops re-reading its own inventi
  * one being added next to them, not either of these being deleted.
  */
 describe("every reader that hands stored history to a model redacts first (#406)", () => {
-	const read = (rel: string) => readFileSync(new URL(rel, import.meta.url).pathname, "utf-8");
+	const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url).href), "utf-8");
 
 	it("agent-think builds its prompt from the redacted history and never from `messages` raw", () => {
 		// BOTH halves of the assembly since #777. `runAgentThink`'s middle moved to

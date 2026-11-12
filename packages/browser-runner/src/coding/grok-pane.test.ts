@@ -11,10 +11,11 @@
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { defaultStatePath, HeadlessSession } from "./headless.js";
 
-const FIXTURE = new URL("./fixtures/grok-streaming-json-1.0.62/command-success-and-failure.ndjson", import.meta.url).pathname;
+const FIXTURE = fileURLToPath(new URL("./fixtures/grok-streaming-json-1.0.62/command-success-and-failure.ndjson", import.meta.url).href);
 
 /** Grok 1.0.62's own words for an unknown model, as it printed them to stderr before exiting 1. */
 const BAD_MODEL_STDERR = [

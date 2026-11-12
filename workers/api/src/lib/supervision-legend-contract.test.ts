@@ -31,6 +31,7 @@
  * left open on the issue rather than approximated.
  */
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { STATUS_LEGEND } from "./subordinate-payload.js";
 import { recentActsForInstances } from "./instance-work.js";
@@ -112,7 +113,7 @@ describe("the supervision legends describe the payload that ships with them (#59
 		expect(STATUS_LEGEND).toMatch(/not the agent's ordinary tool calls/);
 		// …and the scope claim is TRUE of the reader: it keys on the generic consequential event
 		// and nothing else, so no tool-call row can reach this list without changing that constant.
-		const src = readFileSync(new URL("./instance-work.ts", import.meta.url).pathname, "utf-8");
+		const src = readFileSync(fileURLToPath(new URL("./instance-work.ts", import.meta.url).href), "utf-8");
 		expect(src).toContain('const ACT_EVENT = "act.consequential"');
 		expect(src.match(/ACT_EVENT/g)?.length, "one event name, used by both act reads").toBeGreaterThanOrEqual(3);
 	});

@@ -27,8 +27,10 @@
  * concurrently and a reader added by unrelated work is normal. It is floored instead, with the
  * reason beside the floor — a set this small means the sweep broke, not that the tree got tidy.
  */
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { runHealth, waitClause, type RunHealth } from "./work-report.js";
 import { summarizeSubordinates } from "./subordinate-observation.js";
@@ -36,7 +38,7 @@ import { activityFromRuns, rosterLines } from "./subordinate-payload.js";
 import type { RunItem } from "./instance-work.js";
 
 /** Repo root, from `workers/api/src/lib/` — the guard reaches the console and coder-web too. */
-const ROOT = new URL("../../../../", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("../../../../", import.meta.url).href);
 
 /**
  * Where a loop-run reader can live. The console and coder-web are in the sweep BECAUSE the console
@@ -53,7 +55,7 @@ interface Source {
 	body: string;
 }
 
-function sources(): Source[] {
+function sources(root = ROOT, trees = TREES): Source[] {
 	const out: Source[] = [];
 	const walk = (dir: string) => {
 		for (const entry of readdirSync(dir)) {
@@ -65,12 +67,12 @@ function sources(): Source[] {
 			if (!/\.(ts|tsx)$/.test(p) || /\.test\.tsx?$/.test(p) || p.endsWith(".d.ts")) continue;
 			const lines = readFileSync(p, "utf-8").split("\n");
 			const kept = lines.map((l) => (/^\s*(\*|\/\/)/.test(l) ? "" : l));
-			out.push({ rel: relative(ROOT, p), lines: kept, body: kept.join("\n") });
+			out.push({ rel: relative(root, p).replaceAll("\\", "/"), lines: kept, body: kept.join("\n") });
 		}
 	};
-	for (const t of TREES) {
+	for (const t of trees) {
 		try {
-			walk(join(ROOT, t));
+			walk(join(root, t));
 		} catch {
 			// A tree that does not exist is a MOVED tree, not an empty one. Recorded as a zero and
 			// caught by the needle assertions below rather than silently shrinking the sweep.
@@ -117,6 +119,25 @@ const readerSet = () => {
 	const readers = all.filter((s) => Object.values(NEEDLES).some((re) => re.test(s.body)));
 	return { all, readers };
 };
+
+it("sweeps real source trees addressed by file URLs with spaces and Unicode", () => {
+	const fixture = mkdtempSync(join(tmpdir(), "pags sources caf\u00e9 "));
+	try {
+		const tree = join(fixture, "src", "nested");
+		mkdirSync(tree, { recursive: true });
+		writeFileSync(join(tree, "reader.ts"), "// ignored comment\nexport const status = 'running';\n");
+		writeFileSync(join(tree, "reader.test.ts"), "excluded test");
+		writeFileSync(join(tree, "types.d.ts"), "excluded declaration");
+		const root = fileURLToPath(pathToFileURL(fixture).href);
+		expect(sources(root, ["src"])).toEqual([{
+			rel: "src/nested/reader.ts",
+			lines: ["", "export const status = 'running';", ""],
+			body: "\nexport const status = 'running';\n",
+		}]);
+	} finally {
+		rmSync(fixture, { recursive: true, force: true });
+	}
+});
 
 describe("every reader of agent_loop_runs derives liveness from one implementation (#589 AC3)", () => {
 	it("finds the readers it claims to sweep, through every needle", () => {

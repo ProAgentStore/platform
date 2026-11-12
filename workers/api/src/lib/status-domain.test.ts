@@ -21,6 +21,7 @@
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { isWritable, STATUS_DOMAINS, unreachableValues } from "./status-domain.js";
 import {
@@ -32,8 +33,8 @@ import {
 	writableValues,
 } from "./status-domain-guard.js";
 
-const SRC = new URL("../", import.meta.url).pathname; // workers/api/src
-const MIGRATIONS = new URL("../../migrations/", import.meta.url).pathname;
+const SRC = fileURLToPath(new URL("../", import.meta.url).href); // workers/api/src
+const MIGRATIONS = fileURLToPath(new URL("../../migrations/", import.meta.url).href);
 
 const migrations = readdirSync(MIGRATIONS)
 	.filter((f) => f.endsWith(".sql"))
@@ -51,7 +52,7 @@ const sources: Source[] = (() => {
 				continue;
 			}
 			if (!p.endsWith(".ts") || p.endsWith(".test.ts") || p.endsWith(".d.ts")) continue;
-			out.push({ rel: p.slice(SRC.length), code: stripComments(readFileSync(p, "utf-8")) });
+			out.push({ rel: p.slice(SRC.length).replaceAll("\\", "/"), code: stripComments(readFileSync(p, "utf-8")) });
 		}
 	};
 	walk(SRC);

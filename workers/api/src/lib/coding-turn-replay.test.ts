@@ -4,6 +4,7 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { SEED_PREAMBLE } from "./coding-seed-brief.js";
 import { RESUME_WINDOW_MS } from "./coding-session-continuity.js";
@@ -120,7 +121,7 @@ describe("every door that sends a turn composes it through withTurnReplay (#693 
 	// Source-level for the same reason `turn-author-callsites.test.ts` is: three of the four senders are
 	// only reachable with a live relay. A new `/coding/act` sender that forgets the replay leaves one
 	// engine forgetting between turns on one path, which is exactly the qualifier this issue removes.
-	const SRC = new URL("../", import.meta.url).pathname;
+	const SRC = fileURLToPath(new URL("../", import.meta.url).href);
 	// The Pilot's door is asserted by running it — `workflows/coding-session/workflow-run.test.ts` (#915).
 	for (const rel of ["routes/coding-drive.ts", "routes/coding-brains.ts", "lib/storage-tools.ts"]) {
 		it(rel, () => {

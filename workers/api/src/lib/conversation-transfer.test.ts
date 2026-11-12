@@ -11,6 +11,7 @@
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { stripCommentsAndLiterals } from "./source-guard.js";
 import { runRegistryTool } from "./tool-registry.js";
@@ -104,7 +105,7 @@ interface Source {
 	code: string;
 }
 
-const SRC = new URL("../", import.meta.url).pathname; // workers/api/src
+const SRC = fileURLToPath(new URL("../", import.meta.url).href); // workers/api/src
 
 function sources(dir = SRC, out: Source[] = []): Source[] {
 	for (const entry of readdirSync(dir)) {
@@ -114,7 +115,7 @@ function sources(dir = SRC, out: Source[] = []): Source[] {
 			continue;
 		}
 		if (!p.endsWith(".ts") || p.endsWith(".test.ts") || p.endsWith(".d.ts")) continue;
-		out.push({ rel: p.slice(SRC.length), code: stripCommentsAndLiterals(readFileSync(p, "utf-8")) });
+		out.push({ rel: p.slice(SRC.length).replaceAll("\\", "/"), code: stripCommentsAndLiterals(readFileSync(p, "utf-8")) });
 	}
 	return out;
 }

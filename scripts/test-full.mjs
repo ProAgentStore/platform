@@ -18,6 +18,7 @@
  */
 
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,12 +33,17 @@ mkdirSync(OUT_DIR, { recursive: true });
 rmSync(REPORT, { force: true });
 rmSync(SUMMARY, { force: true });
 
-const vitest = resolve(ROOT, "node_modules/.bin/vitest");
-const run = spawnSync(
-	vitest,
-	["run", "--reporter=default", "--reporter=json", `--outputFile.json=${REPORT}`, ...process.argv.slice(2)],
-	{ cwd: ROOT, stdio: "inherit" },
-);
+let run;
+try {
+	const vitest = resolve(dirname(createRequire(import.meta.url).resolve("vitest/package.json")), "vitest.mjs");
+	run = spawnSync(
+		process.execPath,
+		[vitest, "run", "--reporter=default", "--reporter=json", `--outputFile.json=${REPORT}`, ...process.argv.slice(2)],
+		{ cwd: ROOT, stdio: "inherit" },
+	);
+} catch (error) {
+	run = { error, status: null };
+}
 if (run.error) console.error(`could not start vitest: ${run.error.message}`);
 
 let report = null;

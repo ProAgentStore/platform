@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
@@ -102,7 +103,7 @@ describe("per-machine checkouts (#1142)", () => {
 
 describe("migration 0292 seed", () => {
 	const seedSql = (() => {
-		const sql = readFileSync(new URL("../../migrations/0292_coding_repo_checkouts.sql", import.meta.url).pathname, "utf8");
+		const sql = readFileSync(fileURLToPath(new URL("../../migrations/0292_coding_repo_checkouts.sql", import.meta.url).href), "utf8");
 		return sql.slice(sql.indexOf("INSERT OR IGNORE INTO coding_repo_checkouts"));
 	})();
 

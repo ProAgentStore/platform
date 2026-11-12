@@ -21,6 +21,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { STALE_DRIVER_MS, claimSessionDriver } from "./coding-store.js";
 import type { Env } from "../types.js";
 
@@ -151,13 +152,13 @@ describe("every caller claims BEFORE it creates its run row", () => {
 	const CALLERS = [
 		{
 			file: "lib/loop-drivers.ts",
-			path: new URL("./loop-drivers.ts", import.meta.url).pathname,
+			path: fileURLToPath(new URL("./loop-drivers.ts", import.meta.url).href),
 			from: "const codingDriver",
 			create: "createLoopRun(",
 		},
 		{
 			file: "routes/coding-drive.ts",
-			path: new URL("../routes/coding-drive.ts", import.meta.url).pathname,
+			path: fileURLToPath(new URL("../routes/coding-drive.ts", import.meta.url).href),
 			from: '/:instanceId/coding/sessions/:sessionId/run',
 			create: "CODING_SESSION.create(",
 		},

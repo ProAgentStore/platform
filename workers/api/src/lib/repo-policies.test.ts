@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -324,8 +325,8 @@ describe("the clauses stay the ones #276 wrote", () => {
  * uses: removing a caller fails the guard too, so the list can only change deliberately.
  */
 describe("promotion is a human action", () => {
-	const API = new URL("../", import.meta.url).pathname; // workers/api/src
-	const MCP = new URL("../../../mcp/src/", import.meta.url).pathname;
+	const API = fileURLToPath(new URL("../", import.meta.url).href); // workers/api/src
+	const MCP = fileURLToPath(new URL("../../../mcp/src/", import.meta.url).href);
 
 	function walk(dir: string): string[] {
 		const out: string[] = [];
@@ -340,7 +341,7 @@ describe("promotion is a human action", () => {
 	it("exactly one route accepts a policy declaration", () => {
 		const callers = walk(API)
 			.filter((p) => readFileSync(p, "utf-8").includes("sanitizeRepoPolicies"))
-			.map((p) => p.slice(API.length))
+			.map((p) => p.slice(API.length).replaceAll("\\", "/"))
 			.sort();
 		expect(callers).toEqual(["lib/repo-policies.ts", "routes/coding-repos.ts"]);
 	});
@@ -417,7 +418,7 @@ describe("promotion is a human action", () => {
 				if (!isRepoPath) continue;
 				// The options object is the third argument of this same call.
 				const call = code.slice(m.index ?? 0, (m.index ?? 0) + 300);
-				if (/method:\s*["'`]PUT["'`]/.test(call)) offenders.push(`${p.slice(MCP.length)}: ${arg}`);
+				if (/method:\s*["'`]PUT["'`]/.test(call)) offenders.push(`${p.slice(MCP.length).replaceAll("\\", "/")}: ${arg}`);
 			}
 		}
 		// G1 — the scan must have SEEN the repo calls, or "no offenders" means "no measurement".
@@ -431,7 +432,7 @@ describe("promotion is a human action", () => {
 			}
 			for (const m of code.matchAll(/authedCall\(\s*([^,]+),/g)) {
 				const arg = m[1].trim();
-				if (REPO_PATH.test(arg) || held.has(arg)) seen.push(`${p.slice(MCP.length)}: ${arg}`);
+				if (REPO_PATH.test(arg) || held.has(arg)) seen.push(`${p.slice(MCP.length).replaceAll("\\", "/")}: ${arg}`);
 			}
 		}
 		expect(seen.length, "the scan found no repo-path authedCall at all — it is measuring nothing").toBeGreaterThanOrEqual(3);

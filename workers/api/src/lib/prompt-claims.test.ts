@@ -17,6 +17,7 @@
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { toolBlurbFor } from "../agent-think.js";
 import { resolveResponseStyle } from "./agent-behaviour.js";
@@ -383,7 +384,7 @@ describe("the incidents that motivated this", () => {
 
 // ── 5. The ratchet ───────────────────────────────────────────────────────────────────────────
 
-const SRC = new URL("../", import.meta.url).pathname;
+const SRC = fileURLToPath(new URL("../", import.meta.url).href);
 
 /**
  * The modules whose string literals become an agent's system prompt — DERIVED, not typed (#557).

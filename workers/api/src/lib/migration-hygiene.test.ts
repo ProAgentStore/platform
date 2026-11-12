@@ -15,10 +15,11 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 
-const SCRIPT = new URL("../../../../scripts/check-migrations.mjs", import.meta.url).pathname;
-const REPO = new URL("../../../../", import.meta.url).pathname;
+const SCRIPT = fileURLToPath(new URL("../../../../scripts/check-migrations.mjs", import.meta.url).href);
+const REPO = fileURLToPath(new URL("../../../../", import.meta.url).href);
 
 const temps: string[] = [];
 afterAll(() => {

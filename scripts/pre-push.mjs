@@ -13,6 +13,7 @@
  *    a few thousand tests here (about 40s measured), a leaf module a few hundred (about 10s).
  */
 import { execFileSync, spawnSync } from "node:child_process";
+import { spawnPortableSync } from "./lib/portable-command.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CI_GUARDS, relatedTestTargets, typecheckCommands } from "./lib/hook-plan.mjs";
@@ -25,7 +26,7 @@ const git = (...args) => spawnSync("git", args, { encoding: "utf8" });
 
 function run(cmd, args) {
 	console.log(`[pre-push] ${cmd} ${args.join(" ")}`);
-	const r = spawnSync(cmd, args, { stdio: "inherit" });
+	const r = spawnPortableSync(cmd, args, { stdio: "inherit" });
 	if (r.error) console.error(r.error.message);
 	if (r.error || r.status !== 0) process.exit(r.status || 1);
 }

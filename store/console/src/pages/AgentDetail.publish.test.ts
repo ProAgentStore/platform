@@ -23,6 +23,7 @@
  * missing reload — and an absence in a closure is invisible to any unit test of it.
  */
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { isTestFixtureRefusal, subscribeActionFor } from "./AgentDetail.js";
 
@@ -61,7 +62,7 @@ describe("isTestFixtureRefusal — is this the publish guard, or some other 400?
 });
 
 describe("saveSettings re-reads the server on EVERY exit path (#793)", () => {
-	const src = readFileSync(new URL("./AgentDetail.tsx", import.meta.url).pathname, "utf8");
+	const src = readFileSync(fileURLToPath(new URL("./AgentDetail.tsx", import.meta.url).href), "utf8");
 	const body = src.slice(src.indexOf("const saveSettings ="), src.indexOf("const deleteAgent ="));
 
 	it("read a plausible function — G1, so a moved handler fails loudly", () => {
@@ -159,7 +160,7 @@ describe("subscribeActionFor — what the creator's button should do (#797)", ()
 });
 
 describe("the subscribe control is wired to the same endpoint Browse uses (#797)", () => {
-	const src = readFileSync(new URL("./AgentDetail.tsx", import.meta.url).pathname, "utf8");
+	const src = readFileSync(fileURLToPath(new URL("./AgentDetail.tsx", import.meta.url).href), "utf8");
 
 	it("POSTs the subscribe endpoint — the affordance actually exists now", () => {
 		// The whole of #797: `git log -S "/subscribe"` on this file returned nothing before this.

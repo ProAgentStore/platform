@@ -55,6 +55,7 @@
  */
 import { Hono } from "hono";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { HttpError } from "../lib/auth.js";
 import { armFor, doQueryParams, lex, parseDoRouteTable } from "../lib/do-seam.js";
@@ -71,7 +72,7 @@ const UID = "owner-1";
 // The DO half — what the object reads, per path
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SRC = new URL("../", import.meta.url).pathname; // workers/api/src
+const SRC = fileURLToPath(new URL("../", import.meta.url).href); // workers/api/src
 const read = (rel: string) => lex(rel, readFileSync(`${SRC}${rel}`, "utf-8"));
 const AGENT_DO = read("agent-do.ts");
 const DO_SOURCES = [AGENT_DO, read("agent-do-storage-routes.ts"), read("agent-do-knowledge.ts")];

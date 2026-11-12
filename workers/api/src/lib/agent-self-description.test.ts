@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -179,7 +180,7 @@ describe("selfDescriptionPrompt — #255, ownership is a fact, not a memory stri
 
 // ── #519: which console the prompt is allowed to describe ────────────────────────────────────
 
-const ROOT = new URL("../../../../", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("../../../../", import.meta.url).href);
 const AGENT_PAGE = "store/console/src/pages/AgentDetail.tsx";
 const TRIAL_ROUTE = "workers/api/src/routes/public.ts";
 

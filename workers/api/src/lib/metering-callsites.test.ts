@@ -19,10 +19,11 @@
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { stripCommentsAndLiterals } from "./source-guard.js";
 
-const SRC = new URL("../", import.meta.url).pathname; // workers/api/src
+const SRC = fileURLToPath(new URL("../", import.meta.url).href); // workers/api/src
 
 /** Every non-test .ts file under workers/api/src, with comments and literals blanked. */
 function sources(): Array<{ rel: string; code: string }> {
@@ -35,7 +36,7 @@ function sources(): Array<{ rel: string; code: string }> {
 				continue;
 			}
 			if (!p.endsWith(".ts") || p.endsWith(".test.ts") || p.endsWith(".d.ts")) continue;
-			out.push({ rel: p.slice(SRC.length), code: stripCommentsAndLiterals(readFileSync(p, "utf-8")) });
+			out.push({ rel: p.slice(SRC.length).replaceAll("\\", "/"), code: stripCommentsAndLiterals(readFileSync(p, "utf-8")) });
 		}
 	};
 	walk(SRC);

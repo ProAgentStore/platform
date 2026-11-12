@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { readFileSync, readdirSync } from "node:fs";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -1607,7 +1608,7 @@ describe("tool annotations", () => {
 		// annotation (TOOL_RISK, annotationsFor) — only the instructions string. That is a
 		// read-only data serve, not a gate, and the test below could be tightened to check
 		// TOOL_RISK / annotationsFor specifically if the module grows further non-advisory exports.
-		const dir = new URL(".", import.meta.url).pathname;
+		const dir = fileURLToPath(new URL(".", import.meta.url).href);
 		const files: string[] = [];
 		const walk = (path: string) => {
 			for (const entry of readdirSync(path, { withFileTypes: true })) {

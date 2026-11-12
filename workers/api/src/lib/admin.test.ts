@@ -1,9 +1,10 @@
+import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { listAgents, listInstances } from "./admin.js";
 import type { Env } from "../types.js";
 
-const adminSource = readFileSync(new URL("./admin.ts", import.meta.url).pathname, "utf8");
+const adminSource = readFileSync(fileURLToPath(new URL("./admin.ts", import.meta.url).href), "utf8");
 /** Strip comments so assertions don't match in doc-comment quotations. */
 const adminCode = adminSource
 	.replace(/\/\*[\s\S]*?\*\//g, "")

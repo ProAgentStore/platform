@@ -14,6 +14,7 @@
  * being BUILT from that constant rather than typed beside it.
  */
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { CodingSessionStatus } from "../lib/coding-types.js";
 import { CAP, STUCK_SESSION_STATUSES } from "./admin-ops.js";
@@ -25,7 +26,7 @@ import { CAP, STUCK_SESSION_STATUSES } from "./admin-ops.js";
  */
 const _everyStuckStatusIsARealSessionStatus: readonly CodingSessionStatus[] = STUCK_SESSION_STATUSES;
 
-const source = readFileSync(new URL("./admin-ops.ts", import.meta.url).pathname, "utf8");
+const source = readFileSync(fileURLToPath(new URL("./admin-ops.ts", import.meta.url).href), "utf8");
 /** The route body only — the doc comments legitimately quote the old, broken filter. */
 const code = source
 	.replace(/\/\*[\s\S]*?\*\//g, "")

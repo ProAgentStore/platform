@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -190,7 +191,7 @@ describe("the runner's fallback vocabulary", () => {
 	// `.pathname` off the URL, as `security-invariants.test.ts` does: the Worker tsconfig's
 	// `@cloudflare/workers-types` URL is not node's, so passing the URL itself to `readFileSync`
 	// compiles nowhere — which the test-typecheck gate catches and `pnpm typecheck` does not.
-	const REPO = new URL("../../../../", import.meta.url).pathname;
+	const REPO = fileURLToPath(new URL("../../../../", import.meta.url).href);
 
 	it("parses, and refuses the committing words in every script the cloud list covers", () => {
 		const src = readFileSync(join(REPO, RUNNER_GUARD), "utf8");

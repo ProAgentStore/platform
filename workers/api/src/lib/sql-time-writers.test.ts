@@ -331,7 +331,7 @@ describe("the writer census", () => {
 				if (!p.endsWith(".ts") || p.endsWith(".test.ts") || p.endsWith("d1-sqlite.ts")) continue;
 				const src = readFileSync(p, "utf8");
 				for (const m of src.match(STATEMENT_RE) ?? []) {
-					if (/updated_at|created_at/.test(m)) out.push({ file: p.slice(SRC.length + 1), statement: m });
+					if (/updated_at|created_at/.test(m)) out.push({ file: p.slice(SRC.length + 1).replaceAll("\\", "/"), statement: m });
 				}
 			}
 		};

@@ -8,6 +8,7 @@
  * durable storage.
  */
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { MemoryEntry } from "../agent-types.js";
 import { STALE_MEMORY_RULE, memoryPrompt, selectMemoryForPrompt } from "./memory-prompt.js";
@@ -141,7 +142,7 @@ describe("#495 — the upstream half: the summariser is told not to make these",
 	// Asserted over the source because the instruction is a string inside a template literal with no
 	// export to import, and because the regression is a REVERT — the original sentence ("extract key
 	// facts about the user … information shared") reads perfectly well and is one edit away.
-	const SRC = readFileSync(new URL("../agent-storage/summaries.ts", import.meta.url).pathname, "utf-8");
+	const SRC = readFileSync(fileURLToPath(new URL("../agent-storage/summaries.ts", import.meta.url).href), "utf-8");
 
 	it("excludes permission and consent state, which is what caused the refusal", () => {
 		expect(SRC).toMatch(/NEVER extract the platform's own state/);

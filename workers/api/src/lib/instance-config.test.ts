@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { instanceListView, isValidConfigKey, patchInstanceConfig, removeInstanceConfigKey } from "./instance-config.js";
 import type { Env } from "../types.js";
@@ -160,7 +161,7 @@ describe("no whole-blob agent_instances.config writes remain", () => {
 	it("no source file issues `UPDATE agent_instances SET config = ?`", async () => {
 		const { readdirSync, readFileSync, statSync } = await import("node:fs");
 		const { join } = await import("node:path");
-		const root = new URL("../", import.meta.url).pathname; // workers/api/src
+		const root = fileURLToPath(new URL("../", import.meta.url).href); // workers/api/src
 
 		const offenders: string[] = [];
 		const walk = (dir: string) => {

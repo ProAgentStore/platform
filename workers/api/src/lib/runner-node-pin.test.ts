@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
 import { setMachineDisplayName } from "./machine-names.js";
@@ -134,7 +135,7 @@ describe("no other writer of config.runnerNode / config.runnerMachineId", () => 
 	it("no source file patches or removes $.runnerNode or $.runnerMachineId directly", async () => {
 		const { readdirSync, readFileSync, statSync } = await import("node:fs");
 		const { join } = await import("node:path");
-		const root = new URL("../", import.meta.url).pathname; // workers/api/src
+		const root = fileURLToPath(new URL("../", import.meta.url).href); // workers/api/src
 
 		const offenders: string[] = [];
 		const walk = (dir: string) => {

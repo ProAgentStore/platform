@@ -54,11 +54,12 @@
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { findCalls, stripCommentsAndLiterals } from "./source-guard.js";
 import { SAFE_FETCH_TIMEOUT_MS } from "./ssrf.js";
 
-const SRC = new URL("../", import.meta.url).pathname; // workers/api/src
+const SRC = fileURLToPath(new URL("../", import.meta.url).href); // workers/api/src
 
 interface Source {
 	rel: string;
@@ -83,7 +84,7 @@ function sources(dir = SRC, out: Source[] = []): Source[] {
 			continue;
 		}
 		if (!name.endsWith(".ts") || name.endsWith(".test.ts") || name.endsWith(".d.ts")) continue;
-		const rel = relative(SRC, p);
+		const rel = relative(SRC, p).replaceAll("\\", "/");
 		if (rel === SSRF_TS) continue;
 		const raw = readFileSync(p, "utf-8");
 		out.push({ rel, raw, code: stripCommentsAndLiterals(raw) });

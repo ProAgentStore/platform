@@ -18,6 +18,7 @@
  * "not re-run and not re-billed" is a number rather than an argument.
  */
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentMessage, AgentState } from "./agent-types.js";
 import { stripCommentsAndLiterals } from "./lib/source-guard.js";
@@ -228,7 +229,7 @@ describe("the Durable Object is wired to it, not merely able to be (#518)", () =
 	 * production while every test above stays green — the exact shape of #442's defect.
 	 */
 	it("`runTurn` reaches the thinker ONLY through the auto-resume wrapper", () => {
-		const code = stripCommentsAndLiterals(readFileSync(new URL("./agent-do.ts", import.meta.url).pathname, "utf-8"));
+		const code = stripCommentsAndLiterals(readFileSync(fileURLToPath(new URL("./agent-do.ts", import.meta.url).href), "utf-8"));
 		expect(code).toContain("thinkWithAutoResume(");
 		expect([...code.matchAll(/this\.think\(/g)]).toHaveLength(1);
 		// The one call site is the wrapper's argument, so the DO cannot think without it.

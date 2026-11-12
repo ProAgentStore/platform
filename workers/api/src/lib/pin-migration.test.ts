@@ -3,10 +3,11 @@
  * (for `unresolvedPins` to report) a hostname with no id, with two, or with no registration at all.
  */
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
 
-const MIGRATION = readFileSync(new URL("../../migrations/0262_pin_runner_by_machine_id.sql", import.meta.url).pathname, "utf-8");
+const MIGRATION = readFileSync(fileURLToPath(new URL("../../migrations/0262_pin_runner_by_machine_id.sql", import.meta.url).href), "utf-8");
 const LAPTOP = "3901c9c4-004f-435e-bfc5-0b87b7ac5173";
 let d1: RealSchemaD1;
 
@@ -60,7 +61,7 @@ describe("migration 0262: hostname pins → machine ids (#1250)", () => {
 	});
 });
 
-const BACKFILL = readFileSync(new URL("../../migrations/0264_backfill_parked_machine.sql", import.meta.url).pathname, "utf-8");
+const BACKFILL = readFileSync(fileURLToPath(new URL("../../migrations/0264_backfill_parked_machine.sql", import.meta.url).href), "utf-8");
 describe("migration 0264: runs parked before #1242 learn where they parked", () => {
 	it("records a still-parked run's machine from its session's stamped node, and leaves woken or finished runs alone", () => {
 		d1.exec("INSERT INTO coding_repos (id, instance_id, user_id, name, workdir) VALUES ('r1', 'a', 'u1', 'o/r', '~/dev/r')");

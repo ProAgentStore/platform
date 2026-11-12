@@ -29,13 +29,14 @@
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { findCalls, findIdentifier, findPropertyRead, findTableWrites, matchLines, readsAsMutating, stripCommentsAndLiterals } from "./source-guard.js";
 import { registryTools } from "./tool-registry.js";
 import { FENCE_TAG, fenceUntrusted } from "./untrusted-fence.js";
 
-const SRC = new URL("../", import.meta.url).pathname; // workers/api/src
-const MIGRATIONS = new URL("../../migrations/", import.meta.url).pathname;
+const SRC = fileURLToPath(new URL("../", import.meta.url).href); // workers/api/src
+const MIGRATIONS = fileURLToPath(new URL("../../migrations/", import.meta.url).href);
 
 interface Source {
 	/** Path relative to workers/api/src, e.g. "routes/public.ts". */
@@ -58,7 +59,7 @@ function sources(dir = SRC): Source[] {
 			}
 			if (!p.endsWith(".ts") || p.endsWith(".test.ts") || p.endsWith(".d.ts")) continue;
 			const raw = readFileSync(p, "utf-8");
-			out.push({ rel: p.slice(SRC.length), raw, code: stripCommentsAndLiterals(raw) });
+			out.push({ rel: p.slice(SRC.length).replaceAll("\\", "/"), raw, code: stripCommentsAndLiterals(raw) });
 		}
 	};
 	walk(dir);
@@ -788,7 +789,7 @@ function balancedBody(sql: string, open: number): string {
 
 /** The MCP worker's sources, lexed the same way — its tool gate is a second surface for #6. */
 function mcpWorkerSources(): Source[] {
-	const root = new URL("../../../mcp/src/", import.meta.url).pathname;
+	const root = fileURLToPath(new URL("../../../mcp/src/", import.meta.url).href);
 	const out: Source[] = [];
 	const walk = (d: string) => {
 		for (const entry of readdirSync(d)) {

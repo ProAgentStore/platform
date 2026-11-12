@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { MAX_ACTS_PER_SUBORDINATE, SUPERVISION_TOOLS, autoNumberedNames, resolveSubordinate, type SubordinateRow } from "./supervision.js";
@@ -872,7 +873,7 @@ describe("the supervision module's types are load-bearing", () => {
 		//
 		// Scanned over the lexed source so the explanation in the module's own doc comment (which
 		// has to quote the old shape) does not fail its own guard.
-		const src = stripCommentsAndLiterals(readFileSync(new URL("./supervision.ts", import.meta.url).pathname, "utf-8"));
+		const src = stripCommentsAndLiterals(readFileSync(fileURLToPath(new URL("./supervision.ts", import.meta.url).href), "utf-8"));
 		const offenders = src
 			.split("\n")
 			.map((line, i) => ({ line: i + 1, text: line }))
@@ -953,7 +954,7 @@ describe("direction — the Lead's epic for one agent", () => {
 		// Asserted over the SOURCE, because the failure is one line in a handler and there is no
 		// call that can be made to prove its absence. `setBy: "user"` may appear ONLY on the
 		// owner-authenticated HTTP route, never on a path an agent can reach.
-		const src = stripCommentsAndLiterals(readFileSync(new URL("./supervision.ts", import.meta.url).pathname, "utf-8"));
+		const src = stripCommentsAndLiterals(readFileSync(fileURLToPath(new URL("./supervision.ts", import.meta.url).href), "utf-8"));
 		expect(src).not.toMatch(/setBy:\s*"user"/);
 	});
 });

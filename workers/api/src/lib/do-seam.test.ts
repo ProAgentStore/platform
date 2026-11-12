@@ -4,10 +4,11 @@
  * only ever runs on fixtures is a scanner nobody knows has stopped matching the code.
  */
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { armFor, doQueryParams, findHandlerSpan, lex, parseDoRouteTable, queryParamsIn } from "./do-seam.js";
 
-const SRC = new URL("../", import.meta.url).pathname; // workers/api/src
+const SRC = fileURLToPath(new URL("../", import.meta.url).href); // workers/api/src
 const read = (rel: string) => lex(rel, readFileSync(`${SRC}${rel}`, "utf-8"));
 
 const AGENT_DO = read("agent-do.ts");

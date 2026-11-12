@@ -28,9 +28,10 @@
  * reading the whole file would pass on the Agents tab's button and prove nothing about this one.
  */
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-const src = readFileSync(new URL("./Dashboard.tsx", import.meta.url).pathname, "utf8");
+const src = readFileSync(fileURLToPath(new URL("./Dashboard.tsx", import.meta.url).href), "utf8");
 
 /**
  * JSX comments removed, so the guard reads CODE.
@@ -66,7 +67,7 @@ describe("#796 — the discovery button is gone from the Instances tab", () => {
 	it("and the Library page still calls itself that, so nothing was renamed away", () => {
 		// The counterpart. If "Browse agents" had merely been reworded everywhere, the assertion
 		// above would pass for the wrong reason.
-		const browse = readFileSync(new URL("./Browse.tsx", import.meta.url).pathname, "utf8");
+		const browse = readFileSync(fileURLToPath(new URL("./Browse.tsx", import.meta.url).href), "utf8");
 		expect(browse).toContain("Browse agents");
 	});
 });
@@ -121,7 +122,7 @@ describe("#795 — the type-to-filter box", () => {
 		// The matching rules and their edges are tested as values in instanceSearch.test.ts, and
 		// instanceList.test.ts proves `listInstances` searches through them (#815). An inline
 		// `.filter(...)` in JSX would put them back somewhere no unit test can reach.
-		const src2 = readFileSync(new URL("./Dashboard.tsx", import.meta.url).pathname, "utf8");
+		const src2 = readFileSync(fileURLToPath(new URL("./Dashboard.tsx", import.meta.url).href), "utf8");
 		expect(src2).toContain('from "../lib/instanceList"');
 		expect(src2).toContain("listInstances(instances, {");
 		// The arguments rather than one formatted line: slice 4 added `health` and `activity`, and a
@@ -179,7 +180,7 @@ describe("#815 — sort and agent filter", () => {
 
 	it("persists the sort and ONLY the sort — a filter that survived a reload is a list missing rows", () => {
 		expect(instancesTab).toContain("rememberSort(");
-		const src2 = readFileSync(new URL("./Dashboard.tsx", import.meta.url).pathname, "utf8");
+		const src2 = readFileSync(fileURLToPath(new URL("./Dashboard.tsx", import.meta.url).href), "utf8");
 		expect(src2).toContain("useState<InstanceSort>(rememberedSort)");
 		expect(src2).toContain('const [instanceAgent, setInstanceAgent] = useState("")');
 	});
@@ -194,7 +195,7 @@ describe("#815 — sort and agent filter", () => {
 		// calls the clearer, and the clearer resets all three.
 		const noMatch = instancesTab.slice(instancesTab.indexOf("visibleInstances.length === 0"), instancesTab.indexOf("grid grid-cols-"));
 		expect(noMatch).toContain("clearInstanceFilters");
-		const src3 = readFileSync(new URL("./Dashboard.tsx", import.meta.url).pathname, "utf8");
+		const src3 = readFileSync(fileURLToPath(new URL("./Dashboard.tsx", import.meta.url).href), "utf8");
 		const clearer = src3.slice(src3.indexOf("const clearInstanceFilters"), src3.indexOf("const navigate"));
 		for (const setter of ['setInstanceQuery("")', 'setInstanceAgent("")', 'setInstanceHealth("")']) {
 			expect(clearer).toContain(setter);
