@@ -1,4 +1,5 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { TERMINAL_TOOL_FAMILIES, terminalFamilyToolNames } from "./terminalTools.js";
@@ -87,15 +88,18 @@ const ALLOWED: { file: string; names: string[]; because: string }[] = [
 	},
 ];
 
-const findings = TREES.flatMap(([tree, root]) =>
-	sourceFiles(root).flatMap((file) =>
-		findToolLiterals(readFileSync(file, "utf8"), vocabulary).map((f) => ({
-			file: `${tree}/src/${relative(root, file)}`,
+function scanTree(tree: string, root: string, vocab: Set<string>) {
+	return sourceFiles(root).flatMap((file) =>
+		findToolLiterals(readFileSync(file, "utf8"), vocab).map((f) => ({
+			// The exemption keys are repository paths, independent of the host separator.
+			file: `${tree}/src/${relative(root, file).replaceAll("\\", "/")}`,
 			line: f.line,
 			name: f.name,
 		})),
-	),
-);
+	);
+}
+
+const findings = TREES.flatMap(([tree, root]) => scanTree(tree, root, vocabulary));
 
 describe("the tool vocabulary this guard reads", () => {
 	it("is derived from the connector definitions, and is not vacuously empty", () => {
@@ -137,6 +141,25 @@ describe("the tool vocabulary this guard reads", () => {
 });
 
 describe("no console surface names a tool the agent might not declare", () => {
+	it("matches only the exact allowed repository file while still finding nested producers", () => {
+		const root = mkdtempSync(join(tmpdir(), "tool-literals-"));
+		try {
+			mkdirSync(join(root, "components", "nested"), { recursive: true });
+			writeFileSync(join(root, "components", "McpConnections.tsx"), 'callTool("mcp_call_tool");');
+			writeFileSync(join(root, "components", "nested", "McpConnections.tsx"), 'callTool("mcp_call_tool");');
+			const found = scanTree("store/console", root, new Set(["mcp_call_tool"]));
+			const allowedFiles = new Set(ALLOWED.map((a) => a.file));
+			expect(found.filter((f) => allowedFiles.has(f.file))).toEqual([
+				{ file: "store/console/src/components/McpConnections.tsx", line: 1, name: "mcp_call_tool" },
+			]);
+			expect(found.filter((f) => !allowedFiles.has(f.file))).toEqual([
+				{ file: "store/console/src/components/nested/McpConnections.tsx", line: 1, name: "mcp_call_tool" },
+			]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("every hardcoded tool name is in a file that is allowed to hold one", () => {
 		const allowedFiles = new Set(ALLOWED.map((a) => a.file));
 		const strays = findings.filter((f) => !allowedFiles.has(f.file));

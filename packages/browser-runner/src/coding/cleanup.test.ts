@@ -406,7 +406,9 @@ describe("4. per-run temp folders and worktrees", () => {
 // `/tmp` is shared machine-wide: every socket-safe dir is named from `(uid, baseDir, sessionId)`, not
 // the session id alone, and ownership (uid + mode + "not a symlink") is verified on every use — a
 // short, predictable name is not by itself proof of who owns the path at that name.
-describe("4b. the TMPDIR an engine is given stays short enough for a Unix domain socket", () => {
+// Native Windows uses named pipes and bypasses this POSIX ownership/mode contract.
+// Keep every Unix-socket assertion active on POSIX; test the Windows branch separately below.
+describe.skipIf(process.platform === "win32")("4b. the TMPDIR an engine is given stays short enough for a Unix domain socket", () => {
 	// A deliberately long, realistic `baseDir` — same shape as `~/.config/proagentstore/browser-runner`
 	// under a long username. On the real machine that hit this, `sessionTmpDir` alone measured 96
 	// bytes (not independently at the 104-byte limit) — it was tsx's OWN `tsx-<euid>` subdirectory,
@@ -623,24 +625,7 @@ describe("4b. the TMPDIR an engine is given stays short enough for a Unix domain
 		expect(a).not.toBe(b);
 	});
 
-	describe("on win32, the whole socket-safe redirection is inert — Windows named pipes were never bound by sun_path", () => {
-		const realPlatform = process.platform;
-		beforeEach(() => Object.defineProperty(process, "platform", { value: "win32", configurable: true }));
-		afterEach(() => Object.defineProperty(process, "platform", { value: realPlatform, configurable: true }));
 
-		it("createSocketSafeTmp refuses outright rather than mkdir a meaningless /tmp-joined path", () => {
-			expect(createSocketSafeTmp(LONG_BASE, LONG_SESSION_ID)).toBeNull();
-		});
-
-		it("engineEnv exports the ORIGINAL long content dir unchanged — pre-fix behaviour, since nothing was ever broken here", () => {
-			const m = manager(LONG_BASE);
-			const env = m.engineEnv({}, LONG_SESSION_ID, join(LONG_BASE, "repos", "x"));
-			allocatedDirs.push(env.TMPDIR as string);
-			expect(env.TMPDIR).toBe(sessionTmpDir(LONG_BASE, LONG_SESSION_ID));
-			expect(env.TMP).toBe(env.TMPDIR);
-			expect(env.TEMP).toBe(env.TMPDIR);
-		});
-	});
 
 	it("endSession never removes an arbitrary same-uid pre-existing private directory that happens to sit at the hash path — only a dir THIS manager actually tracked allocating", async () => {
 		const neverAllocatedId = `${LONG_SESSION_ID}-never-called-engineEnv`;
@@ -793,6 +778,60 @@ describe("4b. the TMPDIR an engine is given stays short enough for a Unix domain
 		const env = m.engineEnv({}, vanishId, join(LONG_BASE, "repos", "x"));
 		allocatedDirs.push(env.TMPDIR as string);
 		expect(env.TMPDIR).toBeDefined(); // the ordinary case still works — this test is a non-throw smoke check, not a race
+	});
+});
+
+describe("Windows named-pipe temporary directories", () => {
+	const realPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+	let root = "";
+	const socketDirs: string[] = [];
+	beforeEach(() => {
+		root = mkdtempSync(join(tmpdir(), "pags-windows-cleanup-"));
+		Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+	});
+	afterEach(() => {
+		Object.defineProperty(process, "platform", realPlatform);
+		for (const dir of socketDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+		if (root) rmSync(root, { recursive: true, force: true });
+	});
+	const base = () => join(root, "long-runner-identity-".repeat(4));
+	const session = "csess_native_windows";
+	const manager = () => new CleanupManager({ baseDir: base(), reposBaseDir: join(base(), "repos"), ops: noOps(), git: gitNone, log: () => undefined, registerExitHook: false });
+
+	it("refuses Unix socket-safe allocation without creating a shared path", () => {
+		const candidate = socketSafeTmpDir(base(), session);
+		expect(existsSync(candidate)).toBe(false);
+		expect(createSocketSafeTmp(base(), session)).toBeNull();
+		expect(existsSync(candidate)).toBe(false);
+	});
+
+	it("uses the original per-session content directory for named pipes, replacing inherited temp values", () => {
+		const env = manager().engineEnv({ TMPDIR: "unrelated", TMP: "unrelated", TEMP: "unrelated", PATH: "original" }, session, join(base(), "repos", "x"));
+		expect(env.TMPDIR).toBe(sessionTmpDir(base(), session));
+		expect(env.TMP).toBe(env.TMPDIR);
+		expect(env.TEMP).toBe(env.TMPDIR);
+		expect(env.PAGS_SESSION_ID).toBe(session);
+		expect(env.PATH).toBe("original");
+		expect(Buffer.byteLength(env.TMPDIR!)).toBeGreaterThan(100);
+		expect(existsSync(env.TMPDIR!)).toBe(true);
+		expect(existsSync(socketSafeTmpDir(base(), session))).toBe(false);
+	});
+
+	it("never adopts or deletes an unrelated socket-directory sentinel through endSession or a harsh sweep", async () => {
+		const candidate = socketSafeTmpDir(base(), session);
+		mkdirSync(dirname(candidate), { recursive: true });
+		mkdirSync(candidate); // EEXIST must fail rather than adopt foreign recovery state.
+		socketDirs.push(candidate);
+		writeFileSync(join(candidate, "not-ours"), "preserve");
+		const m = manager();
+		m.startSession(session, join(base(), "repos", "x"));
+		const env = m.engineEnv({}, session, join(base(), "repos", "x"));
+		expect(env.TMPDIR).toBe(sessionTmpDir(base(), session));
+		expect(env.TMPDIR).not.toBe(candidate);
+		await m.endSession(session, new Set(), []);
+		m.setPolicy(HARSH);
+		await m.runPass("test", new Set(), []);
+		expect(existsSync(join(candidate, "not-ours"))).toBe(true);
 	});
 });
 

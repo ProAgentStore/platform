@@ -65,7 +65,8 @@ const identityOf = (sql: string) => seededConfig(sql).identity as Record<string,
 
 /** One captured group from `re`, failing loudly (not silently passing) if the shape moved. */
 function capture(sql: string, re: RegExp, what: string): string {
-	const m = re.exec(sql);
+	// Git may check SQL migrations out as CRLF; match the same SQL structure on either platform.
+	const m = re.exec(sql.replace(/\r\n/g, "\n"));
 	expect(m, `could not find ${what} — the migration's shape changed, so this test is not reading what it claims to`).toBeTruthy();
 	return (m as RegExpExecArray)[1].replace(/''/g, "'");
 }
@@ -75,6 +76,39 @@ const updatedDescription = (sql: string) => capture(sql, /\n\s*description = '([
 /** A `json_set(…, '$.identity.<field>', '…')` value. */
 const updatedIdentity = (sql: string, field: string) =>
 	capture(sql, new RegExp(`'\\$\\.identity\\.${field}',\\s*\\n?\\s*'([\\s\\S]*?)'\\s*\\n?\\s*\\)`), `the UPDATEd identity.${field}`);
+
+describe("migration claim captures across checkout line endings (#1652)", () => {
+	it.each(["\n", "\r\n"])("reads descriptions and identity fields with %j line endings", (newline) => {
+		const sql = [
+			"UPDATE agents SET",
+			"  description = 'An agent''s description',",
+			"  config = json_set(config, '$.identity.welcomeMessage',",
+			"    'Welcome to the agent''s inbox'",
+			"  )",
+		].join(newline);
+		expect(updatedDescription(sql)).toBe("An agent's description");
+		expect(updatedIdentity(sql, "welcomeMessage")).toBe("Welcome to the agent's inbox");
+		const seed = ["INSERT INTO agents VALUES (", "  'Reads an email and doesn''t send',", `  json('{"identity":{"goal":"Read mail","welcomeMessage":"Welcome"}}')`, ");"].join(newline);
+		expect(capture(seed, /\n\s*'(Reads an email[\s\S]*?)',\n/, "the seed description")).toBe("Reads an email and doesn't send");
+		expect(identityOf(seed)).toEqual({ goal: "Read mail", welcomeMessage: "Welcome" });
+	});
+
+	it.each(["\n", "\r\n"])("retains every live migration capture with %j line endings", (newline) => {
+		const checkout = (sql: string) => sql.replace(/\r?\n/g, newline);
+		for (const sql of [SQL_0137, SQL_0138]) {
+			expect(updatedDescription(checkout(sql))).toBe(updatedDescription(sql));
+		}
+		for (const sql of [SQL_0138, SQL_0152]) {
+			for (const field of ["welcomeMessage", "goal"]) {
+				expect(updatedIdentity(checkout(sql), field)).toBe(updatedIdentity(sql, field));
+			}
+		}
+		for (const sql of [SQL_0134, SQL_0136]) {
+			expect(identityOf(checkout(sql))).toEqual(identityOf(sql));
+		}
+		expect(capture(checkout(SQL_0134), /\n\s*'(Reads an email[\s\S]*?)',\n/, "the Email Assistant description")).toBe(capture(SQL_0134, /\n\s*'(Reads an email[\s\S]*?)',\n/, "the Email Assistant description"));
+	});
+});
 
 /** Inbox Chat as it is live TODAY: 0136's welcome message, 0137's description. */
 const LIVE_INBOX_DESCRIPTION = updatedDescription(SQL_0137);
