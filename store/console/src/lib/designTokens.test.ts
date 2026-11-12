@@ -1,5 +1,6 @@
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -58,7 +59,7 @@ function walk(dir: string, base = dir, out: string[] = []): string[] {
 	for (const e of readdirSync(dir, { withFileTypes: true })) {
 		const full = join(dir, e.name);
 		if (e.isDirectory()) walk(full, base, out);
-		else if (/\.tsx?$/.test(e.name) && !/\.test\.tsx?$/.test(e.name)) out.push(full.slice(base.length + 1));
+		else if (/\.tsx?$/.test(e.name) && !/\.test\.tsx?$/.test(e.name)) out.push(relative(base, full).replaceAll("\\", "/"));
 	}
 	return out;
 }
@@ -71,6 +72,21 @@ function scan(base: string, re: RegExp): { file: string; hits: string[] }[] {
 	}
 	return found;
 }
+
+it("scans nested files with stable paths, exempting only the brand sign-in surface", () => {
+	const base = mkdtempSync(join(tmpdir(), "pags-palette-"));
+	try {
+		mkdirSync(join(base, "pages", "nested"), { recursive: true });
+		writeFileSync(join(base, "pages", "Login.tsx"), 'const button = "bg-gray-100";');
+		writeFileSync(join(base, "pages", "nested", "Login.tsx"), 'const card = "bg-gray-100";');
+		writeFileSync(join(base, "pages", "Ignored.test.tsx"), 'const fixture = "bg-gray-100";');
+		const found = scan(base, LIGHT_SURFACE);
+		expect(found.map((f) => f.file)).toEqual(["pages/Login.tsx", "pages/nested/Login.tsx"]);
+		expect(found.filter((f) => !LIGHT_SURFACE_ALLOWED.has(f.file)).map((f) => f.file)).toEqual(["pages/nested/Login.tsx"]);
+	} finally {
+		rmSync(base, { recursive: true, force: true });
+	}
+});
 
 describe("no light-theme surfaces on a dark-only app (#368)", () => {
 	it("the console uses no pale Tailwind background", () => {

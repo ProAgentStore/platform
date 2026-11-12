@@ -69,6 +69,13 @@ configured distribution); shell-dependent fixtures must verify the executable th
 Missing optional shells are reported as skipped, and `PAGS_REQUIRE_SHELLS` retains CI's
 requirement that those checks run. Skipped tests do not prove the missing capability.
 
+The `scripts/fail-before.mjs` apply/restore helper remains POSIX-only: native Windows
+cannot preserve its exact permission-bit contract. Windows calls refuse before changing
+files or recovery journals; restore still requires the original repository identity in a
+supported POSIX environment. Existing journals are not made portable by this refusal. The
+Windows suite checks refusal and evidence preservation. POSIX recovery tests remain enabled on
+POSIX and are explicitly skipped on Windows; those skips do not establish Windows support.
+
 ## Tests that lock an invariant
 
 Test the behaviour, not the spelling: call the code and assert what it does, or — for a genuine

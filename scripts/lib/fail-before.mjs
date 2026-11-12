@@ -56,6 +56,8 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 /** Exit codes. A test's own status passes through untouched; these sit above any test runner's. */
 export const EXIT = { refused: 64, conflict: 70, unknownState: 75 };
 
+const UNSUPPORTED_PLATFORM = "fail-before requires POSIX file permissions; Windows cannot preserve the exact mode and recovery contract. Nothing was changed.";
+
 const JOURNAL_DIR = "pags-fail-before";
 const FORMAT = 2;
 const sha = (buf) => createHash("sha256").update(buf).digest("hex");
@@ -212,6 +214,7 @@ function baseEntry(root, baseSha, rel) {
 
 /** Mutates nothing. Returns `{ ident, base, files }` or `{ refused, code }`. */
 export function preflight({ cwd, base = "HEAD", paths, command }) {
+	if (process.platform === "win32") return { refused: UNSUPPORTED_PLATFORM, code: EXIT.refused };
 	const ident = repoIdentity(cwd);
 	if (!ident) return { refused: `not a git repository: ${cwd}`, code: EXIT.refused };
 	if (journalRootState(ident) === "bad") {
@@ -444,6 +447,7 @@ export function failBefore({ cwd, base = "HEAD", paths, command, run = defaultRu
  * here, and every backup matches its recorded hash. The journal is removed only when every file is back.
  */
 export function restoreFromJournal(dir, opts = {}) {
+	if (process.platform === "win32") return { ok: false, exit: EXIT.unknownState, journal: dir, restored: [], conflicts: [], mutated: false, detail: `${UNSUPPORTED_PLATFORM} The journal is kept; restore it on POSIX.` };
 	const callerRoot = typeof opts === "string" ? opts : opts.root;
 	const faults = typeof opts === "string" ? undefined : opts.faults;
 	const stop = (detail, extra = {}) => ({ ok: false, exit: EXIT.unknownState, journal: dir, restored: [], conflicts: [], detail: `${detail} Nothing was changed; the journal is kept.`, ...extra });

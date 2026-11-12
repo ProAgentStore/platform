@@ -157,7 +157,7 @@ describe("where the lock lives", () => {
 		const home = "/Users/owner-login";
 		const a = lockPath("owner-login", at(home));
 		// The parent is the user's own directory and is left exactly as given — it is not ours to hide.
-		expect(dirname(a)).toBe(`${home}/.config/proagentstore`);
+		expect(dirname(a)).toBe(join(home, ".config", "proagentstore"));
 		expect(basename(a)).toBe(`up-${accountKey("owner-login")}.lock`);
 		for (const spelling of ["owner-login", "Owner-Login", "OWNER-LOGIN"]) expect(basename(a)).not.toContain(spelling);
 		expect(lockPath(" Owner-Login ", at(home)), "normalised: case and surrounding space do not make a second lock").toBe(a);
@@ -171,7 +171,7 @@ describe("where the lock lives", () => {
 		expect(configDir(dev)).toBe("/tmp/alt");
 		// ...but its lock is the same file the installed runner takes, so the two collide instead of fighting through 4409.
 		expect(lockPath("a", dev)).toBe(lockPath("a", { HOME: "/home/x" } as NodeJS.ProcessEnv));
-		expect(lockDir(dev)).toBe("/home/x/.config/proagentstore");
+		expect(lockDir(dev)).toBe(join("/home/x", ".config", "proagentstore"));
 		// The process's own environment resolves through the OS, as machine.ts does, and ignores PAGS_CONFIG_DIR too.
 		expect(lockDir()).toBe(join(homedir(), ".config", "proagentstore"));
 	});

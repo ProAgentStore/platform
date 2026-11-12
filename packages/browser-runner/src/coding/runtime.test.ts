@@ -237,7 +237,7 @@ describeGit("ensureRepo", () => {
 		execFileSync("git", ["init", "-q"], { cwd: src });
 		execFileSync("git", ["config", "user.email", "t@t.t"], { cwd: src });
 		execFileSync("git", ["config", "user.name", "t"], { cwd: src });
-		execFileSync("bash", ["-c", "echo hi > f.txt"], { cwd: src });
+		writeFileSync(join(src, "f.txt"), "hi\n");
 		execFileSync("git", ["add", "-A"], { cwd: src });
 		execFileSync("git", ["commit", "-q", "-m", "x"], { cwd: src });
 		return src;
@@ -248,7 +248,7 @@ describeGit("ensureRepo", () => {
 		const dir = join(base, "repo1");
 		ensureRepo(dir, { cloneUrl: src });
 		expect(existsSync(join(dir, "f.txt"))).toBe(true);
-		execFileSync("bash", ["-c", "echo local > untracked.txt"], { cwd: dir });
+		writeFileSync(join(dir, "untracked.txt"), "local\n");
 		ensureRepo(dir, { cloneUrl: src });
 		expect(existsSync(join(dir, "untracked.txt"))).toBe(true);
 		rmSync(src, { recursive: true, force: true });
@@ -268,7 +268,7 @@ describeGit("ensureRepo", () => {
 		const src = makeSrc();
 		const dir = join(base, "repo3");
 		mkdirSync(dir, { recursive: true });
-		execFileSync("bash", ["-c", "echo important > mydata.txt"], { cwd: dir });
+		writeFileSync(join(dir, "mydata.txt"), "important\n");
 		// A real user directory passed as workDir must never be recursively deleted.
 		expect(() => ensureRepo(dir, { cloneUrl: src })).toThrow(/non-empty/i);
 		expect(existsSync(join(dir, "mydata.txt"))).toBe(true); // preserved
@@ -300,7 +300,9 @@ describeGit("ensureRepo", () => {
 		const src = makeSrc();
 		const dir = join(base, "own-behind");
 		ensureRepo(dir, { cloneUrl: src, ownFolder: true });
-		execFileSync("bash", ["-c", "echo more > g.txt && git add -A && git commit -q -m y"], { cwd: src });
+		writeFileSync(join(src, "g.txt"), "more\n");
+		execFileSync("git", ["add", "-A"], { cwd: src });
+		execFileSync("git", ["commit", "-q", "-m", "y"], { cwd: src });
 		const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf-8" });
 		ensureRepo(dir, { cloneUrl: src, ownFolder: true });
 		expect(execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf-8" })).toBe(head);
@@ -312,7 +314,7 @@ describeGit("ensureRepo", () => {
 		const src = makeSrc();
 		const dir = join(base, "own-plain");
 		mkdirSync(dir, { recursive: true });
-		execFileSync("bash", ["-c", "echo mine > notes.txt"], { cwd: dir });
+		writeFileSync(join(dir, "notes.txt"), "mine\n");
 		expect(ensureRepo(dir, { cloneUrl: src, ownFolder: true })).toBe(dir);
 		expect(existsSync(join(dir, ".git"))).toBe(false);
 		expect(existsSync(join(dir, "notes.txt"))).toBe(true);
@@ -357,7 +359,11 @@ describe("CodingRuntime over the stream-json engine", () => {
 	it("start fills an EMPTY owner path from `emptyCheckoutCloneUrl` before the engine launches (#828)", () => {
 		const src = join(dir, "fill-src");
 		mkdirSync(src);
-		execFileSync("bash", ["-c", "git init -q && git -c user.email=t@t.t -c user.name=t commit -q --allow-empty -m x && echo hi > f.txt && git add -A && git -c user.email=t@t.t -c user.name=t commit -q -m y"], { cwd: src });
+		execFileSync("git", ["init", "-q"], { cwd: src });
+		execFileSync("git", ["-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x"], { cwd: src });
+		writeFileSync(join(src, "f.txt"), "hi\n");
+		execFileSync("git", ["add", "-A"], { cwd: src });
+		execFileSync("git", ["-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-q", "-m", "y"], { cwd: src });
 		const work = join(dir, "fill-work");
 		mkdirSync(work);
 		rt = new CodingRuntime(join(dir, "base"));

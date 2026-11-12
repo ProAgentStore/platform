@@ -1,5 +1,6 @@
-import { readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 // The console's own route table, imported rather than restated — a guard that keeps its own idea
 // of the routes is a second thing to drift. `routes.ts` is React-free for exactly this reason.
@@ -135,22 +136,43 @@ describe("browserTakeoverLink, per subject kind (#1590)", () => {
 });
 
 describe("no producer escapes the check", () => {
-	it("is the only place under workers/api/src that builds a /console path", () => {
-		const offenders: string[] = [];
-		for (const file of walk(join(__dirname, ".."))) {
-			if (file.endsWith("/lib/console-links.ts") || /\.(test|spec)\.ts$/.test(file)) continue;
-			// Strip comments first: the modules that USED to build these links explain what they no
-			// longer do, and the explanation must not fail the test that protects it.
-			const code = readFileSync(file, "utf8")
-				.replace(/\/\*[\s\S]*?\*\//g, "")
-				.split("\n")
-				.map((l) => l.replace(/(^|[^:])\/\/.*$/, "$1"))
-				.join("\n");
-			if (/["'`]\/console(\/|["'`])/.test(code)) offenders.push(file.slice(file.indexOf("workers/api")));
+	it("exempts only the shared builder and tests, reporting nested producers with stable paths", () => {
+		const base = mkdtempSync(join(tmpdir(), "pags-console-links-"));
+		try {
+			mkdirSync(join(base, "lib"));
+			mkdirSync(join(base, "routes"));
+			const producer = 'const url = "/console/instances";';
+			writeFileSync(join(base, "lib", "console-links.ts"), producer);
+			writeFileSync(join(base, "routes", "producer.ts"), producer);
+			writeFileSync(join(base, "routes", "producer.test.ts"), producer);
+			writeFileSync(join(base, "routes", "comment.ts"), '// const url = "/console/instances";');
+			expect(consolePathProducers(base)).toEqual(["routes/producer.ts"]);
+		} finally {
+			rmSync(base, { recursive: true, force: true });
 		}
-		expect(offenders, "build the link in lib/console-links.ts, where it is checked against the router").toEqual([]);
+	});
+
+	it("is the only place under workers/api/src that builds a /console path", () => {
+		expect(consolePathProducers(join(__dirname, "..")), "build the link in lib/console-links.ts, where it is checked against the router").toEqual([]);
 	});
 });
+
+function consolePathProducers(base: string): string[] {
+	const offenders: string[] = [];
+	for (const file of walk(base)) {
+		const rel = relative(base, file).replaceAll("\\", "/");
+		if (rel === "lib/console-links.ts" || /\.(test|spec)\.ts$/.test(rel)) continue;
+		// Strip comments first: the modules that USED to build these links explain what they no
+		// longer do, and the explanation must not fail the test that protects it.
+		const code = readFileSync(file, "utf8")
+			.replace(/\/\*[\s\S]*?\*\//g, "")
+			.split("\n")
+			.map((l) => l.replace(/(^|[^:])\/\/.*$/, "$1"))
+			.join("\n");
+		if (/["'`]\/console(\/|["'`])/.test(code)) offenders.push(rel);
+	}
+	return offenders;
+}
 
 function walk(dir: string): string[] {
 	const out: string[] = [];

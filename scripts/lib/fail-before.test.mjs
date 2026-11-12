@@ -45,6 +45,9 @@ const shells = Object.fromEntries(["sh", "bash", "zsh"].map((bin) => [bin, findS
  */
 const has = (bin) => !!shells[bin] || !!process.env.PAGS_REQUIRE_SHELLS;
 const shellPath = (bin) => shells[bin] ?? bin;
+// Exact permission and recovery semantics are POSIX-only. Windows exercises refusal below;
+// these comparisons must keep their full mode, native I/O, and recovery assertions on POSIX.
+const describeComparison = describe.skipIf(process.platform === "win32");
 const repos = [];
 afterEach(() => {
 	for (const d of repos.splice(0)) rmSync(d, { recursive: true, force: true });
@@ -162,7 +165,7 @@ describe("the observed defect, reproduced in a temp repo", () => {
 	});
 });
 
-describe("failBefore — the supported comparison never consumes foreign state", () => {
+describeComparison("failBefore — the supported comparison never consumes foreign state", () => {
 	it("the same joined-path mistake is refused by name, and nothing at all changes", () => {
 		const dir = fixture();
 		const before = state(dir);
@@ -336,7 +339,7 @@ describe("path arrays reach each supported shell as one word per path", () => {
 	});
 });
 
-describe("the CLI keeps the real exit status and prints a receipt", () => {
+describeComparison("the CLI keeps the real exit status and prints a receipt", () => {
 	const cli = (dir, ...args) => spawnSync(process.execPath, [CLI, ...args], { cwd: dir, encoding: "utf8" });
 	const lastJson = (out) => JSON.parse(out.trim().split("\n").at(-1));
 
@@ -392,7 +395,7 @@ const toplevel = (dir) => g(dir, "rev-parse", "--show-toplevel");
 const sepFor = () => (process.platform === "win32" ? "\\" : "/");
 const realpathOf = (p) => realpathSync(p);
 
-describe("(a) symlinks are refused before anything changes", () => {
+describeComparison("(a) symlinks are refused before anything changes", () => {
 	it("an UNTRACKED symlink is not replaced by a regular file", () => {
 		const dir = fixture();
 		symlinkSync("a.txt", join(dir, "lnk.txt"));
@@ -437,7 +440,7 @@ describe("(a) symlinks are refused before anything changes", () => {
 	});
 });
 
-describe("(f) git administrative metadata, nested repositories and escapes are refused up front", () => {
+describeComparison("(f) git administrative metadata, nested repositories and escapes are refused up front", () => {
 	for (const p of [".git/index", ".git/HEAD", "sub/../.git/config", ".GIT/config"]) {
 		it(`${p} is refused, the index stays byte-identical, and the test never runs`, () => {
 			const dir = fixture();
@@ -482,7 +485,7 @@ describe("(f) git administrative metadata, nested repositories and escapes are r
 	});
 });
 
-describe("(b) a journal is bound to its repository", () => {
+describeComparison("(b) a journal is bound to its repository", () => {
 	it("a journal from repo A is refused in repo B: nothing in B changes, A's journal is kept and still restores A", () => {
 		const a = fixture();
 		const b = fixture();
@@ -524,7 +527,7 @@ describe("(b) a journal is bound to its repository", () => {
 	});
 });
 
-describe("(c) every backup is verified before any file is written", () => {
+describeComparison("(c) every backup is verified before any file is written", () => {
 	it("a corrupt backup stops the restore before it writes anything — even the files whose backups are fine", () => {
 		const dir = fixture();
 		expect(() => failBefore({ cwd: dir, paths: ["a.txt", "b.txt"], command: ["t"], run: crashRun })).toThrow();
@@ -560,7 +563,7 @@ describe("(c) every backup is verified before any file is written", () => {
 	});
 });
 
-describe("(e) content, type and mode are one state", () => {
+describeComparison("(e) content, type and mode are one state", () => {
 	it("an owned mode-only change is compared at the base mode, and comes back afterwards", () => {
 		const dir = fixture();
 		chmodSync(join(dir, "other.txt"), 0o755);
@@ -622,7 +625,7 @@ describe("(e) content, type and mode are one state", () => {
 	});
 });
 
-describe("(d) setup, journal writes and restores are crash- and error-safe", () => {
+describeComparison("(d) setup, journal writes and restores are crash- and error-safe", () => {
 	it("a journal directory with no readable journal is unknown state, and stops the next run", () => {
 		const dir = fixture();
 		const before = state(dir);
@@ -721,7 +724,7 @@ describe("(d) setup, journal writes and restores are crash- and error-safe", () 
 	});
 });
 
-describe("the CLI's exit statuses are the test's own, through the hardened restore", () => {
+describeComparison("the CLI's exit statuses are the test's own, through the hardened restore", () => {
 	const cli = (dir, ...args) => spawnSync(process.execPath, [CLI, ...args], { cwd: dir, encoding: "utf8" });
 	it("a missing command is 127, with every file restored", () => {
 		const dir = fixture();
@@ -753,7 +756,7 @@ describe("the CLI's exit statuses are the test's own, through the hardened resto
 // Tests marked [seam] observe a fault through `_io` (a short or stalled write, a stat reporting bits no
 // unprivileged fixture can set); every other test observes the real filesystem in a temp repository.
 
-describe("(1) the journal root is a plain directory, never a link that carries the journal elsewhere", () => {
+describeComparison("(1) the journal root is a plain directory, never a link that carries the journal elsewhere", () => {
 	it("a symlinked journal root is unknown state: refused, nothing written through it, the link left as it is", () => {
 		const dir = fixture();
 		// An EMPTY directory elsewhere: nothing there for an "earlier journal" check to trip over by accident.
@@ -790,7 +793,7 @@ describe("(1) the journal root is a plain directory, never a link that carries t
 	});
 });
 
-describe("(2) ordinary I/O errors return truthful receipts", () => {
+describeComparison("(2) ordinary I/O errors return truthful receipts", () => {
 	it("an unreadable owned file is refused at preflight with its error code — nothing changed, nothing thrown", () => {
 		const dir = fixture();
 		chmodSync(join(dir, "a.txt"), 0o000);
@@ -857,7 +860,7 @@ describe("(2) ordinary I/O errors return truthful receipts", () => {
 	});
 });
 
-describe("(3) every byte is written before anything is renamed into place", () => {
+describeComparison("(3) every byte is written before anything is renamed into place", () => {
 	const realWrite = _io.writeSync;
 	afterEach(() => {
 		_io.writeSync = realWrite;
@@ -897,7 +900,7 @@ describe("(3) every byte is written before anything is renamed into place", () =
 	});
 });
 
-describe("(4) the mode contract is exact: plain permission bits, or a refusal", () => {
+describeComparison("(4) the mode contract is exact: plain permission bits, or a refusal", () => {
 	const realLstat = _io.lstatSync;
 	afterEach(() => {
 		_io.lstatSync = realLstat;
@@ -965,7 +968,7 @@ function failOnce(step, match) {
 const journalFile = (journal) => join(journal, "journal.json");
 const journalState = (journal) => JSON.parse(readFileSync(journalFile(journal), "utf8")).state;
 
-describe("(A) a cleanup that stops after every file is back is a success with cleanup pending, and --restore finishes it", () => {
+describeComparison("(A) a cleanup that stops after every file is back is a success with cleanup pending, and --restore finishes it", () => {
 	it("EACCES removing a backup: every file reported restored, cleanup pending, journal and remaining backups kept; a retry is idempotent", () => {
 		const dir = fixture();
 		const before = state(dir);
@@ -1048,7 +1051,7 @@ describe("(A) a cleanup that stops after every file is back is a success with cl
 	});
 });
 
-describe("(B) a file replaced before verification is reported as written, never as untouched", () => {
+describeComparison("(B) a file replaced before verification is reported as written, never as untouched", () => {
 	for (const [step, label] of [
 		["restore", "a fault immediately after the rename"],
 		["verify", "EACCES on the first verification read"],
@@ -1069,7 +1072,7 @@ describe("(B) a file replaced before verification is reported as written, never 
 	}
 });
 
-describe("(A) finishing a cleanup needs this run's authenticated marker — never an empty directory alone", () => {
+describeComparison("(A) finishing a cleanup needs this run's authenticated marker — never an empty directory alone", () => {
 	/** A completed cleanup stopped at its last step: the run directory is gone, the marker is left. */
 	function stoppedAtMarker() {
 		const dir = fixture();
@@ -1139,7 +1142,7 @@ describe("(A) finishing a cleanup needs this run's authenticated marker — neve
 // helper or CLI is imported, and throws EACCES for the first N reads of a `.completed.json` marker only.
 // Fixture text only: the scripts below are written to a temp dir and run with `node`, never through a shell.
 
-describe("(A) an unreadable completion marker right after the rename keeps this run's real progress", () => {
+describeComparison("(A) an unreadable completion marker right after the rename keeps this run's real progress", () => {
 	const helperUrl = pathToFileURL(resolve(import.meta.dirname, "fail-before.mjs")).href;
 	const PRELOAD = `import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -1275,7 +1278,7 @@ process.stdout.write(JSON.stringify(r) + "\\n");
 // repository (worktree root, git dir, common dir), the marker's parent, then — when a caller root is given — the
 // caller's repository (root, git dir, common dir). Ordinary isolated temp repositories; every fault is synthetic.
 
-describe("(A) receipts keep known progress and every diagnostic across native faults at the outer boundaries (#1021)", () => {
+describeComparison("(A) receipts keep known progress and every diagnostic across native faults at the outer boundaries (#1021)", () => {
 	const helperUrl = pathToFileURL(resolve(import.meta.dirname, "fail-before.mjs")).href;
 	const PRELOAD = `import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -1446,5 +1449,45 @@ process.stdout.write(JSON.stringify(r) + "\\n");
 
 	it("the matrix is bounded to receipt exits: 48 in-call, 22 fresh, 10 rollback", () => {
 		expect([inCall.length, fresh.length, rollback.length]).toEqual([48, 22, 10]);
+	});
+});
+
+
+describe("Windows comparison capability boundary", () => {
+	it("refuses comparison and restore before touching files or existing recovery evidence", () => {
+		const dir = fixture();
+		const before = state(dir);
+		const journal = join(dir, ".git", "pags-fail-before", "existing-recovery");
+		mkdirSync(journal, { recursive: true });
+		writeFileSync(join(journal, "journal.json"), "foreign recovery manifest");
+		writeFileSync(join(journal, "backup"), "foreign recovery bytes");
+		const platform = Object.getOwnPropertyDescriptor(process, "platform");
+		const run = vi.fn(() => 0);
+		try {
+			Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+			expect(failBefore({ cwd: dir, paths: ["a.txt"], command: ["test"], run })).toMatchObject({ ok: false, phase: "preflight", exit: EXIT.refused, mutated: false, detail: expect.stringContaining("requires POSIX") });
+			expect(restoreFromJournal(journal, { root: dir })).toMatchObject({ ok: false, exit: EXIT.unknownState, restored: [], mutated: false, detail: expect.stringContaining("journal is kept") });
+		} finally {
+			Object.defineProperty(process, "platform", platform);
+		}
+		expect(run).not.toHaveBeenCalled();
+		expect(state(dir)).toEqual(before);
+		expect(readdirSync(journal).sort()).toEqual(["backup", "journal.json"]);
+		expect(readFileSync(join(journal, "journal.json"), "utf8")).toBe("foreign recovery manifest");
+		expect(readFileSync(join(journal, "backup"), "utf8")).toBe("foreign recovery bytes");
+	});
+
+	it.skipIf(process.platform !== "win32")("the native Windows CLI emits refusal receipts and never runs the command", () => {
+		const dir = fixture();
+		const before = state(dir);
+		const r = spawnSync(process.execPath, [CLI, "--path", "a.txt", "--", process.execPath, "-e", "require('node:fs').writeFileSync('executed', 'bad')"], { cwd: dir, encoding: "utf8" });
+		expect(r.status).toBe(EXIT.refused);
+		expect(JSON.parse(r.stdout.trim())).toMatchObject({ ok: false, mutated: false, detail: expect.stringContaining("requires POSIX") });
+		expect(existsSync(join(dir, "executed"))).toBe(false);
+		expect(state(dir)).toEqual(before);
+		expect(existsSync(join(dir, ".git", "pags-fail-before"))).toBe(false);
+		const restore = spawnSync(process.execPath, [CLI, "--restore", join(dir, ".git", "pags-fail-before", "absent")], { cwd: dir, encoding: "utf8" });
+		expect(restore.status).toBe(EXIT.unknownState);
+		expect(JSON.parse(restore.stdout.trim())).toMatchObject({ ok: false, phase: "restore", mutated: false, detail: expect.stringContaining("requires POSIX") });
 	});
 });
