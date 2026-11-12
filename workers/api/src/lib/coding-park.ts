@@ -120,10 +120,13 @@ export async function wakeParkedRun(env: Pick<Env, "DB" | "CODING_SESSION">, run
 export async function runDueParkWakes(env: Pick<Env, "DB" | "CODING_SESSION">, now = Date.now(), onGone?: (runId: string) => Promise<unknown>): Promise<number> {
 	const due = now - PARK_WAKE_BACKSTOP_MS;
 	const { results } = await env.DB.prepare(
-		`SELECT DISTINCT r.run_id FROM agent_loop_runs r JOIN coder_questions q ON q.run_id = r.run_id
+		// #1641: EXISTS, not JOIN + DISTINCT — the DISTINCT led the planner to scan every question (or
+		// every run) each minute; this way it walks only the parked runs (idx_agent_loop_runs_parked).
+		`SELECT r.run_id FROM agent_loop_runs r
 		  WHERE r.status = 'running' AND r.waiting_reason = 'decision' AND r.workflow_instance_id IS NOT NULL
-		    AND ((r.cancel_requested = 1 AND COALESCE(r.cancel_requested_at, 0) < ?1)
-		      OR (q.applied_at IS NULL AND ((q.answered_at IS NOT NULL AND q.answered_at < ?1) OR (q.state = 'unresolved' AND q.resolved_at < ?1))))
+		    AND EXISTS (SELECT 1 FROM coder_questions q WHERE q.run_id = r.run_id
+		      AND ((r.cancel_requested = 1 AND COALESCE(r.cancel_requested_at, 0) < ?1)
+		        OR (q.applied_at IS NULL AND ((q.answered_at IS NOT NULL AND q.answered_at < ?1) OR (q.state = 'unresolved' AND q.resolved_at < ?1)))))
 		    -- #1077: a run that released its checkout is not re-woken while something else holds that repo —
 		    -- it could only find it busy again. The holder's end wakes it. "Holds" is the ownership model's
 		    -- (repoOwners: a running unreleased run, a driver, a direct turn), NOT "another session is open" (#1323):
