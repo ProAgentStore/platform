@@ -333,11 +333,15 @@ export async function updateGateState(env: Pick<Env, "DB"> & { RUNNER_GATE_DEFAU
 			return { state: next, enteredOverload: prev.state === "accepting" && next.state === "rejecting" };
 		}
 		const machine = await machineGateRow(env, userId, row.machine_id);
-		const names = await machineNodeNames(env, userId, row.machine_id, node);
-		const sample = (await latestResourceSample(env, userId, names)) ?? own;
 		const prev = parseGateState(machine?.gate_state ?? null);
 		// One sample, one count: a second instance on this machine reporting seconds later is not another clear reading.
-		if (machine?.gate_evaluated_at && sample.sampledAt < machine.gate_evaluated_at + GATE_SAMPLE_SPACING_MS) return { state: prev, enteredOverload: false };
+		// Judged on the sample THIS heartbeat stored, before the machine's other rows are read (#1646): a runner posts one
+		// heartbeat per attached agent every 30s, all carrying the same sample, so all but the first stop here and the two
+		// reads below (which were ~280 rows per heartbeat) are paid once per machine per beat. A fresher sample on another
+		// row is counted by the heartbeat that stored it.
+		if (machine?.gate_evaluated_at && own.sampledAt < machine.gate_evaluated_at + GATE_SAMPLE_SPACING_MS) return { state: prev, enteredOverload: false };
+		const names = await machineNodeNames(env, userId, row.machine_id, node);
+		const sample = (await latestResourceSample(env, userId, names)) ?? own;
 		const thresholds = parseGateThresholds(machine?.gate_thresholds ? safeParse(machine.gate_thresholds) : null, defaults);
 		const next = nextGateState(prev, sample, await activeWorkOn(env, userId, names), thresholds, now);
 		await env.DB.prepare(

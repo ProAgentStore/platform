@@ -16,8 +16,8 @@ import {
 	THRESHOLD_KEYS,
 	thresholdsView,
 } from "./machine-thresholds.js";
-import { currentGateState, DEFAULT_GATE_THRESHOLDS, GATE_SAMPLE_SPACING_MS, type GateState, gateDefaults, nextGateState, parseGateThresholds, updateGateState, worstBreach } from "./runner-admission-gate.js";
-import { activeWorkOn, type RunnerResourceSample } from "./runner-resources.js";
+import { currentGateState, DEFAULT_GATE_THRESHOLDS, GATE_SAMPLE_SPACING_MS, type GateState, gateDefaults, machineNodeNames, nextGateState, parseGateThresholds, updateGateState, worstBreach } from "./runner-admission-gate.js";
+import { activeWorkOn, environmentsForNodes, latestResourceSample, type RunnerResourceSample } from "./runner-resources.js";
 import type { Env } from "../types.js";
 
 const GIB = 1024 ** 3;
@@ -230,6 +230,45 @@ describe("on the real schema: one policy and one gate state per machine, shared 
 		node("coder-a", "tiny-laptop", MACHINE, calm(T0 + 30_000 + GATE_SAMPLE_SPACING_MS + 11_000));
 		await updateGateState(env, "coder-a", "u1", "tiny-laptop", T0 + 61_000);
 		expect((await currentGateState(env, "coder-b", "u1", "tiny-laptop")).state).toBe("accepting");
+	});
+
+	it("one beat is judged once: the other agents' heartbeats carrying the same sample read only their own row and the machine's (#1646)", async () => {
+		// A runner posts one heartbeat per attached agent, every one with the same sample. The first is the evaluation.
+		const beat = (t: number, over: Partial<RunnerResourceSample> = {}) => {
+			for (const inst of ["coder-a", "coder-b", "legacy"]) node(inst, "tiny-laptop", MACHINE, sample({ sampledAt: t, ...over }));
+		};
+		const heartbeat = async (inst: string, t: number) => {
+			d1.issued.length = 0;
+			const result = await updateGateState(env, inst, "u1", "tiny-laptop", t);
+			return { result, statements: d1.issued.length, wrote: d1.issued.some((st) => /^\s*(INSERT|UPDATE)\b/i.test(st.sql)) };
+		};
+		beat(T0, { loadAvg: [9, 9, 9] });
+		const first = await heartbeat("coder-a", T0);
+		expect(first).toMatchObject({ wrote: true, result: { enteredOverload: true, state: { state: "rejecting", metric: "cpu" } } });
+		for (const inst of ["coder-b", "legacy"]) {
+			const rest = await heartbeat(inst, T0 + 1_000);
+			expect(rest).toMatchObject({ statements: 2, wrote: false, result: { enteredOverload: false, state: { state: "rejecting", metric: "cpu" } } });
+		}
+		// The next beat is a new sample, so whichever agent's heartbeat arrives first is judged in full again.
+		beat(T0 + 30_000);
+		expect((await heartbeat("legacy", T0 + 30_000)).result.state).toMatchObject({ state: "rejecting", streak: 1 });
+		expect(await heartbeat("coder-a", T0 + 31_000)).toMatchObject({ statements: 2, wrote: false });
+		beat(T0 + 60_000);
+		expect((await heartbeat("coder-b", T0 + 60_000)).result.state.state).toBe("accepting");
+	});
+
+	it("a machine's hostnames and samples are looked up by index, not by reading every row the owner has (#1646)", async () => {
+		node("coder-a", "tiny-laptop", MACHINE, sample());
+		const plan = async (run: () => Promise<unknown>) => {
+			d1.issued.length = 0;
+			await run();
+			const { sql, binds } = d1.issued[0];
+			return (d1.sqlite.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...(binds as string[])) as { detail: string }[]).map((r) => r.detail).join(" | ");
+		};
+		expect(await plan(() => latestResourceSample(env, "u1", ["tiny-laptop"]))).toMatch(/user_id=\? AND runner_node=\?/);
+		expect(await plan(() => latestResourceSample(env, "u1", ["tiny-laptop", "tiny-laptop.local", "tiny"]))).toMatch(/user_id=\? AND runner_node=\?/);
+		expect(await plan(() => environmentsForNodes(env, "u1", ["tiny-laptop", "a", "b", "c"]))).toMatch(/user_id=\? AND runner_node=\?/);
+		expect(await plan(() => machineNodeNames(env, "u1", MACHINE))).toMatch(/COVERING INDEX \S+ \(user_id=\? AND machine_id=\?\)$/);
 	});
 
 	it("a machine's own thresholds apply to every instance: a stricter CPU line rejects a load the default admits", async () => {
