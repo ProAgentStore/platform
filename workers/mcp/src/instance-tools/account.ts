@@ -313,7 +313,7 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 
 	server.tool(
 		"list_notifications",
-		"Read your notification feed — what your agents and runs have been telling you (a run finished, stopped, or needs you; a deploy; an application). Newest first, each with `id`, `type`, `title`, `body`, `read` (0/1), `created_at`, `url`, `kind` (`alert` = somebody has to act), and `instance_id` when it is about one instance; plus `unreadCount` across the whole feed, not just the page. Account-wide, not per instance. To clear items use mark_notification_read with an `id` from here, or mark_all_notifications_read.",
+		"Read your notification feed — what your agents and runs have been telling you (a run finished, stopped, or needs you; a deploy; an application). Newest first, each with `id`, `type`, `title`, `body`, `read` (0/1), `created_at`, `url`, `kind` (`alert` = somebody has to act), and `instance_id` when it is about one instance; plus `unreadCount` across the whole feed, not just the page (counted up to 1000). Account-wide, not per instance. To clear items use mark_notification_read with an `id` from here, or mark_all_notifications_read.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			unread_only: z.boolean().optional().describe("Only unread notifications."),

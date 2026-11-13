@@ -21,8 +21,9 @@ notificationRoutes.get("/", async (c) => {
 	const hasMore = rows.length > limit;
 	const results = rows.slice(0, limit);
 
+	// #1661: bounded, so the bell poll reads at most 1000 rows however many are unread (the badge shows "9+").
 	const unreadCount = await c.env.DB.prepare(
-		"SELECT COUNT(*) as count FROM notifications WHERE user_id = ?1 AND read = 0",
+		"SELECT COUNT(*) as count FROM (SELECT 1 FROM notifications WHERE user_id = ?1 AND read = 0 LIMIT 1000)",
 	).bind(session.uid).first<{ count: number }>();
 
 	return c.json({ notifications: results, unreadCount: unreadCount?.count || 0, offset, hasMore, nextOffset: hasMore ? offset + limit : null });
