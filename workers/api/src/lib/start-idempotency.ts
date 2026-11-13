@@ -91,10 +91,12 @@ export async function checkStartIdempotency(
 	const githubRepo = input.repo.githubRepo ?? null;
 	const issue = startIssueFor({ issue: input.issue, objective: input.objective, githubRepo });
 	if (issue == null) return null;
+	// `t.instance_id` (#1654): a run's ticket is its own instance's, and naming it lets the planner find the one ticket through
+	// idx_tickets_issue and its runs through idx_agent_loop_runs_ticket, instead of reading every run of the user.
 	const where = (extra: string) =>
 		`SELECT r.run_id, r.finished_at FROM agent_loop_runs r
 		   JOIN tickets t ON t.id = r.ticket_id
-		  WHERE r.user_id = ?1 AND r.instance_id = ?2 AND t.repo_id = ?3 AND t.issue_number = ?4 AND ${extra}`;
+		  WHERE r.user_id = ?1 AND r.instance_id = ?2 AND t.instance_id = ?2 AND t.repo_id = ?3 AND t.issue_number = ?4 AND ${extra}`;
 	const base = [input.userId, input.instanceId, input.repo.id, issue] as const;
 
 	// Before the force branch: a quarantine is the owner's to lift, not a caller's to override.
