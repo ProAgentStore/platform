@@ -74,9 +74,11 @@ export async function admitAutoPickup(env: Pick<Env, "DB">, a: AutoPickupAdmissi
 export async function pendingAutoPickupAdmission(env: Pick<Env, "DB">, instanceId: string, userId: string, now = Date.now()): Promise<{ entryId: string; repoId: string; repo: string; issue: number } | null> {
 	const row = await env.DB.prepare(
 		`SELECT l.entry_id AS entryId, q.repo_id AS repoId, l.repo, l.issue_number AS issue
-		 FROM auto_pickup_log l JOIN instance_objective_queue q ON q.id = l.entry_id
-		 WHERE l.instance_id = ?1 AND l.user_id = ?2 AND l.outcome = 'started' AND l.reserved = 0
-		   AND q.repo_id IS NOT NULL AND l.repo IS NOT NULL AND l.issue_number IS NOT NULL AND q.status = 'pending' AND (q.next_retry_at IS NULL OR q.next_retry_at <= ?3)
+		 -- #1659: from the instance's pending entries (usually none) to their log row, not from every log row
+		 -- of the instance. CROSS JOIN fixes that order; the unary + keeps the planner off the fifo index.
+		 FROM instance_objective_queue q CROSS JOIN auto_pickup_log l ON l.entry_id = q.id
+		 WHERE q.instance_id = ?1 AND q.status = 'pending' AND (q.next_retry_at IS NULL OR q.next_retry_at <= ?3) AND +q.repo_id IS NOT NULL
+		   AND l.instance_id = ?1 AND l.user_id = ?2 AND l.outcome = 'started' AND l.reserved = 0 AND l.repo IS NOT NULL AND l.issue_number IS NOT NULL
 		   AND NOT EXISTS (SELECT 1 FROM instance_objective_queue busy WHERE busy.instance_id = ?1 AND busy.status = 'running')
 		   AND NOT EXISTS (SELECT 1 FROM agent_loop_runs r WHERE r.instance_id = ?1 AND ${keepsCoderBusySql("r", "?4", "?5")})
 		 ORDER BY l.created_at, l.entry_id LIMIT 1`,
