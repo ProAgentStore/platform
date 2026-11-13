@@ -320,10 +320,12 @@ async function inFlightIssues(env: Env, iid: string, repoId: string): Promise<Se
 // (#1417) — neither should spend the issue's objective-failure allowance forever. Also bounded to the last
 // AUTO_FAILURE_LOOKBACK_MS (#1417): an old failure's cause is presumed gone, so it should not keep passing an issue
 // over indefinitely on its own.
+// `r.instance_id = ?1` repeats what the join already implies (a queue entry's run is started on the entry's own
+// instance): it is what lets the read start from this instance's few failed runs (#1644) instead of every run.
 async function failuresByIssue(env: Env, iid: string, repo: string, uid: string, now: number): Promise<Map<number, number>> {
 	const { results } = await env.DB.prepare(
 		`SELECT json_extract(q.metadata, '$.autoPickup.issue') AS issue, COUNT(*) AS n FROM agent_loop_runs r JOIN instance_objective_queue q ON q.id = r.queue_entry_id
-		  WHERE q.instance_id = ?1 AND json_extract(q.metadata, '$.autoPickup.repo') = ?2 AND r.status IN ('failed', 'needs_human')
+		  WHERE q.instance_id = ?1 AND r.instance_id = ?1 AND json_extract(q.metadata, '$.autoPickup.repo') = ?2 AND r.status IN ('failed', 'needs_human')
 		    AND COALESCE(r.finished_at, ?4) > ?5
 		    AND COALESCE(r.stop_reason, '') NOT IN (${stopReasonsSql([...PROVIDER_ACCOUNT_STOP_REASONS, ...INFRA_STOP_REASONS])})
 		    AND r.run_id NOT IN (

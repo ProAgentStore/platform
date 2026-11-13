@@ -210,6 +210,17 @@ describe("the wake, on the real schema (#1233)", () => {
 		expect(await runAutoPickup(env, "coder", "u1", deps())).toMatchObject({ started: true, issue: 9 });
 	});
 
+	/** #1644: this read ran ~20,500 rows a call in production — a scan of every run, then every error row of the owner. */
+	it("the failure tally reads this instance's failed runs and the coding-session errors, not whole tables", async () => {
+		await runAutoPickup(env, "coder", "u1", deps());
+		const tally = d1.issued.find((s) => s.sql.includes("FROM agent_loop_runs r JOIN instance_objective_queue q"));
+		if (!tally) throw new Error("the wake did not issue the failure tally");
+		const plan = (d1.sqlite.prepare(`EXPLAIN QUERY PLAN ${tally.sql}`).all() as Array<{ detail: string }>).map((r) => r.detail);
+		expect(plan).toContain("SEARCH r USING INDEX idx_agent_loop_runs_queue_failed (instance_id=?)");
+		expect(plan).toContain("SEARCH e USING INDEX idx_error_log_coding_session (user_id=?)");
+		expect(plan.filter((d) => d.startsWith("SCAN"))).toEqual([]);
+	});
+
 	it("stops at the daily cap", async () => {
 		await setAutoPickup(env, "coder", "u1", { maxPerDay: 1 });
 		await runAutoPickup(env, "coder", "u1", deps());
