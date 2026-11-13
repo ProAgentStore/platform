@@ -131,11 +131,16 @@ export async function runDueParkWakes(env: Pick<Env, "DB" | "CODING_SESSION">, n
 		    -- it could only find it busy again. The holder's end wakes it. "Holds" is the ownership model's
 		    -- (repoOwners: a running unreleased run, a driver, a direct turn), NOT "another session is open" (#1323):
 		    -- an idle active session with no run never ends, so it never woke anyone and deadlocked the answer.
-		    AND NOT (r.checkout_released_at IS NOT NULL AND r.cancel_requested = 0 AND EXISTS (
-		          SELECT 1 FROM coding_sessions mine JOIN coding_sessions other ON other.repo_id = mine.repo_id AND other.instance_id = mine.instance_id AND other.id <> mine.id
-		           WHERE mine.id = r.session_id
-		             AND (other.driver_id IS NOT NULL OR other.direct_turn_id IS NOT NULL
-		                  OR EXISTS (SELECT 1 FROM agent_loop_runs o WHERE o.session_id = other.id AND ${ownsCheckoutSql("o", "?3")}))))
+		    -- #1641: two EXISTS, not one over every session of the repo — a repo has hundreds of ended sessions
+		    -- and this read them all each minute. A driver or direct turn is found through
+		    -- idx_coding_sessions_held; a holding run through the instance's running runs
+		    -- (idx_agent_loop_runs_open_instance — a run is always in its session's instance).
+		    AND NOT (r.checkout_released_at IS NOT NULL AND r.cancel_requested = 0 AND (
+		          EXISTS (SELECT 1 FROM coding_sessions mine JOIN coding_sessions other ON other.repo_id = mine.repo_id AND other.instance_id = mine.instance_id AND other.id <> mine.id
+		                   WHERE mine.id = r.session_id AND (other.driver_id IS NOT NULL OR other.direct_turn_id IS NOT NULL))
+		          OR EXISTS (SELECT 1 FROM coding_sessions mine JOIN agent_loop_runs o ON o.instance_id = mine.instance_id AND o.status = 'running' JOIN coding_sessions other ON other.id = o.session_id
+		                   WHERE mine.id = r.session_id AND other.repo_id = mine.repo_id AND other.instance_id = mine.instance_id AND other.id <> mine.id
+		                     AND ${ownsCheckoutSql("o", "?3")})))
 		    -- #1242: a run resumes only on the machine it parked on. While that machine is quiet, a wake could
 		    -- only find it away again (each costing Workflow steps); its registration wakes it instead.
 		    AND NOT (r.parked_machine_id IS NOT NULL AND r.cancel_requested = 0 AND NOT EXISTS (
