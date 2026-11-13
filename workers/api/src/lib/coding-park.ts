@@ -133,8 +133,8 @@ export async function runDueParkWakes(env: Pick<Env, "DB" | "CODING_SESSION">, n
 		    -- an idle active session with no run never ends, so it never woke anyone and deadlocked the answer.
 		    -- #1641: two EXISTS, not one over every session of the repo — a repo has hundreds of ended sessions
 		    -- and this read them all each minute. A driver or direct turn is found through
-		    -- idx_coding_sessions_held; a holding run through the instance's running runs
-		    -- (idx_agent_loop_runs_open_instance — a run is always in its session's instance).
+		    -- idx_coding_sessions_held; a holding run through the running runs of the instance
+		    -- (idx_agent_loop_runs_open_instance — a run is always in the instance of its session).
 		    AND NOT (r.checkout_released_at IS NOT NULL AND r.cancel_requested = 0 AND (
 		          EXISTS (SELECT 1 FROM coding_sessions mine JOIN coding_sessions other ON other.repo_id = mine.repo_id AND other.instance_id = mine.instance_id AND other.id <> mine.id
 		                   WHERE mine.id = r.session_id AND (other.driver_id IS NOT NULL OR other.direct_turn_id IS NOT NULL))

@@ -74,7 +74,7 @@ export async function admitAutoPickup(env: Pick<Env, "DB">, a: AutoPickupAdmissi
 export async function pendingAutoPickupAdmission(env: Pick<Env, "DB">, instanceId: string, userId: string, now = Date.now()): Promise<{ entryId: string; repoId: string; repo: string; issue: number } | null> {
 	const row = await env.DB.prepare(
 		`SELECT l.entry_id AS entryId, q.repo_id AS repoId, l.repo, l.issue_number AS issue
-		 -- #1659: from the instance's pending entries (usually none) to their log row, not from every log row
+		 -- #1659: from the pending entries of the instance (usually none) to their log row, not from every log row
 		 -- of the instance. CROSS JOIN fixes that order; the unary + keeps the planner off the fifo index.
 		 FROM instance_objective_queue q CROSS JOIN auto_pickup_log l ON l.entry_id = q.id
 		 WHERE q.instance_id = ?1 AND q.status = 'pending' AND (q.next_retry_at IS NULL OR q.next_retry_at <= ?3) AND +q.repo_id IS NOT NULL
