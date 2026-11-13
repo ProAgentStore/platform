@@ -186,12 +186,14 @@ export async function notifyRecoveredMachines(env: Env, now = Date.now()): Promi
 		alerts =
 			(
 				await env.DB.prepare(
-					`SELECT a.user_id, a.machine_key, a.last_seen_at, a.notified_at,
-					        (SELECT MAX(n.last_seen_at) FROM instance_runtime_nodes n WHERE n.user_id = a.user_id AND COALESCE(NULLIF(n.machine_id, ''), n.runner_node) = a.machine_key) AS fresh,
-					        (SELECT n.machine_id FROM instance_runtime_nodes n WHERE n.user_id = a.user_id AND COALESCE(NULLIF(n.machine_id, ''), n.runner_node) = a.machine_key ORDER BY n.last_seen_at DESC LIMIT 1) AS machine_id,
-					        (SELECT n.runner_node FROM instance_runtime_nodes n WHERE n.user_id = a.user_id AND COALESCE(NULLIF(n.machine_id, ''), n.runner_node) = a.machine_key ORDER BY n.last_seen_at DESC LIMIT 1) AS runner_node
+					// #1660: one pass over the owner's nodes per alert, not three. With MAX(), SQLite takes the bare
+					// machine_id / runner_node from the row that holds the maximum, i.e. the freshest one. An alert
+					// with no node rows drops out here; it had no `fresh` and was skipped below anyway.
+					`SELECT a.user_id, a.machine_key, a.last_seen_at, a.notified_at, MAX(n.last_seen_at) AS fresh, n.machine_id, n.runner_node
 					   FROM machine_silence_alerts a
+					   JOIN instance_runtime_nodes n ON n.user_id = a.user_id AND COALESCE(NULLIF(n.machine_id, ''), n.runner_node) = a.machine_key
 					  WHERE a.resolved_at IS NULL AND a.notified_at >= ?2
+					  GROUP BY a.user_id, a.machine_key
 					  LIMIT ?1`,
 				)
 					.bind(SWEEP_LIMIT, now - MACHINE_SILENCE_LOOKBACK_MS)
