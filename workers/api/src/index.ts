@@ -512,7 +512,11 @@ export default {
 		// of the table's bytes; without a cap one long idle session produces ~4.8 MB/hour forever.
 		// The dedup fix (same PR) stopped NEW excess rows; this sweep cleans up the historical ones.
 		// A missed tick is harmless — the table just stays a bit bigger — but it is recorded (#1119).
-		ctx.waitUntil(sweepTerminalSnapshots(env).catch((err) => logUnhandled(env, err, { path: "scheduled:terminal-snapshots", method: "CRON" })));
+		// Hourly (#1642): finding over-cap sessions counts every terminal row, which every minute was
+		// ~18% of the database's rows read. Each run drains the sessions it visits back to the cap.
+		if (new Date(_event.scheduledTime).getUTCMinutes() === 0) {
+			ctx.waitUntil(sweepTerminalSnapshots(env).catch((err) => logUnhandled(env, err, { path: "scheduled:terminal-snapshots", method: "CRON" })));
+		}
 		// Daily spend alerts (#1040): an owner's 24h charged spend reaching the alert they set. Bounded,
 		// at most one push per account per day, and it never stops anything.
 		ctx.waitUntil(runSpendAlerts(env).catch((err) => logUnhandled(env, err, { path: "scheduled:spend-alerts", method: "CRON" })));

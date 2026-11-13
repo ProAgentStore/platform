@@ -734,25 +734,21 @@ export async function pruneTerminalSnapshots(
 	return res.meta?.changes ?? 0;
 }
 
-/**
- * How many sessions with over-cap `terminal` rows a single cron tick inspects.
- * Bounded so one tick can never own the whole backlog.
- */
-const TERMINAL_SWEEP_SESSIONS = 20;
+/** Over-cap sessions one sweep prunes, worst first — sized for an hour's worth, since the sweep is hourly (#1642). */
+const TERMINAL_SWEEP_SESSIONS = 100;
+/** Prune batches per session per sweep: 15 x 200 = 3,000 rows, above the 2,400 one session can write in an hour (one per 1.5s poll). */
+const TERMINAL_SWEEP_PASSES = 15;
 
 /**
- * Sweep sessions with more than {@link TERMINAL_KEEP_PER_SESSION} terminal rows,
- * pruning each one in a bounded pass. Returns total rows deleted.
+ * Sweep sessions with more than {@link TERMINAL_KEEP_PER_SESSION} terminal rows, pruning each one
+ * back to the cap in bounded batches. Returns total rows deleted. Throws on failure, so the cron
+ * records it (#1119) — a failed prune is a capacity nuisance, not data loss.
  *
- * Wired into the per-minute cron alongside the other independent sweeps. A failed prune is a
- * capacity nuisance, not data loss — but it throws, so the cron records it (#1119).
+ * The cron runs it once an HOUR (#1642): finding the over-cap sessions scans every `terminal` entry
+ * of `idx_coding_timeline_session_type` whatever the LIMIT (~51K rows read per call in production,
+ * 2026-11-12), and nothing prunes on the write path. So a visit drains a session to the cap.
  */
 export async function sweepTerminalSnapshots(env: Env): Promise<number> {
-	// Throws on failure: the cron records it through `logUnhandled` like every other sweep (#1119).
-	// It used to swallow its own errors, so a broken sweep left no record anywhere.
-	// Find sessions that have exceeded the cap. Ordered by count DESC so the worst
-	// offenders are visited first. `idx_coding_timeline_session_type` covers the
-	// GROUP BY (session_id, type) efficiently.
 	const { results } = await env.DB.prepare(
 		`SELECT session_id FROM coding_timeline
 		  WHERE type = 'terminal'
@@ -765,7 +761,11 @@ export async function sweepTerminalSnapshots(env: Env): Promise<number> {
 		.all<{ session_id: string }>();
 	let deleted = 0;
 	for (const { session_id: sessionId } of results ?? []) {
-		deleted += await pruneTerminalSnapshots(env, sessionId);
+		for (let pass = 0; pass < TERMINAL_SWEEP_PASSES; pass++) {
+			const changes = await pruneTerminalSnapshots(env, sessionId);
+			deleted += changes;
+			if (changes < TERMINAL_PRUNE_BATCH) break;
+		}
 	}
 	return deleted;
 }

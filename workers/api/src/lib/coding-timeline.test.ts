@@ -394,6 +394,33 @@ describe("sweepTerminalSnapshots — finds over-cap sessions and prunes each (#4
 		};
 		await expect(sweepTerminalSnapshots(env)).rejects.toThrow("database is locked");
 	});
+
+	// #1642: the sweep is hourly, so one visit has to bring a session all the way back to the cap —
+	// a single 200-row batch per visit could fall behind a session that writes more than that an hour.
+	it("drains an over-cap session to the cap in one sweep, keeping the newest rows and everything that is not a terminal row", async () => {
+		const db = realSchemaD1();
+		seedTenant(db, { userId: "u1", instanceIds: ["i1"] });
+		for (const id of ["over", "under"]) {
+			db.exec(`INSERT INTO coding_repos (id, instance_id, user_id, name) VALUES ('r-${id}', 'i1', 'u1', '${id}')`);
+			db.exec(`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, status, tmux_session) VALUES ('${id}', 'i1', 'r-${id}', 'u1', 'active', 'claude:${id}')`);
+		}
+		const insert = db.sqlite.prepare("INSERT INTO coding_timeline (session_id, instance_id, user_id, type, content) VALUES (?, 'i1', 'u1', ?, ?)");
+		const over = TERMINAL_KEEP_PER_SESSION + 450; // more than two prune batches past the cap
+		insert.run("over", "chat_user", "keep me");
+		for (let i = 0; i < over; i++) insert.run("over", "terminal", `pane ${i}`);
+		for (let i = 0; i < 10; i++) insert.run("under", "terminal", `pane ${i}`);
+
+		expect(await sweepTerminalSnapshots({ DB: db.DB } as unknown as Env)).toBe(450);
+
+		const left = db.sqlite.prepare("SELECT content FROM coding_timeline WHERE session_id = 'over' AND type = 'terminal' ORDER BY seq").all() as Array<{ content: string }>;
+		expect(left).toHaveLength(TERMINAL_KEEP_PER_SESSION);
+		expect(left[0].content).toBe("pane 450");
+		expect(left.at(-1)?.content).toBe(`pane ${over - 1}`);
+		const count = (where: string) => (db.sqlite.prepare(`SELECT COUNT(*) AS n FROM coding_timeline WHERE ${where}`).get() as { n: number }).n;
+		expect(count("session_id = 'over' AND type = 'chat_user'")).toBe(1);
+		expect(count("session_id = 'under'")).toBe(10);
+		db.close();
+	});
 });
 
 describe("loadTerminalSnapshots — `after` is the cursor that makes a reload a delta (#550)", () => {

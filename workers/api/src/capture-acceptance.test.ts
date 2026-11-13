@@ -91,7 +91,7 @@ describe("the cron entrypoint (index.ts default.scheduled)", () => {
 	it("a failing terminal-snapshot sweep is recorded under its cron path and build — it used to vanish (#1119)", async () => {
 		failWhen = (sql) => (sql.includes("FROM coding_timeline") && sql.includes("GROUP BY session_id") ? "D1_ERROR: no such table: coding_timeline_x" : null);
 		const { pending, ctx: c } = ctx();
-		await worker.scheduled({ scheduledTime: Date.parse("2026-10-16T12:01:00Z"), cron: "* * * * *" } as ScheduledEvent, env, c);
+		await worker.scheduled({ scheduledTime: Date.parse("2026-10-16T12:00:00Z"), cron: "* * * * *" } as ScheduledEvent, env, c);
 		// Every sweep is its own failure domain: the tick settles even though one of them failed.
 		const settled = await Promise.allSettled(pending);
 		expect(settled.every((s) => s.status === "fulfilled")).toBe(true);
@@ -102,11 +102,28 @@ describe("the cron entrypoint (index.ts default.scheduled)", () => {
 	it("a TRANSIENT sweep failure (D1 'Network connection lost') stays warn, under `transient` — logUnhandled's own rule (#1119)", async () => {
 		failWhen = (sql) => (sql.includes("FROM coding_timeline") && sql.includes("GROUP BY session_id") ? "D1_ERROR: Network connection lost." : null);
 		const { pending, ctx: c } = ctx();
-		await worker.scheduled({ scheduledTime: Date.parse("2026-10-16T12:02:00Z"), cron: "* * * * *" } as ScheduledEvent, env, c);
+		await worker.scheduled({ scheduledTime: Date.parse("2026-10-16T13:00:00Z"), cron: "* * * * *" } as ScheduledEvent, env, c);
 		expect((await Promise.allSettled(pending)).every((s) => s.status === "fulfilled")).toBe(true);
 		const transient = rows("transient").filter((r) => JSON.parse(String(r.context)).path === "scheduled:terminal-snapshots");
 		expect(transient).toEqual([expect.objectContaining({ level: "warn", status: 503, build: "acceptance-build" })]);
 		expect(rows("unhandled").filter((r) => JSON.parse(String(r.context)).path === "scheduled:terminal-snapshots")).toEqual([]);
+	});
+	it("the terminal-snapshot sweep runs on the hour only — the ticks in between never issue its table-wide count (#1642)", async () => {
+		const counts: string[] = [];
+		failWhen = (sql) => {
+			if (sql.includes("FROM coding_timeline") && sql.includes("GROUP BY session_id")) counts.push(sql);
+			return null;
+		};
+		for (const at of ["12:01", "12:30", "12:59"]) {
+			const { pending, ctx: c } = ctx();
+			await worker.scheduled({ scheduledTime: Date.parse(`2026-10-16T${at}:00Z`), cron: "* * * * *" } as ScheduledEvent, env, c);
+			await Promise.allSettled(pending);
+		}
+		expect(counts).toEqual([]);
+		const { pending, ctx: c } = ctx();
+		await worker.scheduled({ scheduledTime: Date.parse("2026-10-16T13:00:00Z"), cron: "* * * * *" } as ScheduledEvent, env, c);
+		await Promise.allSettled(pending);
+		expect(counts).toHaveLength(1);
 	});
 });
 
