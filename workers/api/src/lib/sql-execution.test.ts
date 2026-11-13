@@ -118,6 +118,28 @@ describe("stats-rollup issues statements D1 can parse (#423)", () => {
 		expect((await activeInstancesForDay(env, "2026-08-05")).map((r) => r.instance_id)).toEqual([]);
 	});
 
+	it("reports the instance's OWNER, whoever the activity row was recorded under", async () => {
+		// The rollup reads the instance's config as (instance, user), and only the owner's pairing
+		// resolves. A candidate carrying any other user would be picked every tick and never written.
+		seedTenant(d1, { userId: "user-2", instanceIds: [] });
+		d1.exec(`
+			INSERT INTO ai_usage (id, user_id, instance_id, provider, model, kind, created_at)
+			 VALUES ('u1', 'user-2', 'inst-1', 'anthropic', 'claude', 'chat', '${DAY} 01:00:00');
+		`);
+		expect(await activeInstancesForDay(env, DAY)).toEqual([{ instance_id: "inst-1", user_id: "user-1" }]);
+	});
+
+	it("never scans an activity source — each one is reached by an index seek per instance (#1643, #1645)", () => {
+		// The cost regression: these statements run every minute, and a source read without a usable
+		// index walks the whole table each time (~44K rows per call on ai_usage in production). The
+		// only table a statement may walk is the small one it starts from.
+		for (const sql of activitySourceStatements()) {
+			const plan = d1.sqlite.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as { detail: string }[];
+			const scans = plan.map((p) => p.detail).filter((d) => d.startsWith("SCAN"));
+			expect(scans, sql).toEqual(["SCAN i"]);
+		}
+	});
+
 	it("the day bounds really exclude the neighbouring days, in both time representations", async () => {
 		// `ai_usage` compares TEXT and `agent_events` epoch-ms. Binding one to the other is silent:
 		// the source simply reports no activity, forever.

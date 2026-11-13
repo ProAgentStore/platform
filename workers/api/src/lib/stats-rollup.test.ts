@@ -45,6 +45,9 @@ function fakeStatsDb() {
 	return { env, rows };
 }
 
+/** The activity source a candidate statement probes — the table aliased `s`. */
+const sourceTable = (sql: string) => /FROM (\w+) s\b/.exec(sql)?.[1] ?? "";
+
 /**
  * A D1 stub for the candidate read that answers PER TABLE and records what it was asked.
  *
@@ -64,7 +67,7 @@ function fakeActivityDb(byTable: Record<string, Array<{ instance_id: string; use
 				bind: (...binds: unknown[]) => ({
 					all: async () => {
 						asked.push({ sql, binds });
-						const table = /FROM (\w+)/.exec(sql)?.[1] ?? "";
+						const table = sourceTable(sql);
 						const limit = Number(binds[3]) || 50;
 						return { results: (byTable[table] ?? []).slice(0, limit) };
 					},
@@ -96,18 +99,6 @@ describe("activeInstancesForDay", () => {
 		}
 	});
 
-	it("every source is owner-scoped, day-bounded and skips days already rolled up", () => {
-		// Dropping any one of these is silent: an unscoped read is cross-tenant, an unbounded one
-		// rolls up the wrong day, and a missing NOT EXISTS re-does work every tick forever.
-		for (const sql of activitySourceStatements()) {
-			expect(sql, sql).toContain("user_id IS NOT NULL");
-			expect(sql, sql).toContain("SELECT DISTINCT instance_id, user_id");
-			expect(sql, sql).toMatch(/>= \?1 AND \w+ < \?2/);
-			expect(sql, sql).toContain("NOT EXISTS");
-			expect(sql, sql).toContain("d.day = ?3");
-		}
-	});
-
 	it("merges the sources into a SET — an instance seen in three of them is one candidate", () => {
 		const both = { instance_id: "inst-1", user_id: "user-1" };
 		const { env } = fakeActivityDb({
@@ -135,7 +126,7 @@ describe("activeInstancesForDay", () => {
 		// silently never in range, so a source would report no activity forever rather than fail.
 		const { env, asked } = fakeActivityDb({});
 		return activeInstancesForDay(env, DAY).then(() => {
-			const byTable = new Map(asked.map((a) => [/FROM (\w+)/.exec(a.sql)?.[1] ?? "", a.binds]));
+			const byTable = new Map(asked.map((a) => [sourceTable(a.sql), a.binds]));
 			expect(byTable.get("ai_usage")?.[0]).toBe("2026-08-06 00:00:00");
 			expect(byTable.get("ai_usage")?.[1]).toBe("2026-08-07 00:00:00");
 			expect(byTable.get("agent_events")?.[0]).toBe(Date.parse("2026-08-06T00:00:00.000Z"));

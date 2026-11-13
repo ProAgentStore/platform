@@ -20,8 +20,9 @@
  *
  * The sweep writes YESTERDAY's rows. A completed UTC day is immutable, so insert-once on the
  * primary key is exactly right and there is no partial-day row to be misread as a collapse. The
- * candidate query skips any instance that already has a row for the day, which is what bounds the
- * per-minute cost to "active instances not yet rolled up" rather than "every instance".
+ * candidate query skips any instance that already has a row for the day, so the work per tick is
+ * "active instances not yet rolled up". The READ per tick is one pass over `agent_instances` with
+ * index seeks into the sources (#1643) — never a scan of a source table.
  */
 import { readInstanceConfigPair } from "./instance-config.js";
 import { logUnhandled } from "./on-error.js";
@@ -70,10 +71,6 @@ interface ActiveRow {
  * Six single-table reads have no such ceiling, so a seventh source is a line in this array rather
  * than an outage. Trimming to five arms was rejected for exactly that reason: it puts the next
  * person one commit from the same failure, and the failure is silent.
- *
- * `SELECT DISTINCT` is what `UNION` used to provide. Without it a busy day's `ai_usage` returns a
- * row per model call rather than a row per instance, and the merge below would run over thousands
- * of duplicates instead of a handful of ids.
  */
 interface ActivitySource {
 	/** The table. A frozen constant — never a runtime value; see the guard in `sql.test.ts`. */
@@ -86,21 +83,15 @@ interface ActivitySource {
 	 * milliseconds. See the header of `stats-sources.ts`.
 	 */
 	readonly time: "text" | "ms";
-	/**
-	 * `instance_id` is nullable on this table — some call paths know only the agent. Without the
-	 * explicit IS NOT NULL a NULL group is selected and every card is then computed against an
-	 * instance id of "null".
-	 */
-	readonly nullableInstance?: boolean;
 }
 
 /** The tables an "active instance" can be observed in. All six existed already; none was added for
  *  the rollup, which is why the shapes differ. */
 const ACTIVITY_SOURCES: readonly ActivitySource[] = [
-	{ table: "ai_usage", column: "created_at", time: "text", nullableInstance: true },
+	{ table: "ai_usage", column: "created_at", time: "text" },
 	{ table: "agent_trigger_events", column: "created_at", time: "text" },
 	{ table: "instance_runtime_tasks", column: "updated_at", time: "text" },
-	{ table: "agent_events", column: "ts", time: "ms", nullableInstance: true },
+	{ table: "agent_events", column: "ts", time: "ms" },
 	{ table: "agent_loop_runs", column: "started_at", time: "ms" },
 	{ table: "pipeline_runs", column: "started_at", time: "ms" },
 ];
@@ -109,17 +100,26 @@ const ACTIVITY_SOURCES: readonly ActivitySource[] = [
  * One source's candidate read. `?1`/`?2` are the day bounds in that source's own representation,
  * `?3` the day, `?4` the row cap.
  *
- * Exported so a test can assert the generated SQL against every source without a live D1 — the
- * previous shape shipped with six branches nobody had executed, and a wrong column name would have
- * been just as invisible as the compound-SELECT ceiling was.
+ * ## Why it starts from `agent_instances` (#1643, #1645)
+ *
+ * It used to read `SELECT DISTINCT instance_id, user_id FROM <source> WHERE <day bounds> AND NOT
+ * EXISTS (rollup row)`. No source has an index that leads with its time column, so every one of
+ * those was a walk of the WHOLE table on every cron tick — ~44K rows per call on `ai_usage`, a third
+ * of all rows the database read. Every source does have an `(instance_id, <time>)` index, and there
+ * are few instances, so asking each instance "did you do anything that day?" is one seek per
+ * instance and reads nothing else.
+ *
+ * The owner comes from the instance row. That is the only `user_id` the rollup can use anyway:
+ * `readInstanceConfigPair` returns nothing for any other pairing.
+ *
+ * Exported so a test can run the generated SQL for every source against the real schema — the
+ * first shape shipped with six branches nobody had executed.
  */
 export function activitySourceSql(s: ActivitySource): string {
-	const notNull = s.nullableInstance ? " AND instance_id IS NOT NULL" : "";
-	return `SELECT DISTINCT instance_id, user_id FROM ${s.table}
-	         WHERE user_id IS NOT NULL${notNull}
-	           AND ${s.column} >= ?1 AND ${s.column} < ?2
-	           AND NOT EXISTS (SELECT 1 FROM agent_stats_daily d
-	                            WHERE d.instance_id = ${s.table}.instance_id AND d.day = ?3)
+	return `SELECT i.id AS instance_id, i.user_id AS user_id FROM agent_instances i
+	         WHERE NOT EXISTS (SELECT 1 FROM agent_stats_daily d WHERE d.instance_id = i.id AND d.day = ?3)
+	           AND EXISTS (SELECT 1 FROM ${s.table} s
+	                        WHERE s.instance_id = i.id AND s.${s.column} >= ?1 AND s.${s.column} < ?2)
 	         LIMIT ?4`;
 }
 
