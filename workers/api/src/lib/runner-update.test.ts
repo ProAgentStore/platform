@@ -56,7 +56,8 @@ const { updateRunnerNode } = await import("./runner-update.js");
 const CODER = "22ce95b9"; // Grass Karma coder
 const OTHER = "coder-2";
 const THIRD = "coder-3";
-const rows = [CODER, OTHER, THIRD].map((instanceId) => ({ node: "Macmini", machineId: "m-mini", instanceId, lastSeenAt: "2026-09-26 10:00:00" }));
+// The columns `ownerRuntimeNodes` selects (#1646) — the registration readers map them, not SQL aliases.
+const rows = [CODER, OTHER, THIRD].map((instance_id) => ({ instance_id, runner_node: "Macmini", machine_id: "m-mini", runner_version: null, last_seen_at: "2026-09-26 10:00:00", updated_at: "2026-09-26 10:00:00" }));
 const env = {
 	DB: {
 		prepare: (sql: string) => ({

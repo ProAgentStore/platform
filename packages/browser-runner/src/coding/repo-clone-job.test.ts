@@ -144,7 +144,8 @@ describe("cloneIntoOwnFolder — real git, the owner-folder guards (#858)", () =
 		const parent = join(tmp, "long-path-".repeat(7));
 		mkdirSync(parent);
 		const dir = join(parent, "missing");
-		const source = join(parent, `${"no-such-".repeat(20)}.git`);
+		// Long enough that Git's reason passes 300 characters under a short temp root too (Linux `/tmp`), not only macOS's.
+		const source = join(parent, `${"no-such-".repeat(28)}.git`);
 		let gitReason = "";
 		try {
 			execFileSync("git", ["clone", source, dir], { encoding: "utf8", stdio: "pipe" });
