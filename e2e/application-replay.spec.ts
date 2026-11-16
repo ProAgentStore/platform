@@ -192,6 +192,7 @@ for (const handoff of [undefined, "wrong_run", "wrong_app", "ended"] as const) {
 		let frameRequests = 0;
 		page.on("request", (request) => { if (request.url().includes("/handoff/frame")) frameRequests++; });
 		const replay = await mockReplay(page, { handoff });
+		await expect(replay.getByRole("slider")).toHaveAttribute("max", "3");
 		await replay.getByRole("slider").fill("3");
 		await expect(replay).toContainText("Live takeover is unavailable for this run");
 		await expect(replay.getByRole("img")).toHaveCount(0);
@@ -204,6 +205,7 @@ test("entering Live never pauses the agent; an explicit click requests settled c
 	const writes: unknown[] = [];
 	page.on("request", (request) => { if (request.method() === "POST" && request.url().endsWith("/handoff")) writes.push(request.postDataJSON()); });
 	const replay = await mockReplay(page, { running: true });
+	await expect(replay.getByRole("slider")).toHaveAttribute("max", "3");
 	await replay.getByRole("slider").fill("3");
 	await expect(replay.getByRole("button", { name: "Pause and take control", exact: true })).toBeVisible();
 	expect(writes).toEqual([]);
@@ -215,6 +217,7 @@ test("entering Live never pauses the agent; an explicit click requests settled c
 
 test("an unsettled or unsupported pause never enables live input", async ({ page }) => {
 	const replay = await mockReplay(page, { running: true, pauseRefused: true });
+	await expect(replay.getByRole("slider")).toHaveAttribute("max", "3");
 	await replay.getByRole("slider").fill("3");
 	await replay.getByRole("button", { name: "Pause and take control", exact: true }).click();
 	await expect(replay.getByRole("alert")).toContainText("still settling");
