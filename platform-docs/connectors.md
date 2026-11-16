@@ -79,9 +79,18 @@ Intents). Until then the call fails with a message saying exactly that. Like eve
 **Replying to a message (#1273).** `discord_send_message` takes an optional `replyToMessageId` — a message id
 (a string of 16-22 digits, as `discord_read_messages` returns it) from the *same* granted channel. The message is then posted
 as a threaded reply (Discord `message_reference`) instead of a plain channel message, under the same per-channel grant and
-write consent as any send. A reply never pings: every mention stays off, and so does the reply's own ping to the author
-(`replied_user: false`). If the target message is gone or is not visible to the bot in that channel, the send fails with
+write consent as any send. If the target message is gone or is not visible to the bot in that channel, the send fails with
 Discord's reason rather than falling back to a plain message. The result carries `repliedTo`.
+
+**Pinging people (#1663).** A send pings nobody by default: `allowed_mentions.parse` is always `[]`, so `@everyone`, `@here`
+and any mention the agent did not name never notify, whatever the text says. To notify specific people, tag them in `content`
+(`<@userId>` or `<@!userId>` for a user, `<@&roleId>` for a role) **and** list the ids in `mentionUserIds` / `mentionRoleIds`
+(sent as `allowed_mentions.users` / `.roles`). Ids must be strings of 17-20 digits, are deduplicated, and may number at most 100
+per list; anything else is refused before the bot token is read and nothing is sent. An id that is listed but not tagged in
+`content` is ignored, and the result names it in `ignoredMentionUserIds` / `ignoredMentionRoleIds`; the ids that did take
+effect come back as `mentionedUserIds` / `mentionedRoleIds`. A reply pings its author (`replied_user`) only when the author's
+user id is in `mentionUserIds` (the bot looks the author up; if that fails the ping stays off). Release notes (#1216) are
+unchanged and never ping.
 
 The same lifecycle is available over MCP (#1132), owner-scoped and never returning the token:
 `connect_discord_bot` (verified with Discord before it is stored; a token for a different bot revokes

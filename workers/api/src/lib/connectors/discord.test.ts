@@ -108,6 +108,138 @@ describe("Discord bot connector", () => {
 		expect(result).toMatchObject({ success: false, content: expect.stringMatching(/no such server, channel or message.*Unknown message/) });
 	});
 
+	describe("discord_send_message mention allowlist (#1663)", () => {
+		const U1 = "123456789012345678";
+		const U2 = "223456789012345678";
+		const ROLE = "987654321098765432";
+		const REPLY = "345678901234567890";
+		const send = (input: Record<string, unknown>) => tool("discord_send_message").handler(ctx(), { grantId: "grant-1", ...input });
+		const posted = (fetch: { mock: { calls: unknown[][] } }) => {
+			const post = fetch.mock.calls.find((c) => (c[1] as RequestInit | undefined)?.method === "POST");
+			return JSON.parse(String((post?.[1] as RequestInit).body)) as { content: string; allowed_mentions: Record<string, unknown> };
+		};
+		const stub = (authorId = U1) => {
+			const fetch = vi.fn<typeof globalThis.fetch>(async (_url, init) =>
+				init?.method === "POST" ? new Response(JSON.stringify({ id: "234567890123456789" }), { status: 200 }) : new Response(JSON.stringify({ author: { id: authorId } }), { status: 200 }),
+			);
+			vi.stubGlobal("fetch", fetch);
+			return fetch;
+		};
+
+		it("a default send names nobody: parse [] and no users or roles", async () => {
+			const fetch = stub();
+			await send({ content: `hi <@${U1}> @everyone @here` });
+			expect(posted(fetch).allowed_mentions).toEqual({ parse: [] });
+		});
+
+		it("forwards a listed and tagged user", async () => {
+			const fetch = stub();
+			const result = await send({ content: `hello <@${U1}>`, mentionUserIds: [U1] });
+			expect(posted(fetch)).toEqual({ content: `hello <@${U1}>`, allowed_mentions: { parse: [], users: [U1] } });
+			expect(JSON.parse((result as { content: string }).content)).toMatchObject({ sent: true, mentionedUserIds: [U1] });
+		});
+
+		it("accepts the <@!id> nickname form for users", async () => {
+			const fetch = stub();
+			await send({ content: `hello <@!${U1}>`, mentionUserIds: [U1] });
+			expect(posted(fetch).allowed_mentions).toEqual({ parse: [], users: [U1] });
+		});
+
+		it("forwards a listed and tagged role", async () => {
+			const fetch = stub();
+			await send({ content: `hey <@&${ROLE}>`, mentionRoleIds: [ROLE] });
+			expect(posted(fetch).allowed_mentions).toEqual({ parse: [], roles: [ROLE] });
+		});
+
+		it("forwards users and roles together", async () => {
+			const fetch = stub();
+			await send({ content: `<@${U1}> and <@&${ROLE}>`, mentionUserIds: [U1], mentionRoleIds: [ROLE] });
+			expect(posted(fetch).allowed_mentions).toEqual({ parse: [], users: [U1], roles: [ROLE] });
+		});
+
+		it("drops a listed id that content does not tag, and reports it", async () => {
+			const fetch = stub();
+			const result = await send({ content: "hello world", mentionUserIds: [U1], mentionRoleIds: [ROLE] });
+			expect(posted(fetch).allowed_mentions).toEqual({ parse: [] });
+			expect(JSON.parse((result as { content: string }).content)).toMatchObject({ sent: true, ignoredMentionUserIds: [U1], ignoredMentionRoleIds: [ROLE] });
+		});
+
+		it("a user tag does not enable a role of the same digits, nor the reverse", async () => {
+			const fetch = stub();
+			await send({ content: `<@${U1}> <@&${U2}>`, mentionUserIds: [U2], mentionRoleIds: [U1] });
+			expect(posted(fetch).allowed_mentions).toEqual({ parse: [] });
+		});
+
+		it("collapses duplicate ids to one", async () => {
+			const fetch = stub();
+			await send({ content: `<@${U1}> <@${U1}>`, mentionUserIds: [U1, U1] });
+			expect(posted(fetch).allowed_mentions).toEqual({ parse: [], users: [U1] });
+		});
+
+		it("never pings @everyone or @here, even beside a listed user", async () => {
+			const fetch = stub();
+			await send({ content: `@everyone @here <@${U1}>`, mentionUserIds: [U1] });
+			const allowed = posted(fetch).allowed_mentions;
+			expect(allowed.parse).toEqual([]);
+			expect(allowed).not.toHaveProperty("everyone");
+		});
+
+		it("refuses invalid ids before the token is read or Discord is called", async () => {
+			const fetch = stub();
+			const token = vi.fn(async () => "bot-secret");
+			const c = { ...ctx(), connectorClient: () => ({ token, requireGrant: async () => GRANT, fetch: async () => new Response(), connector: DISCORD_CONNECTOR }) } as RegistryToolCtx;
+			for (const bad of [["123"], ["1".repeat(21)], [`<@${U1}>`], [Number(U1)], "123456789012345678", [{}]]) {
+				const result = await tool("discord_send_message").handler(c, { grantId: "grant-1", content: `<@${U1}>`, mentionUserIds: bad });
+				expect(result).toMatchObject({ success: false, content: expect.stringMatching(/mentionUserIds/) });
+			}
+			expect(await tool("discord_send_message").handler(c, { grantId: "grant-1", content: "x", mentionRoleIds: ["abc"] })).toMatchObject({ success: false, content: expect.stringMatching(/mentionRoleIds/) });
+			expect(token).not.toHaveBeenCalled();
+			expect(fetch).not.toHaveBeenCalled();
+		});
+
+		it("refuses more than 100 distinct ids, but counts duplicates once", async () => {
+			const fetch = stub();
+			const ids = (n: number) => Array.from({ length: n }, (_, i) => String(100000000000000000n + BigInt(i)));
+			const over = await send({ content: "x", mentionUserIds: ids(101) });
+			expect(over).toMatchObject({ success: false, content: expect.stringMatching(/at most 100/) });
+			expect(fetch).not.toHaveBeenCalled();
+			const ok = await send({ content: "x", mentionUserIds: [...ids(100), ...ids(100)] });
+			expect(ok).toMatchObject({ success: true });
+		});
+
+		it("a reply pings its author only when the author is listed", async () => {
+			const listed = stub(U1);
+			await send({ content: "welcome", replyToMessageId: REPLY, mentionUserIds: [U1] });
+			expect(posted(listed).allowed_mentions).toEqual({ parse: [], replied_user: true });
+
+			vi.unstubAllGlobals();
+			const other = stub(U2);
+			await send({ content: "welcome", replyToMessageId: REPLY, mentionUserIds: [U1] });
+			expect(posted(other).allowed_mentions).toEqual({ parse: [], replied_user: false });
+
+			vi.unstubAllGlobals();
+			const none = stub(U1);
+			await send({ content: "welcome", replyToMessageId: REPLY });
+			expect(posted(none).allowed_mentions).toEqual({ parse: [], replied_user: false });
+			expect(none).toHaveBeenCalledTimes(1);
+		});
+
+		it("a reply still keeps the reply ping off when the author lookup fails", async () => {
+			const fetch = vi.fn<typeof globalThis.fetch>(async (_url, init) => (init?.method === "POST" ? new Response(JSON.stringify({ id: "234567890123456789" }), { status: 200 }) : new Response("{}", { status: 403 })));
+			vi.stubGlobal("fetch", fetch);
+			await send({ content: "welcome", replyToMessageId: REPLY, mentionUserIds: [U1] });
+			expect(posted(fetch).allowed_mentions).toEqual({ parse: [], replied_user: false });
+		});
+
+		it("the schema and description tell agents how to ping", () => {
+			const t = tool("discord_send_message");
+			expect(t.description).toMatch(/tag them as <@id>.*AND list the ids in mentionUserIds\/mentionRoleIds/);
+			expect(t.description).toMatch(/@everyone\/@here never ping/);
+			expect(t.description).not.toMatch(/Mentions are disabled/);
+			expect(t.jsonSchema).toMatchObject({ properties: { mentionUserIds: { type: "array" }, mentionRoleIds: { type: "array" } }, required: ["grantId", "content"] });
+		});
+	});
+
 	describe("discord_read_reactions (#1274)", () => {
 		const MSG = "345678901234567890";
 		const run = (input: Record<string, unknown>) => tool("discord_read_reactions").handler(ctx(), { grantId: "grant-1", messageId: MSG, ...input });

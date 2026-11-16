@@ -97,23 +97,73 @@ async function discordRequest(token: string, path: string, init: RequestInit = {
  * platform's own release notes (#1216) send through this one path.
  *
  * With `replyToMessageId` (#1273) the message is a threaded reply to that message in the same channel (`message_reference`).
- * The reply never pings: `parse: []` already blocks every mention and `replied_user: false` turns off the reply's own ping to
- * the author. `fail_if_not_exists` makes a missing or deleted target an error, not a quiet plain channel message.
+ * `fail_if_not_exists` makes a missing or deleted target an error, not a quiet plain channel message.
+ *
+ * Mentions (#1663): `parse` is ALWAYS `[]`, so `@everyone`, `@here` and any mention not named in the options never ping. Only
+ * `mentionUserIds` / `mentionRoleIds` go out as `allowed_mentions.users` / `.roles`. A reply pings its author (`replied_user`)
+ * only when that author is one of `replyPingUserIds`; otherwise it is off. A caller that passes no options (release notes) never pings.
  */
-export async function postDiscordMessage(token: string, channelId: string, content: string, replyToMessageId?: string): Promise<{ ok: true; messageId: string | null } | { ok: false; status: number; message: string }> {
+export interface PostDiscordMessageOptions {
+	replyToMessageId?: string;
+	mentionUserIds?: string[];
+	mentionRoleIds?: string[];
+	/** Users the caller listed, tagged or not: a reply pings its author only if the author is among them. */
+	replyPingUserIds?: string[];
+}
+
+export async function postDiscordMessage(token: string, channelId: string, content: string, options: PostDiscordMessageOptions = {}): Promise<{ ok: true; messageId: string | null } | { ok: false; status: number; message: string }> {
+	const { replyToMessageId } = options;
+	const allowed: { parse: never[]; users?: string[]; roles?: string[]; replied_user?: boolean } = { parse: [] };
+	if (options.mentionUserIds?.length) allowed.users = options.mentionUserIds;
+	if (options.mentionRoleIds?.length) allowed.roles = options.mentionRoleIds;
+	if (replyToMessageId) {
+		// The reply's own ping goes to the replied-to message's author, whom only Discord knows: look it up, and only when a user
+		// was listed at all. Any failure leaves the ping off.
+		let pingAuthor = false;
+		if (options.replyPingUserIds?.length) {
+			const target = await discordRequest(token, `/channels/${channelId}/messages/${replyToMessageId}`);
+			const authorId = target.ok ? snowflake((target.data as { author?: { id?: unknown } } | null)?.author?.id) : null;
+			pingAuthor = !!authorId && options.replyPingUserIds.includes(authorId);
+		}
+		allowed.replied_user = pingAuthor;
+	}
 	const result = await discordRequest(token, `/channels/${channelId}/messages`, {
 		method: "POST",
-		// Agents must name mentions deliberately in a later, reviewed capability. A plain send
-		// cannot turn untrusted text into a mass ping.
 		body: JSON.stringify(
 			replyToMessageId
-				? { content, allowed_mentions: { parse: [], replied_user: false }, message_reference: { message_id: replyToMessageId, channel_id: channelId, fail_if_not_exists: true } }
-				: { content, allowed_mentions: { parse: [] } },
+				? { content, allowed_mentions: allowed, message_reference: { message_id: replyToMessageId, channel_id: channelId, fail_if_not_exists: true } }
+				: { content, allowed_mentions: allowed },
 		),
 	});
 	if (!result.ok) return result;
 	const id = (result.data as { id?: unknown } | null)?.id;
 	return { ok: true, messageId: typeof id === "string" ? id : null };
+}
+
+/** Discord's own cap on `allowed_mentions.users` and `.roles`. */
+const MAX_MENTION_IDS = 100;
+const MENTION_ID = /^\d{17,20}$/;
+
+/**
+ * One optional mention list from the tool input, validated whole: an array of snowflake strings (17-20 digits), at most 100 after
+ * removing duplicates. Anything else is an error and nothing is sent.
+ */
+function mentionList(value: unknown, field: string): { ids: string[] } | { error: string } {
+	if (value === undefined || value === null) return { ids: [] };
+	if (!Array.isArray(value)) return { error: `${field} must be an array of Discord ids (strings of 17-20 digits). Nothing was sent.` };
+	const ids = new Set<string>();
+	for (const v of value) {
+		if (typeof v !== "string" || !MENTION_ID.test(v)) return { error: `${field} must hold only Discord ids as strings of 17-20 digits. Nothing was sent.` };
+		ids.add(v);
+	}
+	if (ids.size > MAX_MENTION_IDS) return { error: `${field} may list at most ${MAX_MENTION_IDS} ids; got ${ids.size}. Nothing was sent.` };
+	return { ids: [...ids] };
+}
+
+/** The ids of one kind that `content` really tags: `<@id>` / `<@!id>` for users, `<@&id>` for roles. */
+function taggedIds(content: string, kind: "user" | "role"): Set<string> {
+	const re = kind === "user" ? /<@!?(\d{17,20})>/g : /<@&(\d{17,20})>/g;
+	return new Set([...content.matchAll(re)].map((m) => m[1] as string));
 }
 
 const listGrantedChannels: ToolDef["handler"] = async (ctx) => {
@@ -152,11 +202,42 @@ const sendMessage: ToolDef["handler"] = async (ctx, input) => {
 	const raw = input.replyToMessageId;
 	const replyTo = raw === undefined || raw === null || raw === "" ? null : typeof raw === "string" ? snowflake(raw) : null;
 	if (raw !== undefined && raw !== null && raw !== "" && !replyTo) return { content: "replyToMessageId must be a Discord message id (a string of 16-22 digits).", success: false };
+	// #1663: explicit mention allowlists, validated before the bot token is read.
+	const userList = mentionList(input.mentionUserIds, "mentionUserIds");
+	if ("error" in userList) return { content: userList.error, success: false };
+	const roleList = mentionList(input.mentionRoleIds, "mentionRoleIds");
+	if ("error" in roleList) return { content: roleList.error, success: false };
+	const taggedUsers = taggedIds(content, "user");
+	const taggedRoles = taggedIds(content, "role");
+	const mentionUserIds = userList.ids.filter((id) => taggedUsers.has(id));
+	const mentionRoleIds = roleList.ids.filter((id) => taggedRoles.has(id));
+	const ignoredMentionUserIds = userList.ids.filter((id) => !taggedUsers.has(id));
+	const ignoredMentionRoleIds = roleList.ids.filter((id) => !taggedRoles.has(id));
 	const token = await botToken(ctx);
 	if (!token) return { content: DISCORD_NOT_CONNECTED, success: false };
-	const result = await postDiscordMessage(token, granted.channelId, content, replyTo ?? undefined);
+	const result = await postDiscordMessage(token, granted.channelId, content, {
+		...(replyTo ? { replyToMessageId: replyTo, replyPingUserIds: userList.ids } : {}),
+		mentionUserIds,
+		mentionRoleIds,
+	});
 	if (!result.ok) return { content: result.message, success: false };
-	return { content: JSON.stringify({ sent: true, channelId: granted.channelId, messageId: result.messageId, ...(replyTo ? { repliedTo: replyTo } : {}) }, null, 2), success: true };
+	return {
+		content: JSON.stringify(
+			{
+				sent: true,
+				channelId: granted.channelId,
+				messageId: result.messageId,
+				...(replyTo ? { repliedTo: replyTo } : {}),
+				...(mentionUserIds.length ? { mentionedUserIds: mentionUserIds } : {}),
+				...(mentionRoleIds.length ? { mentionedRoleIds: mentionRoleIds } : {}),
+				...(ignoredMentionUserIds.length ? { ignoredMentionUserIds } : {}),
+				...(ignoredMentionRoleIds.length ? { ignoredMentionRoleIds } : {}),
+			},
+			null,
+			2,
+		),
+		success: true,
+	};
 };
 
 /** Emoji listed per message, and how many of them have their reacting users fetched: bounds the Discord calls one tool call can make (#1274). */
@@ -371,8 +452,18 @@ export const DISCORD_CONNECTOR: Connector = {
 		},
 		{
 			name: "discord_send_message",
-			description: "Send one message as the connected Discord bot to a channel explicitly granted to this agent. Pass replyToMessageId (a message id from discord_read_messages, in the same channel) to post it as a threaded reply to that message instead of a plain channel message; the reply does not ping its author. Mentions are disabled for safety. WRITE — the message is really sent.",
-			jsonSchema: { type: "object", properties: { grantId: { type: "string" }, content: { type: "string" }, replyToMessageId: { type: "string", description: "Optional. Id of a message in this channel to reply to." } }, required: ["grantId", "content"] },
+			description: "Send one message as the connected Discord bot to a channel explicitly granted to this agent. Pass replyToMessageId (a message id from discord_read_messages, in the same channel) to post it as a threaded reply to that message instead of a plain channel message. To notify people, tag them as <@id> (user) or <@&id> (role) in content AND list the ids in mentionUserIds/mentionRoleIds; an id listed but not tagged is ignored and reported back. @everyone/@here never ping, whatever the text says. A reply pings its author only if the author's user id is in mentionUserIds. WRITE — the message is really sent.",
+			jsonSchema: {
+				type: "object",
+				properties: {
+					grantId: { type: "string" },
+					content: { type: "string" },
+					replyToMessageId: { type: "string", description: "Optional. Id of a message in this channel to reply to." },
+					mentionUserIds: { type: "array", items: { type: "string" }, maxItems: 100, description: "Optional. Discord user ids (17-20 digit strings) that may be pinged; each must also be tagged as <@id> in content." },
+					mentionRoleIds: { type: "array", items: { type: "string" }, maxItems: 100, description: "Optional. Discord role ids (17-20 digit strings) that may be pinged; each must also be tagged as <@&id> in content." },
+				},
+				required: ["grantId", "content"],
+			},
 			tier: "connector",
 			connector: "discord",
 			scope: "write",
