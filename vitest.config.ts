@@ -91,6 +91,8 @@ export default defineConfig({
 		// One real event-loop turn before each test, so a worker can read the main process's RPC replies (#1093).
 		// And no test reaches production: a request to a `*.proagentstore.online` host fails its test (#1120).
 		setupFiles: ["./vitest.setup-ipc-yield.mjs", "./vitest.setup-no-production.mjs", "./vitest.setup-update-log.mjs"],
+		// A test file whose worker stops reporting is named and failed instead of hanging the run (#1665).
+		reporters: ["default", "./scripts/lib/stall-reporter.mjs"],
 		/**
 		 * Two projects (#253).
 		 *

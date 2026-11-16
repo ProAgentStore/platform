@@ -38,7 +38,7 @@ try {
 	const vitest = resolve(dirname(createRequire(import.meta.url).resolve("vitest/package.json")), "vitest.mjs");
 	run = spawnSync(
 		process.execPath,
-		[vitest, "run", "--reporter=default", "--reporter=json", `--outputFile.json=${REPORT}`, ...process.argv.slice(2)],
+		[vitest, "run", "--reporter=default", "--reporter=json", "--reporter=./scripts/lib/stall-reporter.mjs", `--outputFile.json=${REPORT}`, ...process.argv.slice(2)],
 		{ cwd: ROOT, stdio: "inherit" },
 	);
 } catch (error) {

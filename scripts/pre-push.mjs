@@ -24,10 +24,17 @@ process.chdir(root);
 const ZERO = /^0+$/;
 const git = (...args) => spawnSync("git", args, { encoding: "utf8" });
 
+/** A backstop, not a budget: the slowest step measured is about 40s, and a hung test is named sooner by the stall reporter (#1665). */
+const STEP_TIMEOUT_MS = 20 * 60_000;
+
 function run(cmd, args) {
 	console.log(`[pre-push] ${cmd} ${args.join(" ")}`);
-	const r = spawnPortableSync(cmd, args, { stdio: "inherit" });
-	if (r.error) console.error(r.error.message);
+	const r = spawnPortableSync(cmd, args, { stdio: "inherit", timeout: STEP_TIMEOUT_MS });
+	if (r.error?.code === "ETIMEDOUT") {
+		console.error(`[pre-push] TIMED OUT after ${STEP_TIMEOUT_MS / 60_000} minutes: ${cmd} ${args.slice(0, 6).join(" ")}. The step never finished; nothing was pushed.`);
+		// The timeout kills only the process it started; on Windows its children outlive it.
+		if (process.platform === "win32" && r.pid) spawnSync("taskkill", ["/PID", String(r.pid), "/T", "/F"]);
+	} else if (r.error) console.error(r.error.message);
 	if (r.error || r.status !== 0) process.exit(r.status || 1);
 }
 
