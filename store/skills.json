@@ -5,7 +5,10 @@
 	"mcp_url": "https://mcp.proagentstore.online/mcp",
 	"marketplaces": {
 		"codex": {
-			"install": "codex plugin marketplace add ProAgentStore/platform",
+			"install": [
+				"codex plugin marketplace add ProAgentStore/platform",
+				"codex plugin add proagentstore@proagentstore"
+			],
 			"repo": "https://github.com/ProAgentStore/platform",
 			"marketplace_file": "https://github.com/ProAgentStore/platform/blob/main/.agents/plugins/marketplace.json"
 		},

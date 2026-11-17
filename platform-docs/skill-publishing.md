@@ -37,8 +37,10 @@ Repo files:
 
 ```text
 .agents/plugins/marketplace.json
-plugins/codex/proagentstore/.codex-plugin/plugin.json
-plugins/codex/proagentstore/.mcp.json
+plugins/codex/proagentstore/plugin.json
+plugins/codex/proagentstore/mcp.json
+plugins/codex/proagentstore/.codex-plugin/plugin.json (legacy compatibility)
+plugins/codex/proagentstore/.mcp.json (legacy compatibility)
 plugins/codex/proagentstore/skills/proagentstore-mcp-operator/SKILL.md
 ```
 

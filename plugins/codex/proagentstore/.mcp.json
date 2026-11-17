@@ -1,6 +1,7 @@
 {
 	"mcpServers": {
 		"proagentstore": {
+			"type": "streamable-http",
 			"url": "https://mcp.proagentstore.online/mcp"
 		}
 	}

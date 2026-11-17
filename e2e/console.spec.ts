@@ -2975,6 +2975,7 @@ test.describe("ProAgentStore skill discovery", () => {
 			page.getByRole("link", { name: "proagentstore-mcp-operator" }),
 		).toBeVisible();
 		await expect(page.getByText("codex plugin marketplace add")).toBeVisible();
+		await expect(page.getByText("codex plugin add proagentstore")).toBeVisible();
 		await expect(page.getByText("/plugin install proagentstore")).toBeVisible();
 	});
 

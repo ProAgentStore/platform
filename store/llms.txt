@@ -43,6 +43,7 @@ Codex:
 
 ```bash
 codex plugin marketplace add ProAgentStore/platform
+codex plugin add proagentstore@proagentstore
 ```
 
 Claude Code:

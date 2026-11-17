@@ -32,6 +32,7 @@ Plugin:
 
 ```bash
 codex plugin marketplace add ProAgentStore/platform
+codex plugin add proagentstore@proagentstore
 ```
 
 After installation, use the `proagentstore` plugin or the `proagentstore-mcp-operator` skill when asked to create, run, subscribe to, or inspect ProAgentStore agents.

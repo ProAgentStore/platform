@@ -1,6 +1,6 @@
 {
 	"name": "proagentstore",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Operate ProAgentStore agents and private instances through the user's MCP-authenticated account.",
 	"author": {
 		"name": "ProAgentStore",
