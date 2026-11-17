@@ -34,6 +34,7 @@ import LocalBrowserSection from "./settings/LocalBrowserSection";
 import BrowserVerificationSection from "./settings/BrowserVerificationSection";
 import BrowserScreenshotsSection from "./settings/BrowserScreenshotsSection";
 import BrowserModeSection from "./settings/BrowserModeSection";
+import BrowserProfileSection from "./settings/BrowserProfileSection";
 import GmailScoutSection from "./settings/GmailScoutSection";
 import OriginalFinderSection from "./settings/OriginalFinderSection";
 import CoderBrainSection from "./settings/CoderBrainSection";
@@ -305,6 +306,8 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 			<>
 				{isLocalBrowser && <Section id="browser-verification"><BrowserVerificationSection instanceId={instanceId} /></Section>}
 				{takesScreenshots && <Section id="browser-screenshots"><BrowserScreenshotsSection instanceId={instanceId} /></Section>}
+				{/* #1601: the one browser-profile control. Only agents that run local browser research have it; screenshot-only agents keep Browser settings' own profile field. */}
+				{isLocalBrowser && <Section id="browser-profile"><BrowserProfileSection instanceId={instanceId} /></Section>}
 				{takesScreenshots && <Section id="browser-mode"><BrowserModeSection instanceId={instanceId} legacyLists={isLocalBrowser} /></Section>}
 			</>
 		),

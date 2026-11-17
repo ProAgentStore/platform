@@ -3,10 +3,8 @@ import { api } from "@proagentstore/sdk/client";
 import Button from "../../components/Button";
 import Card from "../../components/Card";
 import LoadFailed from "../../components/LoadFailed";
-import LocalBrowserProfileFields from "./LocalBrowserProfileFields";
 import { type SettingsForm, authModeChoices, engineAuthLabel, formFromSettings, patchFromForm, TONE_CLASS } from "../../lib/localBrowser";
-import type { BrowserSettingsView } from "../../lib/browserSettings";
-import type { LocalBrowserConsentEntry, LocalBrowserConsentList, LocalBrowserRunList, LocalBrowserSettingsResponse, LocalBrowserSettingsSaved } from "../../lib/types";
+import type { LocalBrowserRunList, LocalBrowserSettingsResponse, LocalBrowserSettingsSaved } from "../../lib/types";
 
 const input = "bg-paper border border-line rounded px-2 py-1.5 text-sm";
 const LIMITS = [
@@ -25,23 +23,19 @@ const LIMITS = [
 export default function LocalBrowserSection({ instanceId }: { instanceId: string }) {
 	const [data, setData] = useState<LocalBrowserSettingsResponse | null>(null);
 	const [form, setForm] = useState<SettingsForm | null>(null);
-	const [consent, setConsent] = useState<LocalBrowserConsentEntry[]>([]);
 	const [lastAuth, setLastAuth] = useState<string | null>(null);
-	const [launch, setLaunch] = useState<Pick<BrowserSettingsView, "launchPath" | "sources"> | null>(null);
 	const [error, setError] = useState("");
 	const [msg, setMsg] = useState("");
 	const [saving, setSaving] = useState(false);
 
 	const load = useCallback(async () => {
 		try {
-			const [s, c, runs] = await Promise.all([
+			const [s, runs] = await Promise.all([
 				api<LocalBrowserSettingsResponse>(`/v1/instances/${instanceId}/local-browser/settings`),
-				api<LocalBrowserConsentList>(`/v1/instances/${instanceId}/local-browser/consent`),
 				api<LocalBrowserRunList>(`/v1/instances/${instanceId}/local-browser/runs?limit=1`),
 			]);
 			setData(s);
 			setForm(formFromSettings(s.settings));
-			setConsent(c.consent);
 			setLastAuth(runs.runs[0]?.engineAuth ?? null);
 			setError("");
 		} catch (e) {
@@ -51,11 +45,6 @@ export default function LocalBrowserSection({ instanceId }: { instanceId: string
 	useEffect(() => {
 		load();
 	}, [load]);
-	// Extra read: while it loads or fails there is no warning and the consent checkbox behaves as before.
-	useEffect(() => {
-		api<BrowserSettingsView>(`/v1/instances/${instanceId}/browser-settings`).then(setLaunch, () => setLaunch(null));
-	}, [instanceId]);
-
 	if (error && !data) return <LoadFailed what="local browser settings" detail={error} onRetry={load} />;
 	if (!data || !form) return null;
 	const cap = data.capability;
@@ -84,14 +73,6 @@ export default function LocalBrowserSection({ instanceId }: { instanceId: string
 			setMsg(e instanceof Error ? e.message : String(e));
 		}
 	};
-	const decide = async (body: Record<string, unknown>) => {
-		try {
-			setConsent((await api<LocalBrowserConsentList>(`/v1/instances/${instanceId}/local-browser/consent`, { method: "PUT", body: JSON.stringify(body) })).consent);
-		} catch (e) {
-			setMsg(e instanceof Error ? e.message : String(e));
-		}
-	};
-	const profileAllowed = consent.some((c) => c.scope === "signed_in_profile" && c.decision === "allow");
 	const auth = engineAuthLabel(lastAuth);
 
 	return (
@@ -158,15 +139,6 @@ export default function LocalBrowserSection({ instanceId }: { instanceId: string
 					</label>
 				</div>
 			</fieldset>
-
-			<LocalBrowserProfileFields
-				instanceId={instanceId}
-				browserProfile={form.browserProfile}
-				profileAllowed={profileAllowed}
-				launch={launch}
-				onProfile={(browserProfile) => set({ browserProfile })}
-				onConsent={(allow) => decide({ scope: "signed_in_profile", decision: allow ? "allow" : null })}
-			/>
 
 			<fieldset className="mb-3">
 				<legend className="text-xs font-semibold mb-1">Limits <span className="font-normal text-muted">Empty = the agent's default; never above its ceiling.</span></legend>

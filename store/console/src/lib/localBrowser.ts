@@ -252,7 +252,6 @@ export interface SettingsForm {
 	authMode: string;
 	workspace: "scratch" | "path";
 	workspacePath: string;
-	browserProfile: "isolated" | "default";
 	allowDomains: string;
 	denyDomains: string;
 	maxMinutes: string;
@@ -270,7 +269,6 @@ export function formFromSettings(s: LocalBrowserSettingsValues): SettingsForm {
 		authMode: s.authMode ?? "",
 		workspace: s.workspace?.kind === "path" ? "path" : "scratch",
 		workspacePath: s.workspace?.kind === "path" ? s.workspace.path : "",
-		browserProfile: s.browserProfile ?? "isolated",
 		allowDomains: (s.access?.allowDomains ?? []).join("\n"),
 		denyDomains: (s.access?.denyDomains ?? []).join("\n"),
 		maxMinutes: s.limits?.maxMinutes?.toString() ?? "",
@@ -298,7 +296,6 @@ export function patchFromForm(f: SettingsForm): Record<string, unknown> {
 		engine: f.engine || null,
 		authMode: f.authMode || null,
 		workspace: f.workspace === "path" ? { kind: "path", path: f.workspacePath.trim() } : null,
-		browserProfile: f.browserProfile === "default" ? "default" : null,
 		limits: { maxMinutes: num(f.maxMinutes), maxPages: num(f.maxPages), maxActions: num(f.maxActions), maxConcurrent: num(f.maxConcurrent) },
 		collection: f.collection.trim() ? { name: f.collection.trim(), ...(f.keyField.trim() ? { keyField: f.keyField.trim() } : {}) } : null,
 		brief: f.brief.trim() || null,

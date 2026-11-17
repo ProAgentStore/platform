@@ -2,9 +2,12 @@
  * The Research tab's and the research settings' decisions (#946), held without rendering.
  */
 import { readFileSync } from "node:fs";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { accessPatchFromForm, authModeChoices, engineAuthLabel, formFromSettings, pageSteps, parseDomains, patchFromForm, pauseBanner, reviewLabel, runPhases, runProblem, setupChecklist } from "./localBrowser";
+import { BrowserProfileChoices } from "../tabs/settings/BrowserProfileSection";
 import { visibleSurfaces } from "./surfaces";
 import type { LocalBrowserRunView, LocalBrowserTraceEvent } from "./types";
 
@@ -40,10 +43,19 @@ describe("the Research tab is a runtime's tab, never the Coding tab", () => {
 	});
 
 	it("never asks for a repository or GitHub anywhere in its UI", () => {
-		for (const f of ["../tabs/ResearchTab.tsx", "../tabs/research/ResearchRunView.tsx", "../tabs/settings/LocalBrowserSection.tsx", "../components/LocalBrowserCapabilityCard.tsx"]) {
+		for (const f of ["../tabs/ResearchTab.tsx", "../tabs/research/ResearchRunView.tsx", "../components/LocalBrowserCapabilityCard.tsx"]) {
 			// The UI, not its comments: a comment saying "never a repository" is the point, not a leak.
 			const src = readFileSync(join(__dirname, f), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
 			expect(src, f).not.toMatch(/github|repositor|coding\/repos|add a repo/i);
+		}
+		// #1601: LocalBrowserSection loads in effects, so it cannot be rendered here (and is no longer read by path); the profile choice
+		// it used to hold is rendered in every state it can take.
+		const base = { browserProfile: "isolated" as const, instanceEngine: null, instanceProfile: null, agentEngine: null, agentProfile: null };
+		for (const inputs of [base, { ...base, browserProfile: "default" as const }, { ...base, instanceEngine: "chrome" as const }, { ...base, agentProfile: "persistent" as const }]) {
+			for (const chosen of [null, "fresh", "kept", "own", "default"] as const) {
+				const html = renderToStaticMarkup(createElement(BrowserProfileChoices, { inputs, chosen, profileAllowed: false, onChoose: () => {}, onConsent: () => {} }));
+				expect(html).not.toMatch(/github|repositor|coding\/repos|add a repo/i);
+			}
 		}
 	});
 });
@@ -156,7 +168,6 @@ describe("settings form", () => {
 			engine: "codex",
 			authMode: null,
 			workspace: { kind: "path", path: "~/jobs" },
-			browserProfile: null,
 			limits: { maxMinutes: null, maxPages: 10, maxActions: null, maxConcurrent: null },
 			collection: { name: "leads", keyField: "url" },
 			brief: null,
@@ -164,6 +175,9 @@ describe("settings form", () => {
 		expect(patchFromForm({ ...form, workspace: "scratch", collection: "" })).toMatchObject({ workspace: null, collection: null });
 		// #1593: the site lists are saved from Browser settings, so saving Research never rewrites them.
 		expect(patchFromForm(form)).not.toHaveProperty("access");
+		// #1601: the browser profile has its own control and Save, so saving Research never rewrites it from a stale form.
+		expect(patchFromForm(form)).not.toHaveProperty("browserProfile");
+		expect(form).not.toHaveProperty("browserProfile");
 		expect(accessPatchFromForm(form)).toEqual({ access: { allowDomains: ["seek.com.au"], denyDomains: [] } });
 		expect(accessPatchFromForm({ allowDomains: "A.com, b.com\nA.com", denyDomains: "" })).toEqual({ access: { allowDomains: ["a.com", "b.com"], denyDomains: [] } });
 	});

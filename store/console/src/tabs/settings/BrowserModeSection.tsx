@@ -27,7 +27,7 @@ export function BrowserModeSettings({ data, saving, message, onChange, instanceI
 			{cliWarning && <p className="text-xs text-warning mb-3" data-testid="browser-cli-warning">
 				{cliWarning.state} · <Link to={cliWarning.href} className="inline-flex items-center min-h-6 underline">Update from Terminals</Link>
 			</p>}
-			<BrowserSettingsFields value={data} inherited={data.agentDefaults} effective={data.effective} sources={data.sources} disabled={saving} compact onChange={onChange} />
+			<BrowserSettingsFields value={data} inherited={data.agentDefaults} effective={data.effective} sources={data.sources} disabled={saving} compact hideProfile={legacyLists} onChange={onChange} />
 			{legacyLists && instanceId && !data.effective?.websiteAccess && <LocalBrowserWebsiteLists key={instanceId} instanceId={instanceId} />}
 			{instanceId && <WebsiteGrants key={instanceId} instanceId={instanceId} />}
 			<BrowserSettingsHelp collapsed>{data.explained && <p>{data.explained}</p>}</BrowserSettingsHelp>

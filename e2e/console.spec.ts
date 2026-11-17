@@ -3531,6 +3531,8 @@ async function installBrowserSubtabRoutes(page: Page) {
 	await page.route("**/v1/instances/inst-1/website-grants", (route) => route.fulfill(json({ domains: [long], decisions: [{ hostname: long, decision: "allow" }] })));
 	await page.route("**/v1/instances/inst-1/local-browser/settings", (route) => route.fulfill(json({ settings: { access: { allowDomains: [long], denyDomains: ["blocked.example.com"] } }, effective: null, problem: null, capability: { engines: ["claude"], mode: "research_only", subscriptionOnly: true, limits: { maxMinutes: 15, maxPages: 30, maxActions: 200, maxConcurrent: 1 }, allowDomains: [long], denyDomains: [] }, runnerNode: "Mac-mini.local" })));
 	await page.route("**/v1/instances/inst-1/local-browser/consent", (route) => route.fulfill(json({ consent: [{ id: "c1", scope: "navigate", domain: long, decision: "allow", decidedAt: 1, expiresAt: null }] })));
+	// The Research card on the Agent sub-tab reads the last run for its sign-in line; without it the card shows its load failure, not itself (#1601).
+	await page.route("**/v1/instances/inst-1/local-browser/runs**", (route) => route.fulfill(json({ runs: [] })));
 }
 
 /**
@@ -3570,7 +3572,8 @@ const SETTINGS_SWEEP_FIXTURES: Array<{ name: string; instances: Array<Record<str
 	{
 		name: "local_browser, old runner, site lists",
 		instances: [{ id: "inst-1", agent_id: "agent-1", name: "Job Search Scout", status: "active", slug: "scout", category: "productivity", icon_bg: "#7c3aed", capabilities: { surfaces: ["chat", "settings"], runtime: "local_browser" } }],
-		subtabs: ["browser"],
+		// Agent too (#1601): the Research card no longer holds the profile choice, and the Browser sub-tab does.
+		subtabs: ["browser", "agent"],
 		setup: (page) => installBrowserSubtabRoutes(page),
 	},
 	{
@@ -3597,6 +3600,15 @@ test("the Browser sub-tab sweep fixtures really render the lists and the CLI war
 		await expect(page.getByTestId("legacy-website-lists")).toHaveCount(lists ? 1 : 0);
 		if (lists) await expect(page.getByTestId("legacy-website-lists").getByLabel(/Never visit/)).toHaveValue("blocked.example.com");
 		await expect(page.getByText("Remembered websites")).toBeVisible();
+		// #1601: the one browser-profile control is on the Browser sub-tab for local_browser only, never in the Research card.
+		await expect(page.getByTestId("browser-profile-choices").getByRole("radio")).toHaveCount(lists ? 4 : 0);
+		if (lists) {
+			await expect(page.getByTestId("own-profile-caveat")).toContainText("only on machines set up for it");
+			await expect(page.getByRole("radio", { name: /Use the agent.s default \(now: A fresh browser each time\)/ })).toBeChecked();
+			await page.goto("/console/instances/inst-1/settings?subtab=agent");
+			await expect(page.getByRole("heading", { name: "Research", exact: true })).toBeVisible();
+			await expect(page.getByTestId("browser-profile-choices")).toHaveCount(0);
+		}
 		await page.unrouteAll();
 	}
 });

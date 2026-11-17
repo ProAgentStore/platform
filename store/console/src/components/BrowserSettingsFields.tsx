@@ -2,17 +2,19 @@ import type { ReactNode } from "react";
 import WebsiteAccessFields from "./WebsiteAccessFields";
 import { BROWSER_FIELDS, BROWSER_SETTING_SOURCE_LABELS, browserSettingLabel, type BrowserSettings, type BrowserSettingsView } from "../lib/browserSettings";
 
-export default function BrowserSettingsFields({ value, inherited, effective, sources, disabled, compact, onChange }: {
+export default function BrowserSettingsFields({ value, inherited, effective, sources, disabled, compact, hideProfile, onChange }: {
 	value: BrowserSettings;
 	inherited?: BrowserSettings;
 	effective?: BrowserSettings;
 	sources?: BrowserSettingsView["sources"];
 	disabled?: boolean;
 	compact?: boolean;
+	/** The instance page for a local-browser agent, whose one profile control is Settings → Browser → Browser profile (#1601). */
+	hideProfile?: boolean;
 	onChange: (patch: Partial<BrowserSettings>) => void;
 }) {
 	return <div className="flex flex-col gap-3">
-		{BROWSER_FIELDS.map((field) => <div key={field.key}>
+		{BROWSER_FIELDS.filter((field) => !(hideProfile && field.key === "profile")).map((field) => <div key={field.key}>
 			<label className="flex flex-col gap-1 text-sm font-semibold">
 				{field.label}
 				<select className="bg-paper border border-line rounded px-2 py-1 text-sm font-normal w-full sm:max-w-sm" value={value[field.key] ?? ""} disabled={disabled} onChange={(e) => onChange({ [field.key]: e.target.value || null })}>

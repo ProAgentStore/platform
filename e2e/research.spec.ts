@@ -12,6 +12,8 @@ const RUN_ID = "run-e2e-1";
 
 interface Recorded {
 	settingsPuts: unknown[];
+	/** Bodies sent to PUT /browser-settings (#1601): the profile policy the one profile control writes. */
+	browserPuts: unknown[];
 	runPosts: unknown[];
 	saves: string[];
 	consentPuts: unknown[];
@@ -25,7 +27,7 @@ type Failure = { errorCode: string; error: string };
 /** A signed-in owner with one local browser research agent, and a run that finishes on cue. */
 async function mockResearchAgent(page: Page, opts: { pause?: Pause; failure?: Failure; screenshotsOff?: boolean; ownProfile?: "instance" | "agent" | "legacy" | "fail" } = {}) {
 	await page.addInitScript((t) => window.localStorage.setItem("pags:session", t), TOKEN);
-	const recorded: Recorded = { settingsPuts: [], runPosts: [], saves: [], consentPuts: [], resumes: 0 };
+	const recorded: Recorded = { settingsPuts: [], browserPuts: [], runPosts: [], saves: [], consentPuts: [], resumes: 0 };
 	const state = { started: !!(opts.pause || opts.failure), finished: false, saved: false, allowDomains: [] as string[], pause: opts.pause ?? null, failure: opts.failure ?? null };
 
 	const settings = () => ({
@@ -109,6 +111,10 @@ async function mockResearchAgent(page: Page, opts: { pause?: Pause; failure?: Fa
 		if (path === `${base}/settings`) return json(settings());
 		// #1603: the effective browser settings the own-profile warning reads.
 		if (path === "/v1/instances/inst-1/browser-settings" && opts.ownProfile === "fail") return json({ error: "boom" }, 500);
+		if (path === "/v1/instances/inst-1/browser-settings" && method === "PUT") {
+			recorded.browserPuts.push(route.request().postDataJSON());
+			return json({ mode: null, engine: null, profile: null, websiteAccess: null, agentDefaults: { mode: null, engine: null, profile: null, websiteAccess: null }, effective: { mode: null, engine: null, profile: null, websiteAccess: null }, launchPath: "legacy", sources: { mode: "runner", engine: "runner", profile: "runner", websiteAccess: "runner" }, requiredCli: "0.4.198", explained: "" });
+		}
 		if (path === "/v1/instances/inst-1/browser-settings") {
 			const own = opts.ownProfile ?? "legacy";
 			const managed = own !== "legacy";
@@ -448,43 +454,62 @@ test("research replay respects the run's recorded screenshots-off mode", async (
 	await expect(page.getByRole("slider", { name: "Frame" })).toHaveCount(0);
 });
 
-test.describe("own browser profile on the managed launch path (#1603)", () => {
+test.describe("the one browser-profile control (#1601)", () => {
 	const CHECKBOX = "I allow research in my signed-in profile (a run waits for this otherwise)";
-	test("an engine set by the owner shows the warning and withholds the consent checkbox", async ({ page }) => {
-		await mockResearchAgent(page, { ownProfile: "instance" });
+	const BROWSER = "/console/instances/inst-1/settings?subtab=browser";
+	const choices = (page: Page) => page.getByTestId("browser-profile-choices");
+	test("on the legacy path it offers four choices, shows your own profile as chosen with its caveat and consent, and the Research card has none", async ({ page }) => {
+		await mockResearchAgent(page, { ownProfile: "legacy" });
+		await page.goto(BROWSER);
+		await expect(choices(page).getByRole("radio")).toHaveCount(4);
+		await expect(page.getByRole("radio", { name: "Your own browser profile, with your sign-ins" })).toBeChecked();
+		await expect(page.getByTestId("own-profile-caveat")).toContainText("only on machines set up for it");
+		await expect(page.getByLabel(CHECKBOX)).toBeVisible();
 		await page.goto("/console/instances/inst-1/settings?subtab=agent");
-		const notice = page.getByTestId("own-profile-notice");
-		await expect(notice).toContainText("Your own profile is not used while a browser or profile is set in Browser settings");
-		await expect(notice.getByRole("link", { name: "Open Browser settings" })).toHaveAttribute("href", "/console/instances/inst-1/settings?subtab=browser");
+		await expect(choices(page)).toHaveCount(0);
+	});
+	test("an engine chosen by the owner disables your own profile with the reason, and shows what actually launches", async ({ page }) => {
+		await mockResearchAgent(page, { ownProfile: "instance" });
+		await page.goto(BROWSER);
+		const own = page.getByRole("radio", { name: "Your own browser profile, with your sign-ins" });
+		await expect(own).toBeDisabled();
+		await expect(own).not.toBeChecked();
+		await expect(page.getByTestId("own-profile-blocked")).toContainText("cannot be used while a browser is chosen in Browser settings");
+		await expect(page.getByRole("radio", { name: "A browser profile kept for this agent" })).toBeChecked();
 		await expect(page.getByLabel(CHECKBOX)).toHaveCount(0);
 	});
 	test("an agent default uses the agent wording", async ({ page }) => {
 		await mockResearchAgent(page, { ownProfile: "agent" });
-		await page.goto("/console/instances/inst-1/settings?subtab=agent");
-		await expect(page.getByTestId("own-profile-notice")).toContainText("this agent's default browser or profile applies");
+		await page.goto(BROWSER);
+		await expect(page.getByRole("radio", { name: "Your own browser profile, with your sign-ins" })).toBeDisabled();
+		await expect(page.getByTestId("own-profile-blocked")).toContainText("this agent’s default browser or profile applies");
 	});
-	test("the legacy path keeps the consent checkbox, with no warning", async ({ page }) => {
-		await mockResearchAgent(page, { ownProfile: "legacy" });
-		await page.goto("/console/instances/inst-1/settings?subtab=agent");
-		await expect(page.getByLabel(CHECKBOX)).toBeVisible();
-		await expect(page.getByTestId("own-profile-notice")).toHaveCount(0);
-	});
-	test("a failed browser-settings read shows no warning and keeps the consent checkbox", async ({ page }) => {
+	test("a failed read shows the failure, not a guess", async ({ page }) => {
 		await mockResearchAgent(page, { ownProfile: "fail" });
-		await page.goto("/console/instances/inst-1/settings?subtab=agent");
-		await expect(page.getByLabel(CHECKBOX)).toBeVisible();
-		await expect(page.getByTestId("own-profile-notice")).toHaveCount(0);
+		await page.goto(BROWSER);
+		await expect(page.getByText(/browser profile settings/i).first()).toBeVisible();
+		await expect(choices(page)).toHaveCount(0);
+	});
+	test("choosing a fresh browser writes both stores it spans, and nothing else", async ({ page }) => {
+		const { recorded } = await mockResearchAgent(page, { ownProfile: "legacy" });
+		await page.goto(BROWSER);
+		await page.getByRole("radio", { name: "A fresh browser each time", exact: true }).check();
+		await page.getByTestId("browser-profile-settings").getByRole("button", { name: "Save" }).click();
+		await expect(page.getByRole("status").filter({ hasText: "Saved — applies on the next browser launch" })).toBeVisible();
+		expect(recorded.browserPuts).toEqual([{ profile: "ephemeral" }]);
+		expect(recorded.settingsPuts).toEqual([{ browserProfile: null }]);
 	});
 	for (const width of [320, 375, 390]) {
-		test(`mobile — the warning fits at ${width}px and its link clears 24px`, async ({ page }) => {
+		test(`mobile — the choices fit at ${width}px and every choice clears 24px`, async ({ page }) => {
 			await page.setViewportSize({ width, height: 812 });
 			await mockResearchAgent(page, { ownProfile: "instance" });
-			await page.goto("/console/instances/inst-1/settings?subtab=agent");
-			const link = page.getByTestId("own-profile-notice").getByRole("link", { name: "Open Browser settings" });
-			await expect(link).toBeVisible();
-			const box = await link.boundingBox();
-			expect(box && Math.min(box.width, box.height), "the warning link is under 24px").toBeGreaterThanOrEqual(24);
-			await expectFits(page, width, "settings with the own-profile warning");
+			await page.goto(BROWSER);
+			await expect(choices(page)).toBeVisible();
+			for (const label of await choices(page).locator("label").all()) {
+				const box = await label.boundingBox();
+				expect(box?.height ?? 0, "a profile choice is under 24px").toBeGreaterThanOrEqual(24);
+			}
+			await expectFits(page, width, "Browser sub-tab with the profile choice");
 		});
 	}
 });
