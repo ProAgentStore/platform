@@ -50,8 +50,8 @@ describe("the Research tab is a runtime's tab, never the Coding tab", () => {
 		}
 		// #1601: LocalBrowserSection loads in effects, so it cannot be rendered here (and is no longer read by path); the profile choice
 		// it used to hold is rendered in every state it can take.
-		const base = { browserProfile: "isolated" as const, instanceEngine: null, instanceProfile: null, agentEngine: null, agentProfile: null };
-		for (const inputs of [base, { ...base, browserProfile: "default" as const }, { ...base, instanceEngine: "chrome" as const }, { ...base, agentProfile: "persistent" as const }]) {
+		const base = { browserProfile: "isolated" as const, launchPath: "legacy" as const, effectiveProfile: null, instanceEngine: null, instanceProfile: null, agentEngine: null, agentProfile: null };
+		for (const inputs of [base, { ...base, browserProfile: "default" as const }, { ...base, launchPath: "managed" as const, instanceEngine: "chrome" as const }, { ...base, launchPath: "managed" as const, effectiveProfile: "persistent" as const, agentProfile: "persistent" as const }]) {
 			for (const chosen of [null, "fresh", "kept", "own", "default"] as const) {
 				const html = renderToStaticMarkup(createElement(BrowserProfileChoices, { inputs, chosen, profileAllowed: false, onChoose: () => {}, onConsent: () => {} }));
 				expect(html).not.toMatch(/github|repositor|coding\/repos|add a repo/i);

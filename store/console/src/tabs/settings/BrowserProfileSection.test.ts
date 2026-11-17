@@ -5,7 +5,7 @@ import type { ProfileChoice, ProfileInputs } from "../../lib/browserProfileChoic
 import { BrowserProfileChoices, inputsFrom } from "./BrowserProfileSection";
 
 const CHECKBOX = "I allow research in my signed-in profile";
-const base: ProfileInputs = { browserProfile: "isolated", instanceEngine: null, instanceProfile: null, agentEngine: null, agentProfile: null };
+const base: ProfileInputs = { browserProfile: "isolated", launchPath: "legacy", effectiveProfile: null, instanceEngine: null, instanceProfile: null, agentEngine: null, agentProfile: null };
 const render = (inputs: ProfileInputs, chosen: ProfileChoice | null = null, profileAllowed = false) =>
 	renderToStaticMarkup(createElement(BrowserProfileChoices, { inputs, chosen, profileAllowed, onChoose: () => {}, onConsent: () => {} }));
 
@@ -23,12 +23,12 @@ describe("the one browser-profile control (#1601)", () => {
 	});
 
 	it("shows the choice that takes effect, and nothing else is selected", () => {
-		expect((render({ ...base, instanceProfile: "persistent" }).match(/checked=""/g) ?? []).length).toBe(1);
-		expect(render({ ...base, instanceProfile: "persistent" })).toMatch(/checked="" [^>]*\/?>(<span>)?A browser profile kept for this agent|A browser profile kept for this agent/);
+		expect((render({ ...base, launchPath: "managed", effectiveProfile: "persistent", instanceProfile: "persistent" }).match(/checked=""/g) ?? []).length).toBe(1);
+		expect(render({ ...base, launchPath: "managed", effectiveProfile: "persistent", instanceProfile: "persistent" })).toMatch(/checked="" [^>]*\/?>(<span>)?A browser profile kept for this agent|A browser profile kept for this agent/);
 	});
 
 	it("disables your own profile with the reason while an engine is chosen, and never asks for consent then", () => {
-		const html = render({ ...base, browserProfile: "default", instanceEngine: "chrome" }, "own", true);
+		const html = render({ ...base, browserProfile: "default", launchPath: "managed", instanceEngine: "chrome" }, "own", true);
 		expect(html).toContain('data-testid="own-profile-blocked"');
 		expect(html).toContain("cannot be used while a browser is chosen in Browser settings");
 		const own = /<input[^>]*aria-describedby="browser-profile-own-note"[^>]*\/>/.exec(html)?.[0] ?? "";
@@ -40,7 +40,7 @@ describe("the one browser-profile control (#1601)", () => {
 	});
 
 	it("uses the agent-default wording when only the agent's defaults block it", () => {
-		const html = render({ ...base, agentProfile: "persistent" });
+		const html = render({ ...base, launchPath: "managed", effectiveProfile: "persistent", agentProfile: "persistent" });
 		expect(html).toContain("while this agent&#x27;s default browser or profile applies".replace("&#x27;", "’"));
 		expect(html).toContain('data-testid="own-profile-blocked"');
 	});
@@ -56,6 +56,8 @@ describe("the one browser-profile control (#1601)", () => {
 
 	it("builds its inputs from the loaded view without recomputing the launch path", () => {
 		const view = { mode: null, engine: "chrome", profile: null, websiteAccess: null, agentDefaults: { mode: null, engine: null, profile: "persistent", websiteAccess: null }, effective: { mode: null, engine: "chrome", profile: "persistent", websiteAccess: null }, launchPath: "managed", sources: { mode: "runner", engine: "instance", profile: "agent" }, requiredCli: "0.4.198", explained: "" } as const;
-		expect(inputsFrom("default", view as never)).toEqual({ browserProfile: "default", instanceEngine: "chrome", instanceProfile: null, agentEngine: null, agentProfile: "persistent" });
+		expect(inputsFrom("default", view as never)).toEqual({ browserProfile: "default", launchPath: "managed", effectiveProfile: "persistent", instanceEngine: "chrome", instanceProfile: null, agentEngine: null, agentProfile: "persistent" });
+		// The server's answer is read as given: a launch path that disagrees with the engine is not "corrected" here.
+		expect(inputsFrom("default", { ...view, launchPath: "legacy", effective: { ...view.effective, profile: null } } as never)).toMatchObject({ launchPath: "legacy", effectiveProfile: null, instanceEngine: "chrome" });
 	});
 });

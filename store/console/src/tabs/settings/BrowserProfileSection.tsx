@@ -5,14 +5,14 @@ import Card from "../../components/Card";
 import LoadFailed from "../../components/LoadFailed";
 import type { BrowserSettingsView } from "../../lib/browserSettings";
 import {
-	CHOICE_ORDER, OWN_PROFILE_CAVEAT, choiceLabel, ownProfileBlock, selectedChoice, writesFor,
+	CHOICE_ORDER, OWN_PROFILE_CAVEAT, choiceLabel, hasProfileFields, ownProfileBlock, selectedChoice, writesFor,
 	type ProfileChoice, type ProfileInputs, type ResearchProfile,
 } from "../../lib/browserProfileChoice";
 import type { LocalBrowserConsentEntry, LocalBrowserConsentList, LocalBrowserSettingsResponse } from "../../lib/types";
 
-/** What the loaded settings say, in the shape the choice logic reads. */
+/** What the loaded settings say, in the shape the choice logic reads. The launch path and effective policy are the server's (#1603), not worked out here. */
 export function inputsFrom(browserProfile: ResearchProfile, view: BrowserSettingsView): ProfileInputs {
-	return { browserProfile, instanceEngine: view.engine, instanceProfile: view.profile, agentEngine: view.agentDefaults.engine, agentProfile: view.agentDefaults.profile };
+	return { browserProfile, launchPath: view.launchPath, effectiveProfile: view.effective.profile, instanceEngine: view.engine, instanceProfile: view.profile, agentEngine: view.agentDefaults.engine, agentProfile: view.agentDefaults.profile };
 }
 
 /**
@@ -76,7 +76,8 @@ export default function BrowserProfileSection({ instanceId }: { instanceId: stri
 				api<LocalBrowserSettingsResponse>(`/v1/instances/${instanceId}/local-browser/settings`),
 				api<LocalBrowserConsentList>(`/v1/instances/${instanceId}/local-browser/consent`),
 			]);
-			setView(v);
+			if (!hasProfileFields(v) || !s?.settings) throw new Error("The browser settings answer was not understood.");
+			setView(v as BrowserSettingsView);
 			setBrowserProfile(s.settings.browserProfile ?? "isolated");
 			setConsent(c.consent);
 			setChosen(null);

@@ -25,7 +25,7 @@ type Pause = { reason: "consent_required" | "captcha" | "login_required" | "acce
 type Failure = { errorCode: string; error: string };
 
 /** A signed-in owner with one local browser research agent, and a run that finishes on cue. */
-async function mockResearchAgent(page: Page, opts: { pause?: Pause; failure?: Failure; screenshotsOff?: boolean; ownProfile?: "instance" | "agent" | "legacy" | "fail" } = {}) {
+async function mockResearchAgent(page: Page, opts: { pause?: Pause; failure?: Failure; screenshotsOff?: boolean; ownProfile?: "instance" | "agent" | "legacy" | "fail" | "empty" | "unknown-path" } = {}) {
 	await page.addInitScript((t) => window.localStorage.setItem("pags:session", t), TOKEN);
 	const recorded: Recorded = { settingsPuts: [], browserPuts: [], runPosts: [], saves: [], consentPuts: [], resumes: 0 };
 	const state = { started: !!(opts.pause || opts.failure), finished: false, saved: false, allowDomains: [] as string[], pause: opts.pause ?? null, failure: opts.failure ?? null };
@@ -111,6 +111,9 @@ async function mockResearchAgent(page: Page, opts: { pause?: Pause; failure?: Fa
 		if (path === `${base}/settings`) return json(settings());
 		// #1603: the effective browser settings the own-profile warning reads.
 		if (path === "/v1/instances/inst-1/browser-settings" && opts.ownProfile === "fail") return json({ error: "boom" }, 500);
+		// An answer without what the choice reads (an older server, a proxy's empty body) or with a path this console does not know.
+		if (path === "/v1/instances/inst-1/browser-settings" && opts.ownProfile === "empty") return json({});
+		if (path === "/v1/instances/inst-1/browser-settings" && opts.ownProfile === "unknown-path") { const v = { mode: null, engine: null, profile: null, websiteAccess: null }; return json({ ...v, agentDefaults: v, effective: v, launchPath: "hybrid", sources: { mode: "runner", engine: "runner", profile: "runner", websiteAccess: "runner" }, requiredCli: "0.4.198", explained: "" }); }
 		if (path === "/v1/instances/inst-1/browser-settings" && method === "PUT") {
 			recorded.browserPuts.push(route.request().postDataJSON());
 			return json({ mode: null, engine: null, profile: null, websiteAccess: null, agentDefaults: { mode: null, engine: null, profile: null, websiteAccess: null }, effective: { mode: null, engine: null, profile: null, websiteAccess: null }, launchPath: "legacy", sources: { mode: "runner", engine: "runner", profile: "runner", websiteAccess: "runner" }, requiredCli: "0.4.198", explained: "" });
@@ -489,6 +492,17 @@ test.describe("the one browser-profile control (#1601)", () => {
 		await page.goto(BROWSER);
 		await expect(page.getByText(/browser profile settings/i).first()).toBeVisible();
 		await expect(choices(page)).toHaveCount(0);
+	});
+	test("an empty or unrecognised answer shows the control's own load failure and the rest of the page still renders", async ({ page }) => {
+		for (const own of ["empty", "unknown-path"] as const) {
+			await mockResearchAgent(page, { ownProfile: own });
+			await page.goto(BROWSER);
+			await expect(page.getByText(/browser profile settings/i).first()).toBeVisible();
+			await expect(choices(page)).toHaveCount(0);
+			// The tab did not crash: its sub-tab navigation and the other Browser cards are still there.
+			await expect(page.getByTestId("settings-subtab-browser")).toHaveAttribute("aria-current", "true");
+			await page.unrouteAll();
+		}
 	});
 	test("choosing a fresh browser writes both stores it spans, and nothing else", async ({ page }) => {
 		const { recorded } = await mockResearchAgent(page, { ownProfile: "legacy" });
