@@ -5,6 +5,7 @@ on:
     paths:
       - 'workers/host/**'
       - 'store/**'
+      - 'brand/**' # host build embeds the canonical platform icons and social image
       - 'platform-docs/**'
       - 'zensical.toml'
       - 'scripts/clean-generated-docs.mjs'

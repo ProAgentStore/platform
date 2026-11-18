@@ -1,0 +1,13 @@
+{
+  "version": "2026-11-18",
+  "id": "pags",
+  "name": "ProAgentStore",
+  "prefix": "Pro",
+  "noun": "Agent",
+  "family": "agents",
+  "accent": "#7c3aed",
+  "darkAccent": "#a78bfa",
+  "gradient": "#a78bfa",
+  "ink": "#ffffff",
+  "domain": "proagentstore.online"
+}

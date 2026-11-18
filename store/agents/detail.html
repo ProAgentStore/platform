@@ -17,7 +17,7 @@
   <meta property="og:image" content="https://proagentstore.online/og-image.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
     :root{--font-body:'Manrope',system-ui,sans-serif;--font-display:'Fraunces',Georgia,serif;--paper:#0a0a0a;--panel:#171717;--panel-2:#111;--ink:#fafafa;--muted:#a3a3a3;--muted-soft:#737373;--accent:#7c3aed;--accent-hover:#6d28d9;--accent-soft:rgba(124,58,237,.15);--green:#22c55e;--blue:#3b82f6;--amber:#f59e0b;--red:#ef4444;--line:#262626;--line-strong:#404040;--radius:8px}
@@ -28,8 +28,8 @@
     header{border-bottom:1px solid var(--line);background:rgba(10,10,10,.92);position:sticky;top:0;z-index:10;backdrop-filter:blur(12px)}
     header .container{display:flex;align-items:center;gap:1rem;padding-top:.75rem;padding-bottom:.75rem}
     .brand{display:flex;align-items:center;gap:.6rem;color:var(--ink);text-decoration:none}
-    .brand-mark{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#6366f1);display:flex;align-items:center;justify-content:center;font-size:1.1rem}
-    .brand-name{font-family:var(--font-display);font-size:1.15rem;font-weight:700}
+    .brand-mark{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:1.1rem}
+    .brand-name{font-family:'Manrope',system-ui,sans-serif;font-size:1.15rem;font-weight:800}
     nav{display:flex;gap:1.1rem;font-size:.88rem;font-weight:600;margin-left:auto;align-items:center}
     nav a{color:var(--muted);text-decoration:none}nav a:hover{color:var(--ink)}nav a.free{color:var(--blue)}
     .back{display:inline-flex;margin:1rem 0;color:var(--muted);font-size:.88rem}.back:hover{color:var(--ink)}
@@ -79,6 +79,13 @@
     footer a{color:var(--muted)}
     @media(max-width:960px){.hero{grid-template-columns:1fr}.actions{justify-content:flex-start}.dashboard{grid-template-columns:1fr}.grid{grid-template-columns:1fr 1fr}.side{grid-template-columns:1fr 1fr}}
     @media(max-width:640px){.container{padding:0 1rem}header .container{align-items:flex-start}nav{gap:.7rem;flex-wrap:wrap;justify-content:flex-end}.hero-main{flex-direction:column}.grid,.side{grid-template-columns:1fr}.actions{width:100%}.btn{flex:1}.msg{max-width:92%}}
+
+    /* Family wordmark: stable vector symbol, full name, product noun in accent. */
+    .brand-mark{flex-shrink:0;object-fit:contain}
+    .brand-name{white-space:nowrap;letter-spacing:-0.035em}
+    .brand-name span{color:#a78bfa}
+    header .container{flex-wrap:wrap}
+    header nav{flex-wrap:wrap}
   </style>
 
 
@@ -112,7 +119,7 @@ header nav>span{padding:0.8rem 0.25rem;border-bottom:1px solid var(--line,#1f1f1
 <body>
   <header>
     <div class="container">
-      <a href="/" class="brand"><span class="brand-mark">&#9889;</span><span class="brand-name">ProAgentStore</span></a>
+      <a href="/" class="brand"><img class="brand-mark" src="/favicon.svg" alt="" width="36" height="36"><span class="brand-name">Pro<span>Agent</span>Store</span></a>
       <nav>
         <a href="/">Agents</a>
         <a href="/skills/">Skills</a>

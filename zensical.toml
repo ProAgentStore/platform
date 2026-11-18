@@ -34,3 +34,5 @@ homepage = "https://proagentstore.online"
 
 [project.theme]
 variant = "modern"
+logo = "https://proagentstore.online/favicon.svg"
+favicon = "https://proagentstore.online/favicon.svg"

@@ -23,7 +23,7 @@ export default function Layout() {
 		<div className="min-h-dvh md:flex">
 			<aside className="md:w-52 md:h-dvh md:sticky md:top-0 border-b md:border-b-0 md:border-r border-line bg-panel md:flex md:flex-col">
 				<div className="px-4 h-12 flex items-center gap-2 border-b border-line">
-					<span className="text-danger font-display font-bold">⚡ Admin</span>
+					<a href="/" aria-label="ProAgentStore home" className="flex items-center gap-2 text-ink no-underline"><img src="/favicon.svg" alt="" width="24" height="24" /><span className="font-body font-extrabold tracking-tight text-xs">Pro<span className="text-brand-ink">Agent</span>Store<span className="block font-medium text-muted tracking-normal">Admin</span></span></a>
 				</div>
 				<nav className="flex md:flex-col gap-0.5 p-2 overflow-x-auto">
 					{NAV.map((n) => {

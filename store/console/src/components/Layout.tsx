@@ -9,7 +9,7 @@ import CopyPageLink from "./CopyPageLink";
 import Button from "./Button";
 import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
-import { Activity, PowerOff, Zap, Bell, Menu, BellRing, X, Bot, Library, Server, BarChart3, Wrench, Terminal, Gauge, SlidersHorizontal, Flag, Stethoscope } from "lucide-react";
+import { Activity, PowerOff, Bell, Menu, BellRing, X, Bot, Library, Server, BarChart3, Wrench, Terminal, Gauge, SlidersHorizontal, Flag, Stethoscope } from "lucide-react";
 import { pushPermission, pushSupported, ensurePushSubscribed, enablePush } from "../lib/push";
 import { isSuppressedPush } from "../lib/pushMessages";
 import { rememberRoute } from "../lib/lastRoute";
@@ -116,17 +116,16 @@ export default function Layout() {
 				{/* Logo — always visible */}
 				<a
 					href="/console/"
+					aria-label="ProAgentStore console"
 					onClick={(e) => {
 						e.preventDefault();
 						navigate("/");
 					}}
 					className="flex items-center gap-1.5 no-underline text-ink shrink-0"
 				>
-					<span className={`rounded-lg bg-gradient-to-br from-accent to-indigo-500 flex items-center justify-center text-sm ${navHidden ? "w-6 h-6" : "w-7 h-7"}`}>
-						<Zap size={navHidden ? 14 : 16} />
-					</span>
-					<span className="font-display font-bold text-base hidden sm:inline">
-						ProAgentStore
+					<img src="/favicon.svg" alt="" width="28" height="28" className={navHidden ? "w-6 h-6" : "w-7 h-7"} />
+					<span className="font-body font-extrabold tracking-tight text-base hidden sm:inline">
+						Pro<span className="text-brand-ink">Agent</span>Store
 					</span>
 				</a>
 

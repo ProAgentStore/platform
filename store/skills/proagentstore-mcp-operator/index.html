@@ -22,8 +22,8 @@
     header{border-bottom:1px solid var(--line)}
     header .c{max-width:1200px;margin:0 auto;padding:.75rem 1.5rem;display:flex;align-items:center;gap:1.25rem}
     .brand{display:flex;align-items:center;gap:.6rem;color:var(--ink);text-decoration:none}
-    .brand-mark{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#6366f1);display:flex;align-items:center;justify-content:center;font-size:1.1rem}
-    .brand-name{font-family:Georgia,serif;font-size:1.15rem;font-weight:700}
+    .brand-mark{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:1.1rem}
+    .brand-name{font-family:'Manrope',system-ui,sans-serif;font-size:1.15rem;font-weight:800}
     nav{display:flex;gap:1.1rem;font-size:.88rem;font-weight:700;margin-left:auto;align-items:center;flex-wrap:wrap;justify-content:flex-end}
     nav a{color:var(--muted);text-decoration:none}nav a:hover{color:var(--ink)}nav a.free{color:var(--blue)}
     .back{display:inline-flex;margin:1.1rem 0 0;color:var(--muted);font-size:.88rem}
@@ -48,6 +48,13 @@
     .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}.btn.primary:hover{background:var(--accent-hover);text-decoration:none}
     footer{border-top:1px solid var(--line);padding:2rem 0;text-align:center;font-size:.8rem;color:var(--muted-soft);margin-top:4rem}
     footer a{color:var(--muted)}
+
+    /* Family wordmark: stable vector symbol, full name, product noun in accent. */
+    .brand-mark{flex-shrink:0;object-fit:contain}
+    .brand-name{white-space:nowrap;letter-spacing:-0.035em}
+    .brand-name span{color:#a78bfa}
+    header .container{flex-wrap:wrap}
+    header nav{flex-wrap:wrap}
   </style>
 
 
@@ -81,7 +88,7 @@ header nav>span{padding:0.8rem 0.25rem;border-bottom:1px solid var(--line,#1f1f1
 <body>
   <header>
     <div class="c">
-      <a href="/" class="brand"><span class="brand-mark">&#9889;</span><span class="brand-name">ProAgentStore</span></a>
+      <a href="/" class="brand"><img class="brand-mark" src="/favicon.svg" alt="" width="36" height="36"><span class="brand-name">Pro<span>Agent</span>Store</span></a>
       <nav>
         <a href="/">Agents</a>
         <a href="/skills/">Skills</a>

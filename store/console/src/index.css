@@ -22,6 +22,7 @@
 	--color-muted: #a3a3a3;
 	--color-muted-soft: #737373;
 	--color-accent: #7c3aed;
+	--color-brand-ink: #a78bfa; /* family wordmark on the dark interface */
 	--color-accent-hover: #6d28d9;
 	--color-accent-soft: rgba(124, 58, 237, 0.15);
 	--color-line: #303030;
