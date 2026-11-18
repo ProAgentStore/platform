@@ -117,7 +117,8 @@ describe("raw Tailwind palette classes — a ratchet, not a gate", () => {
 	 * as headroom, which is numerically how the last ratchet here got spent.
 	 */
 	// +2 for #488: DeploymentCard.tsx uses 2 raw palette colours.
-	const PINNED = { console: 35, admin: 1, coderWeb: 9 };
+	// -1: the canonical platform logo replaces the raw indigo gradient.
+	const PINNED = { console: 34, admin: 1, coderWeb: 9 };
 
 	it("the console holds its count", () => {
 		const count = scan(CONSOLE_SRC, RAW_PALETTE).reduce((n, f) => n + f.hits.length, 0);
