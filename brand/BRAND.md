@@ -49,8 +49,10 @@ primary action accent. Avoid duplicated historical token tables in brand docs.
 
 The storefront HTML, console and admin headers all use the same favicon artwork.
 The host workflow watches `brand/**` as well as `store/**`, so an asset-only
-change deploys. Build the SDK, console, admin and host pages, run the prescribed
-full suite and inspect desktop/mobile branding before pushing to `main`.
+change deploys. Build the SDK, console, admin and host pages and inspect
+desktop/mobile branding. Required hooks check the changed surfaces before a
+push to `main`; CI runs the full suite. Use the repository's `test:full` wrapper
+for any local full-suite run and report its explicit verdict.
 
 ## Voice
 
