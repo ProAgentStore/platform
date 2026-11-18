@@ -23,6 +23,9 @@ const at = (ms: number) => vi.spyOn(Date, "now").mockReturnValue(ms);
 const errorRows = () => d1.DB.prepare("SELECT source, level, message FROM error_log ORDER BY rowid").all<{ source: string; level: string; message: string }>().then((r) => r.results ?? []);
 
 beforeEach(async () => {
+	// The incident clock is historical; SQLite retention uses real time. This tests
+	// watchdog evidence, not the separately tested probabilistic retention branch.
+	vi.spyOn(Math, "random").mockReturnValue(0.5);
 	d1 = realSchemaD1();
 	d1.exec("INSERT INTO users (id, github_login) VALUES ('u1', 'owner'), ('u2', 'other')");
 	for (const m of [MINI, PINK, DELL]) await setMachinePolicy(env(), "u1", m, true);
