@@ -60,3 +60,9 @@ Describe what the platform does plainly. Use **Agents**, **Workers** and **Tools
 for the three agent types, and **Console**, **API**, **SDK**, **CLI** and **MCP** for
 platform components. Keep pricing, capabilities and privacy claims in the
 product documentation that owns them rather than duplicating them here.
+
+## Browser cache updates
+
+Platform asset URLs and manifest icon URLs include `?v=2026-11-18`, matching
+the kit revision. Bump this value when replacing kit assets so returning browsers
+fetch the new identity even when an older stable URL remains cached.

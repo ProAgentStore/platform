@@ -123,7 +123,7 @@ export default function Layout() {
 					}}
 					className="flex items-center gap-1.5 no-underline text-ink shrink-0"
 				>
-					<img src="/favicon.svg" alt="" width="28" height="28" className={navHidden ? "w-6 h-6" : "w-7 h-7"} />
+					<img src="/favicon.svg?v=2026-11-18" alt="" width="28" height="28" className={navHidden ? "w-6 h-6" : "w-7 h-7"} />
 					<span className="font-body font-extrabold tracking-tight text-base hidden sm:inline">
 						Pro<span className="text-brand-ink">Agent</span>Store
 					</span>
