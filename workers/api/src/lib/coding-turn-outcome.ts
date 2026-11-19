@@ -23,7 +23,7 @@
  */
 import type { LoopEffect } from "./coding-loop-state.js";
 import type { EngineAuthPrompt } from "./engine-auth-prompt.js";
-import { engineProviderError, type ProviderErrorRecord, providerTurnVerdict, type ProviderTurnVerdict } from "./engine-provider-error.js";
+import { engineProviderError, type ProviderErrorRecord, providerTurnVerdict, type ProviderTurnVerdict, type StructuredTurnError, structuredProviderError, validStructuredError } from "./engine-provider-error.js";
 import { redactText } from "./redact.js";
 
 /** The runner's report, widened to what arrives over HTTP from a machine we do not control. */
@@ -35,6 +35,8 @@ export interface EngineTurnReport {
 	detail?: string;
 	/** The turn's own last lines of output (#889) — `[]` when it printed nothing; absent from an older runner. */
 	tail?: string[];
+	/** The engine's own stated cause (#1357), when it stated one: absent from an older runner and from an engine that sends none, which is not "no cause". */
+	error?: { kind?: string; provider?: string; code?: string; resetsAt?: number };
 }
 
 /**
@@ -54,6 +56,9 @@ export const TURN_REPORT_MIN_CLI = "0.4.51";
 
 /** The CLI release whose failed-turn report carries the engine's own output, `tail` (#889). */
 export const TURN_TAIL_MIN_CLI = "0.4.68";
+
+/** The CLI release whose failed-turn report carries the engine's own stated cause, `error` (#1357). */
+export const TURN_ERROR_MIN_CLI = "0.4.245";
 
 /**
  * What one report means.
@@ -104,6 +109,8 @@ export interface TurnStreak {
 	 * release that sends `tail`), which is a different claim and is worded differently.
 	 */
 	lastTail?: string[];
+	/** The cause the engine stated on the most recent failure (#1357), validated; absent when it stated none. */
+	lastError?: StructuredTurnError;
 }
 
 export const EMPTY_STREAK: TurnStreak = { lastAt: null, consecutive: 0 };
@@ -131,6 +138,7 @@ export function observeTurn(streak: TurnStreak, report: EngineTurnReport | null 
 	if (streak.lastAt !== null && at <= streak.lastAt) return { streak, newFailure: false };
 	if (kind === "ok") return { streak: { lastAt: at, consecutive: 0 }, newFailure: false };
 	if (kind === "killed") return { streak: { ...streak, lastAt: at }, newFailure: false };
+	const structured = validStructuredError(report?.error);
 	return {
 		streak: {
 			lastAt: at,
@@ -138,6 +146,7 @@ export function observeTurn(streak: TurnStreak, report: EngineTurnReport | null 
 			...(report?.detail ? { lastDetail: redactText(report.detail) } : {}),
 			lastExitCode: typeof report?.exitCode === "number" ? report.exitCode : null,
 			...(Array.isArray(report?.tail) ? { lastTail: tailLines(report.tail as unknown[]) } : {}),
+			...(structured ? { lastError: structured } : {}),
 		},
 		newFailure: true,
 	};
@@ -294,7 +303,7 @@ export function foldTurn(carry: TurnCarry, snap: { lastTurn?: EngineTurnReport |
 
 	// THE PROVIDER'S OWN WORDS (#1326): a usage window parks, a transient failure is retried, an empty account ends —
 	// none is the engine refusing to run, so none spends one of the strikes below.
-	const provider = engineProviderError(next.turns.lastDetail, next.turns.lastTail);
+	const provider = structuredProviderError(next.turns.lastError, next.turns.lastDetail, next.turns.lastTail) ?? engineProviderError(next.turns.lastDetail, next.turns.lastTail);
 	const verdict = providerTurnVerdict(provider, next.transientStreak, ctx.repo);
 	const exitCode = next.turns.lastExitCode ?? null;
 	const record: ProviderErrorRecord | undefined = provider ? { kind: provider.kind, provider: provider.provider, rule: provider.rule, exitCode, text: provider.text } : undefined;

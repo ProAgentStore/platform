@@ -1,3 +1,5 @@
+import { type EngineTurnError, structuredTurnError } from "./engine-error.js";
+
 /**
  * How the LAST completed engine turn ended (#545).
  *
@@ -107,6 +109,12 @@ export interface EngineTurnReport {
 	 * statement "the engine printed nothing this turn"; absent there means a runner that predates it.
 	 */
 	tail?: string[];
+	/**
+	 * The cause, when the ENGINE stated it in a field (#1357) — `{kind, provider, code?, resetsAt?}`. Absent means the engine said nothing
+	 * structured (Codex, Grok, Gemini and older CLIs today), NOT that the failure had no cause: the cloud then reads `detail`/`tail` as before.
+	 * Present only on a failed turn.
+	 */
+	error?: EngineTurnError;
 }
 
 /**
@@ -136,7 +144,7 @@ export function turnReportFromExit(code: number | null, signal: string | null, l
  * the shape of gap that makes a platform-wide claim ("we notice a failed turn") false in the one
  * case that runs most.
  */
-export function turnReportFromResult(isError: boolean, detail = "", now = Date.now(), tail: readonly string[] = []): EngineTurnReport {
+export function turnReportFromResult(isError: boolean, detail = "", now = Date.now(), tail: readonly string[] = [], error?: EngineTurnError): EngineTurnReport {
 	const text = detailOf(detail.trim());
 	return {
 		verdict: isError ? "failed" : "ok",
@@ -145,5 +153,14 @@ export function turnReportFromResult(isError: boolean, detail = "", now = Date.n
 		at: now,
 		...(text ? { detail: text } : {}),
 		...(isError ? { tail: [...tail] } : {}),
+		...(isError && error ? { error } : {}),
 	};
+}
+
+/**
+ * A stream-json / ACP turn ended (#1357): the {@link turnReportFromResult} report, with the cause the engine stated in the turn-end event's own
+ * fields, if it stated one. `raw` is the engine's event untouched; `engine` names which engine's fields to read.
+ */
+export function turnReportFromTurnEnd(engine: string, raw: unknown, isError: boolean, detail = "", now = Date.now(), tail: readonly string[] = []): EngineTurnReport {
+	return turnReportFromResult(isError, detail, now, tail, structuredTurnError(engine, raw, isError));
 }

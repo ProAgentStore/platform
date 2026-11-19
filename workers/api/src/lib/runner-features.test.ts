@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SECURE_HANDOFF_MIN_CLI } from "./connectors/tmux.js";
+import { TURN_ERROR_MIN_CLI } from "./coding-turn-outcome.js";
 import { ENGINE_CHECK_MIN_CLI } from "./engine-preflight.js";
 import { LOCAL_APPLY_CONTRACT_MIN_CLI } from "./local-apply/contract.js";
 import { LOCAL_ARTIFACT_UPLOADED_SOURCES_MIN_CLI } from "./local-artifact/contract.js";
@@ -11,6 +12,7 @@ const BROWSER_SETTINGS_FEATURE = "per-agent browser engine, profile policy and l
 const BROWSER_MODE_FEATURE = "per-agent headed/headless browser mode";
 const UPLOADED_SOURCES_FEATURE = "Application Tailor uploaded résumé/profile sources";
 const CLEANUP_FEATURE = "post-run cleanup: process-group kill, leftover sweep, per-run temp folders, gentle/harsh mode (#1265)";
+const ERROR_FEATURE = "the engine's own stated error cause in a failed run (not a guess from its text)";
 const LOCAL_APPLY_HANDOFF_FEATURE = "application dispatch safety, origin-bound credentials and bounded login/CAPTCHA handoff";
 
 describe("what a runner version is too old for (#859)", () => {
@@ -22,9 +24,10 @@ describe("what a runner version is too old for (#859)", () => {
 
 	it("reports the newest handoff floor while leaving an unknown version unjudged", () => {
 		// The application safety contract is the newest floor.
-		expect(runnerFeatureGaps(LOCAL_APPLY_CONTRACT_MIN_CLI)?.map((g) => g.feature)).toEqual([]);
+		expect(runnerFeatureGaps(LOCAL_APPLY_CONTRACT_MIN_CLI)?.map((g) => g.feature)).toEqual([ERROR_FEATURE]);
+		expect(runnerFeatureGaps(TURN_ERROR_MIN_CLI)).toEqual([]);
 		// 0.4.71 reports load and memory, and is behind only on the rest of the machine (#924).
-		expect(runnerFeatureGaps(RESOURCES_MIN_CLI)?.map((g) => g.feature)).toEqual([BROWSER_SETTINGS_FEATURE, BROWSER_MODE_FEATURE, "disk, runner restarts, relay round trip and per-session usage in the resource history", "Codex local browser research (the browser tools approved for codex exec, #952)", LOCAL_APPLY_HANDOFF_FEATURE, UPLOADED_SOURCES_FEATURE, CLEANUP_FEATURE]);
+		expect(runnerFeatureGaps(RESOURCES_MIN_CLI)?.map((g) => g.feature)).toEqual([BROWSER_SETTINGS_FEATURE, BROWSER_MODE_FEATURE, "disk, runner restarts, relay round trip and per-session usage in the resource history", "Codex local browser research (the browser tools approved for codex exec, #952)", LOCAL_APPLY_HANDOFF_FEATURE, UPLOADED_SOURCES_FEATURE, CLEANUP_FEATURE, ERROR_FEATURE]);
 		expect(runnerFeatureGaps("")).toBeNull();
 		expect(runnerVersionView(null)).toEqual({ runnerVersion: null, behind: null });
 	});
@@ -32,17 +35,18 @@ describe("what a runner version is too old for (#859)", () => {
 	it("reports each gap with the version it needs", () => {
 		expect(runnerVersionView("0.4.58").behind).toContain("fast-forward a stale checkout (needs 0.4.59)");
 		expect(runnerVersionView("0.4.92").behind).toContain(`${UPLOADED_SOURCES_FEATURE} (needs 0.4.93)`);
-		expect(runnerFeatureGaps(LOCAL_ARTIFACT_UPLOADED_SOURCES_MIN_CLI)?.map((gap) => gap.feature)).toEqual([BROWSER_SETTINGS_FEATURE, BROWSER_MODE_FEATURE, LOCAL_APPLY_HANDOFF_FEATURE, CLEANUP_FEATURE]);
+		expect(runnerFeatureGaps(LOCAL_ARTIFACT_UPLOADED_SOURCES_MIN_CLI)?.map((gap) => gap.feature)).toEqual([BROWSER_SETTINGS_FEATURE, BROWSER_MODE_FEATURE, LOCAL_APPLY_HANDOFF_FEATURE, CLEANUP_FEATURE, ERROR_FEATURE]);
 		expect(RUNNER_FEATURES.every((f) => /^\d+\.\d+\.\d+$/.test(f.minCli))).toBe(true);
 	});
 
 	it("post-run cleanup needs the release that carries it, and only that one is behind on it (#1265)", () => {
-		expect(runnerVersionView("0.4.166").behind).toEqual([`${BROWSER_SETTINGS_FEATURE} (needs 0.4.198)`, `${BROWSER_MODE_FEATURE} (needs 0.4.197)`, `${LOCAL_APPLY_HANDOFF_FEATURE} (needs 0.4.208)`, `${CLEANUP_FEATURE} (needs 0.4.167)`]);
-		expect(runnerFeatureGaps("0.4.167")?.map((g) => g.feature)).toEqual([BROWSER_SETTINGS_FEATURE, BROWSER_MODE_FEATURE, LOCAL_APPLY_HANDOFF_FEATURE]);
-		expect(runnerFeatureGaps("0.4.197")?.map((g) => g.feature)).toEqual([BROWSER_SETTINGS_FEATURE, LOCAL_APPLY_HANDOFF_FEATURE]);
-		expect(runnerFeatureGaps("0.4.198")?.map((g) => g.feature)).toEqual([LOCAL_APPLY_HANDOFF_FEATURE]);
-		expect(runnerFeatureGaps("0.4.207")?.map((g) => g.feature)).toEqual([LOCAL_APPLY_HANDOFF_FEATURE]);
-		expect(runnerFeatureGaps("0.4.208")).toEqual([]);
+		expect(runnerVersionView("0.4.166").behind).toEqual([`${BROWSER_SETTINGS_FEATURE} (needs 0.4.198)`, `${BROWSER_MODE_FEATURE} (needs 0.4.197)`, `${LOCAL_APPLY_HANDOFF_FEATURE} (needs 0.4.208)`, `${CLEANUP_FEATURE} (needs 0.4.167)`, `${ERROR_FEATURE} (needs 0.4.245)`]);
+		expect(runnerFeatureGaps("0.4.167")?.map((g) => g.feature)).toEqual([BROWSER_SETTINGS_FEATURE, BROWSER_MODE_FEATURE, LOCAL_APPLY_HANDOFF_FEATURE, ERROR_FEATURE]);
+		expect(runnerFeatureGaps("0.4.197")?.map((g) => g.feature)).toEqual([BROWSER_SETTINGS_FEATURE, LOCAL_APPLY_HANDOFF_FEATURE, ERROR_FEATURE]);
+		expect(runnerFeatureGaps("0.4.198")?.map((g) => g.feature)).toEqual([LOCAL_APPLY_HANDOFF_FEATURE, ERROR_FEATURE]);
+		expect(runnerFeatureGaps("0.4.207")?.map((g) => g.feature)).toEqual([LOCAL_APPLY_HANDOFF_FEATURE, ERROR_FEATURE]);
+		expect(runnerFeatureGaps("0.4.208")?.map((g) => g.feature)).toEqual([ERROR_FEATURE]);
+		expect(runnerFeatureGaps(TURN_ERROR_MIN_CLI)).toEqual([]);
 		expect(runnerFeatureGaps("0.5.0")).toEqual([]);
 	});
 
@@ -64,6 +68,7 @@ describe("what a runner version is too old for (#859)", () => {
 			LOCAL_APPLY_HANDOFF_FEATURE,
 			UPLOADED_SOURCES_FEATURE,
 			CLEANUP_FEATURE,
+			ERROR_FEATURE,
 		]);
 	});
 
@@ -80,6 +85,7 @@ describe("what a runner version is too old for (#859)", () => {
 			"application dispatch safety, origin-bound credentials and bounded login/CAPTCHA handoff (needs 0.4.208)",
 			`${UPLOADED_SOURCES_FEATURE} (needs 0.4.93)`,
 			`${CLEANUP_FEATURE} (needs 0.4.167)`,
+			`${ERROR_FEATURE} (needs 0.4.245)`,
 		]);
 		expect(runnerFeatureGaps(ENGINE_CHECK_MIN_CLI)?.map((g) => g.feature)).toEqual([
 			BROWSER_SETTINGS_FEATURE,
@@ -92,6 +98,7 @@ describe("what a runner version is too old for (#859)", () => {
 			LOCAL_APPLY_HANDOFF_FEATURE,
 			UPLOADED_SOURCES_FEATURE,
 			CLEANUP_FEATURE,
+			ERROR_FEATURE,
 		]);
 	});
 
@@ -106,14 +113,15 @@ describe("what a runner version is too old for (#859)", () => {
 			"application dispatch safety, origin-bound credentials and bounded login/CAPTCHA handoff (needs 0.4.208)",
 			`${UPLOADED_SOURCES_FEATURE} (needs 0.4.93)`,
 			`${CLEANUP_FEATURE} (needs 0.4.167)`,
+			`${ERROR_FEATURE} (needs 0.4.245)`,
 		]);
 	});
 
 	it("a machine on 0.4.70 is behind only on resource telemetry (#924)", () => {
-		expect(runnerFeatureGaps(RELAY_NAME_STABLE_MIN_CLI)?.map((g) => g.feature)).toEqual([BROWSER_SETTINGS_FEATURE, BROWSER_MODE_FEATURE, "disk, runner restarts, relay round trip and per-session usage in the resource history", "Codex local browser research (the browser tools approved for codex exec, #952)", "machine CPU load and memory in list_runner_nodes / coding_diagnostics", LOCAL_APPLY_HANDOFF_FEATURE, UPLOADED_SOURCES_FEATURE, CLEANUP_FEATURE]);
+		expect(runnerFeatureGaps(RELAY_NAME_STABLE_MIN_CLI)?.map((g) => g.feature)).toEqual([BROWSER_SETTINGS_FEATURE, BROWSER_MODE_FEATURE, "disk, runner restarts, relay round trip and per-session usage in the resource history", "Codex local browser research (the browser tools approved for codex exec, #952)", "machine CPU load and memory in list_runner_nodes / coding_diagnostics", LOCAL_APPLY_HANDOFF_FEATURE, UPLOADED_SOURCES_FEATURE, CLEANUP_FEATURE, ERROR_FEATURE]);
 	});
 
 	it("a machine on 0.4.69 is behind only on resource telemetry (#924) and stable relay names (#922)", () => {
-		expect(runnerFeatureGaps(SECURE_HANDOFF_MIN_CLI)?.map((g) => g.feature)).toEqual([BROWSER_SETTINGS_FEATURE, BROWSER_MODE_FEATURE, "disk, runner restarts, relay round trip and per-session usage in the resource history", "Codex local browser research (the browser tools approved for codex exec, #952)", "machine CPU load and memory in list_runner_nodes / coding_diagnostics", "relay sockets that keep their machine name when the hostname changes", LOCAL_APPLY_HANDOFF_FEATURE, UPLOADED_SOURCES_FEATURE, CLEANUP_FEATURE]);
+		expect(runnerFeatureGaps(SECURE_HANDOFF_MIN_CLI)?.map((g) => g.feature)).toEqual([BROWSER_SETTINGS_FEATURE, BROWSER_MODE_FEATURE, "disk, runner restarts, relay round trip and per-session usage in the resource history", "Codex local browser research (the browser tools approved for codex exec, #952)", "machine CPU load and memory in list_runner_nodes / coding_diagnostics", "relay sockets that keep their machine name when the hostname changes", LOCAL_APPLY_HANDOFF_FEATURE, UPLOADED_SOURCES_FEATURE, CLEANUP_FEATURE, ERROR_FEATURE]);
 	});
 });

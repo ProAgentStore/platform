@@ -8,7 +8,7 @@ import { liveGh } from "./merge-gh.js";
 import { type GhRunner, settleMergeLookups, trackMergeLookups } from "./merge-evidence.js";
 import { classifyCommand, commandFromToolInput, type EngineActRecord, fillPushedShaFromResult, fillTargetFromResult, resultText, toolCallOk, toolResultMark } from "./engine-acts.js";
 import { type EngineUsageRecord, parseEngineUsage } from "./engine-usage.js";
-import { appendTurnTail, type EngineTurnReport, turnReportFromExit, turnReportFromResult } from "./engine-turn.js";
+import { appendTurnTail, type EngineTurnReport, turnReportFromExit, turnReportFromTurnEnd } from "./engine-turn.js";
 import { renderToolResult, shortInput, stripAnsi } from "./transcript-lines.js";
 import { authoredTurn, authorTag, type TurnAuthor } from "./turn-author.js";
 import { engineSpawnEnv, mergeEnv, writeGuardReport } from "./engine-env.js";
@@ -1082,7 +1082,7 @@ export class HeadlessSession {
 				// per turn, so `exitCode` is honestly null and the verdict comes from the protocol's
 				// own `is_error` — the same claim, in the words the engine states it in. Without
 				// this the field would exist for three engines and silently not for the flagship.
-				this.turnReport = turnReportFromResult(ev.isError, failure, Date.now(), this.turnTail);
+				this.turnReport = turnReportFromTurnEnd(this.config.clientType, ev.raw, ev.isError, failure, Date.now(), this.turnTail);
 				this.inputs.consume(this.pendingInputs.shift() ?? null);
 				// The same event that ends the turn also reports what the turn COST (#267). It was
 				// parsed and thrown away, which is why Engine spend was absent from the ledger.

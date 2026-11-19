@@ -134,6 +134,45 @@ export function engineProviderError(detail: string | undefined, tail: readonly s
 	return null;
 }
 
+/**
+ * The structured cause a runner reported on `lastTurn.error` (#1357), as it sits on the streak after validation. The engine itself stated it
+ * (Claude's `api_error_status`), so it outranks any reading of its prose. `auth` is carried but never acted on here: sign-in failures belong to
+ * `engine-auth-prompt.ts`.
+ */
+export interface StructuredTurnError {
+	kind: "limit" | "transient" | "billing" | "auth";
+	provider: string;
+	code?: string;
+	resetsAt?: number;
+}
+
+const STRUCTURED_KINDS = new Set(["limit", "transient", "billing", "auth"]);
+
+/** A runner's `error` made safe to keep: a known kind and bounded strings, or null. We do not control that machine. */
+export function validStructuredError(v: unknown): StructuredTurnError | null {
+	if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+	const e = v as Record<string, unknown>;
+	if (typeof e.kind !== "string" || !STRUCTURED_KINDS.has(e.kind) || typeof e.provider !== "string" || !e.provider) return null;
+	return {
+		kind: e.kind as StructuredTurnError["kind"],
+		provider: clipMarked(e.provider, 60, { within: true }),
+		...(typeof e.code === "string" && e.code ? { code: clipMarked(e.code, 20, { within: true }) } : {}),
+		...(typeof e.resetsAt === "number" && Number.isFinite(e.resetsAt) && e.resetsAt > 0 ? { resetsAt: e.resetsAt } : {}),
+	};
+}
+
+/**
+ * The provider error the runner STATED, or null when it stated none or only a sign-in failure. Same shape as {@link engineProviderError}, with
+ * rule `structured/<kind>`, so a trace tells a field from a regex match.
+ */
+export function structuredProviderError(error: StructuredTurnError | undefined, detail: string | undefined, tail: readonly string[] | undefined): EngineProviderError | null {
+	if (!error || error.kind === "auth") return null;
+	const last = [...(tail ?? [])].reverse().find((l) => l.trim() !== "");
+	const line = (detail || last || `${error.provider} reported HTTP ${error.code ?? error.kind}`).trim();
+	const text = clipMarked((tail?.length ? tail.join("\n") : line).trim(), PROVIDER_TEXT_MAX, { keep: "tail" });
+	return { kind: error.kind, provider: error.provider, evidence: clipMarked(line, 300, { within: true }), rule: `structured/${error.kind}`, text };
+}
+
 /** What the Pilot is told when a turn failed on a transient provider error it should simply resend. */
 export function transientProviderNote(e: EngineProviderError): string {
 	return `the engine's AI provider failed transiently (${e.provider}): "${e.evidence}". This is NOT a problem with your instruction and does not count against the engine — send the SAME instruction again. If it fails the same way again the run waits and retries by itself.`;

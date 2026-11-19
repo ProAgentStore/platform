@@ -8,7 +8,7 @@ import { BROWSER_MODE_MIN_CLI } from "./browser-mode.js";
  * `list_runner_nodes` and `instance_runner_node` can say, per machine, what it is too old for — and
  * so an operator knows `runner_update` is worth running before a call fails for it.
  */
-import { TURN_REPORT_MIN_CLI, TURN_TAIL_MIN_CLI } from "./coding-turn-outcome.js";
+import { TURN_ERROR_MIN_CLI, TURN_REPORT_MIN_CLI, TURN_TAIL_MIN_CLI } from "./coding-turn-outcome.js";
 import { REPO_SEARCH_MIN_CLI } from "./connectors/repo-local.js";
 import { SECURE_HANDOFF_MIN_CLI } from "./connectors/tmux.js";
 import { RESULT_LINES_MIN_CLI, TOOL_OUTCOME_MIN_CLI } from "./engine-tool-calls.js";
@@ -66,6 +66,7 @@ export const RUNNER_FEATURES: readonly RunnerFeature[] = [
 	{ feature: "application dispatch safety, origin-bound credentials and bounded login/CAPTCHA handoff", minCli: LOCAL_APPLY_CONTRACT_MIN_CLI },
 	{ feature: "Application Tailor uploaded résumé/profile sources", minCli: LOCAL_ARTIFACT_UPLOADED_SOURCES_MIN_CLI },
 	{ feature: "post-run cleanup: process-group kill, leftover sweep, per-run temp folders, gentle/harsh mode (#1265)", minCli: CLEANUP_MIN_CLI },
+	{ feature: "the engine's own stated error cause in a failed run (not a guess from its text)", minCli: TURN_ERROR_MIN_CLI },
 ];
 
 /**
