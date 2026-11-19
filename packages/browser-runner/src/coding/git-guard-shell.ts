@@ -17,7 +17,7 @@ const shell = (text: string): string => text.replace(/\$@\{/g, "${");
 export const AUDIT_AND_CLASSIFY: string = shell(String.raw`# The whole command line, taken here because inside a function "$@" is the function's own arguments.
 argv_all="$*"
 # The subcommand's own flags (before "--") and whether a pathspec names the whole tree.
-flags=" "; whole=0; dd=0; i=0
+flags=" "; whole=0; dd=0; i=0; pos1=""; pos2=""; pos3=""
 if [ -n "$sub" ]; then
   for a in "$@"; do
     i=$((i + 1))
@@ -29,6 +29,7 @@ if [ -n "$sub" ]; then
       esac
     fi
     case "$a" in .|./|:/|:/.|":(top)"|":(top)."|":(top)/") whole=1 ;; esac
+    if [ -z "$pos1" ]; then pos1="$a"; elif [ -z "$pos2" ]; then pos2="$a"; elif [ -z "$pos3" ]; then pos3="$a"; fi
   done
 fi
 has_flag() { case "$flags" in *" $1 "*) return 0 ;; esac; return 1; }
@@ -37,7 +38,7 @@ short_has() { for f in $flags; do case "$f" in --*) : ;; -*"$1"*) return 0 ;; es
 
 # One best-effort line per mutating subcommand. It must never be the reason git does not run.
 audit() {
-  case "$sub" in reset|clean|checkout|restore|switch|stash|rebase|merge|cherry-pick|revert|am|pull|apply) ;; *) return 0 ;; esac
+  case "$sub" in reset|clean|checkout|restore|switch|stash|rebase|merge|cherry-pick|revert|am|pull|apply) ;; config) config_identity_write || return 0 ;; *) return 0 ;; esac
   log="$@{PAGS_GIT_AUDIT_LOG:-$AUDIT}"
   {
     mkdir -p "$(dirname "$log")"
@@ -57,7 +58,35 @@ export function destructiveChecks(marker: string, exitCode: number): string {
   echo "Discard only your own files by name (git checkout HEAD -- <file>), or do bulk work in an isolated 'git worktree add --detach' checkout nobody else shares." >&2
   exit ${exitCode}
 }
+# #1516: a commit identity written into THIS checkout (or globally) changes who every later commit is by.
+identity_key() { case "$(printf '%s' "$1" | tr 'A-Z' 'a-z')" in user.name|user.email|author.name|author.email|committer.name|committer.email) return 0 ;; esac; return 1; }
+canon() { ( cd "$1" 2>/dev/null && pwd -P ); }
+refuse_identity() {
+  audit refused
+  echo "${marker}: 'git config $pos1' $1" >&2
+  echo "For a smoke or fixture run set GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL for that one command, or run it in a disposable 'git init' directory of its own. Reading the identity, 'git -c' and --unset are not refused." >&2
+  exit ${exitCode}
+}
+config_identity_write() {
+  key="$pos1"; val="$pos2"
+  if [ "$pos1" = set ]; then key="$pos2"; val="$pos3"; fi
+  identity_key "$key" || return 1
+  [ -n "$val" ] || return 1
+  for f in --get --get-all --get-regexp --list -l --unset --unset-all --remove-section --rename-section; do has_flag "$f" && return 1; done
+  return 0
+}
 case "$sub" in
+  config)
+    if config_identity_write; then
+      if has_flag --global || has_flag --system; then
+        refuse_identity "would change the Git identity for every repository on this machine."
+      fi
+      mine=$(canon "$@{PAGS_CHECKOUT:-}"); top=$("$REAL" -C "$@{cdir:-.}" rev-parse --show-toplevel 2>/dev/null); here=$(canon "$top")
+      if [ -n "$mine" ] && [ -n "$here" ] && [ "$mine" = "$here" ]; then
+        refuse_identity "would overwrite the author identity of the checkout this session works in; later commits would silently use it."
+      fi
+    fi
+    ;;
   reset) has_flag --hard && refuse_discard "with --hard rewrites every tracked file in the working tree." ;;
   clean) { has_flag -n || has_flag --dry-run || short_has n; } || refuse_discard "deletes untracked files and directories; only a dry run (-n) is allowed." ;;
   checkout|switch)

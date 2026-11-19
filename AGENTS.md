@@ -213,6 +213,16 @@ own exit status rather than a later `echo`, `grep` or pipeline's.
   the bypasses above leave no line, and bulk discards spelled another way (`checkout HEAD -- <every file>`,
   `rm`, `update-ref`) are not refused. Tested in `git-guard.test.ts` by running the generated shim against real
   temporary repositories that hold a second actor's tracked, staged and untracked work.
+- **Commit identity in the session's checkout (#1516):** a smoke or scaffold validation must never
+  `git config user.name`/`user.email` (nor `author.*`/`committer.*`) in the checkout it runs from: every later
+  commit there silently inherits it. The same shim refuses that write into the session's own checkout
+  (`PAGS_CHECKOUT`, set by the runner), from any directory in it or by `-C`, and refuses it at
+  `--global`/`--system` scope anywhere. Set `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL`/`GIT_COMMITTER_NAME`/
+  `GIT_COMMITTER_EMAIL` for that one command, use `git -c user.name=… commit`, or configure a disposable
+  `git init` fixture directory of your own; all three pass. Reads, `--unset` (removing an injected override) and
+  non-identity config are untouched, and CI's own ephemeral-runner config is out of scope. An identity-write
+  attempt is audited like any other mutation. Same bypass gaps as above (absolute-path git, rewritten `PATH`,
+  `--git-dir`/`--work-tree` to a path the shim cannot resolve).
 
 Never do this with `git stash` (#1021). The stash is repo-global, so `pop` restores the top of everyone's stack,
 not what you saved. A save that fails or saves nothing still lets a chained `pop` consume someone else's recovery

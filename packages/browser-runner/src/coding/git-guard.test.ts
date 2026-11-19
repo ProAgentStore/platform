@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
@@ -340,6 +340,150 @@ describe("every mutating command through the shim leaves an audit line (#1489)",
 	it("the runner puts the session's id in the engine's environment, so the line can name it", () => {
 		const src = readFileSync(new URL("./headless.ts", import.meta.url), "utf8");
 		expect(src).toMatch(/PAGS_SESSION_ID: this\.config\.id/);
+	});
+});
+
+/**
+ * #1516 — a scaffold smoke run set `git config user.email/user.name` in the user's real checkout instead of a disposable
+ * fixture, and every later commit there would have inherited it. The owner's identity lives in the checkout's own config
+ * here (as it does on a real machine); a smoke identity belongs in the process environment or in a repo of its own.
+ */
+describe("a smoke run cannot overwrite the checkout's author identity (#1516)", () => {
+	const shim = shimRunner();
+	const OWNER = { name: "Owner Name", email: "owner@example.com" };
+	const SMOKE = { email: "published-scaffold-smoke@freeappstore.online", name: "Published Scaffold Smoke" };
+	const fwd = (p: string) => p.replaceAll("\\", "/");
+	/** Real git, but with NO identity from the environment — only what the repository's own config says. */
+	const bare = (args: string[], cwd = repo) => {
+		const { GIT_AUTHOR_NAME: _a, GIT_AUTHOR_EMAIL: _b, GIT_COMMITTER_NAME: _c, GIT_COMMITTER_EMAIL: _d, ...rest } = BASE_ENV;
+		return spawnSync("git", args, { cwd, env: rest, encoding: "utf8" });
+	};
+	const inCheckout = (args: string[], extra: NodeJS.ProcessEnv = {}) => shim(args, { PAGS_CHECKOUT: fwd(repo), ...extra });
+	const localConfig = () => bare(["config", "--local", "--list"]).stdout;
+	const authorOfHead = () => bare(["log", "-1", "--format=%an <%ae>"]).stdout.trim();
+
+	beforeEach(() => {
+		bare(["config", "user.name", OWNER.name]);
+		bare(["config", "user.email", OWNER.email]);
+	});
+
+	it("FAIL-BEFORE: unguarded, the smoke commands persist in .git/config and the next commit is by the smoke identity", () => {
+		bare(["config", "user.email", SMOKE.email]);
+		bare(["config", "user.name", SMOKE.name]);
+		expect(localConfig()).toContain(`user.email=${SMOKE.email}`);
+		writeFileSync(join(repo, "feature.txt"), "feature\n");
+		bare(["add", "feature.txt"]);
+		bare(["commit", "-qm", "feature"]);
+		expect(authorOfHead()).toBe(`${SMOKE.name} <${SMOKE.email}>`);
+	});
+
+	it("PASS-AFTER: the same commands are refused, the repository config is byte-identical, and the next feature commit is the owner's", () => {
+		const before = localConfig();
+		for (const args of [["config", "user.email", SMOKE.email], ["config", "user.name", SMOKE.name]]) {
+			const r = inCheckout(args);
+			expect(r.status, args.join(" ")).toBe(GIT_REFUSED_EXIT);
+			expect(r.stderr).toContain(GIT_REFUSED_MARKER);
+			expect(r.stderr).toMatch(/GIT_AUTHOR_NAME|disposable/);
+		}
+		expect(localConfig()).toBe(before);
+		writeFileSync(join(repo, "feature.txt"), "feature\n");
+		bare(["add", "feature.txt"]);
+		expect(bare(["commit", "-qm", "feature"]).status).toBe(0);
+		expect(authorOfHead()).toBe(`${OWNER.name} <${OWNER.email}>`);
+	});
+
+	it("refuses every way of writing the identity into this checkout, from any directory inside it, before git runs", () => {
+		mkdirSync(join(repo, "pkg"));
+		const before = localConfig();
+		const writes: Array<{ args: string[]; cwd?: string }> = [
+			{ args: ["config", "--local", "user.email", SMOKE.email] },
+			{ args: ["config", "--add", "user.email", SMOKE.email] },
+			{ args: ["config", "--replace-all", "user.name", SMOKE.name] },
+			{ args: ["config", "set", "user.email", SMOKE.email] },
+			{ args: ["config", "USER.EMAIL", SMOKE.email] },
+			{ args: ["config", "author.email", SMOKE.email] },
+			{ args: ["config", "committer.name", SMOKE.name] },
+			{ args: ["config", "--worktree", "user.email", SMOKE.email] },
+			{ args: ["-C", repo, "config", "user.email", SMOKE.email] },
+			{ args: ["-C", join(repo, "pkg"), "config", "user.email", SMOKE.email] },
+			{ args: ["config", "user.email", SMOKE.email], cwd: join(repo, "pkg") },
+		];
+		for (const { args, cwd } of writes) {
+			const r = spawnSync("sh", [join(tmp, "shim-under-test.sh").replaceAll("\\", "/"), ...args], { cwd: cwd ?? repo, env: { ...BASE_ENV, PAGS_CHECKOUT: fwd(repo) }, encoding: "utf8" });
+			expect(r.status, `${cwd ? "(in pkg) " : ""}${args.join(" ")}`).toBe(GIT_REFUSED_EXIT);
+		}
+		expect(localConfig()).toBe(before);
+	});
+
+	it("refuses a GLOBAL or system identity write from anywhere — a smoke test never changes the owner's identity", () => {
+		for (const scope of ["--global", "--system"]) {
+			// No PAGS_CHECKOUT at all: the refusal does not depend on which repository the command is run in.
+			const r = shim(["config", scope, "user.email", SMOKE.email]);
+			expect(r.status, scope).toBe(GIT_REFUSED_EXIT);
+			expect(r.stderr).toMatch(/every repository on this machine/);
+		}
+	});
+
+	it("CONTROL: a disposable fixture repo of its own may carry the smoke identity, and the checkout is untouched", () => {
+		const before = localConfig();
+		const fixture = mkdtempSync(join(tmp, "fixture-"));
+		bare(["init", "-q", "-b", "main"], fixture);
+		const run = (args: string[]) => spawnSync("sh", [join(tmp, "shim-under-test.sh").replaceAll("\\", "/"), ...args], { cwd: fixture, env: { ...BASE_ENV, PAGS_CHECKOUT: fwd(repo) }, encoding: "utf8" });
+		expect(run(["config", "user.email", SMOKE.email]).status).toBe(0);
+		expect(run(["config", "user.name", SMOKE.name]).status).toBe(0);
+		writeFileSync(join(fixture, "f"), "x\n");
+		bare(["add", "f"], fixture);
+		bare(["commit", "-qm", "smoke"], fixture);
+		expect(bare(["log", "-1", "--format=%ae"], fixture).stdout.trim()).toBe(SMOKE.email);
+		// Reaching the fixture by -C from inside the checkout is the same repository, so it is allowed too.
+		expect(inCheckout(["-C", fixture, "config", "user.email", "other@fixture.example"]).status).toBe(0);
+		expect(localConfig()).toBe(before);
+	});
+
+	it("CONTROL: the per-process route — GIT_AUTHOR_*/GIT_COMMITTER_* and `-c` — works and leaves the checkout's config alone", () => {
+		const before = localConfig();
+		writeFileSync(join(repo, "smoke.txt"), "smoke\n");
+		bare(["add", "smoke.txt"]);
+		const viaEnv = shim(["commit", "-qm", "smoke via env"], { PAGS_CHECKOUT: fwd(repo), GIT_AUTHOR_NAME: SMOKE.name, GIT_AUTHOR_EMAIL: SMOKE.email, GIT_COMMITTER_NAME: SMOKE.name, GIT_COMMITTER_EMAIL: SMOKE.email });
+		expect(viaEnv.status).toBe(0);
+		expect(authorOfHead()).toBe(`${SMOKE.name} <${SMOKE.email}>`);
+		writeFileSync(join(repo, "smoke2.txt"), "smoke\n");
+		bare(["add", "smoke2.txt"]);
+		const { GIT_AUTHOR_NAME: _a, GIT_AUTHOR_EMAIL: _b, GIT_COMMITTER_NAME: _c, GIT_COMMITTER_EMAIL: _d, ...noIdentity } = BASE_ENV;
+		const viaC = spawnSync("sh", [join(tmp, "shim-under-test.sh").replaceAll("\\", "/"), "-c", `user.name=${SMOKE.name}`, "-c", `user.email=${SMOKE.email}`, "commit", "-qm", "smoke via -c"], { cwd: repo, env: { ...noIdentity, PAGS_CHECKOUT: fwd(repo) }, encoding: "utf8" });
+		expect(viaC.status, viaC.stderr).toBe(0);
+		expect(localConfig()).toBe(before);
+		writeFileSync(join(repo, "feature.txt"), "feature\n");
+		bare(["add", "feature.txt"]);
+		bare(["commit", "-qm", "feature"]);
+		expect(authorOfHead()).toBe(`${OWNER.name} <${OWNER.email}>`);
+	});
+
+	it("CONTROL: reading the identity, other config, and removing an injected override are not refused", () => {
+		for (const args of [["config", "user.email"], ["config", "--get", "user.name"], ["config", "--get-all", "user.email"], ["config", "--list"], ["config", "-l"], ["config", "core.autocrlf", "false"], ["config", "--local", "--unset-all", "user.nope"]]) {
+			const r = inCheckout(args);
+			expect(r.status === 0 || r.status === 5, `${args.join(" ")} -> ${r.status} ${r.stderr}`).toBe(true);
+		}
+		bare(["config", "user.email", "injected@example.com"]);
+		expect(inCheckout(["config", "--local", "--unset", "user.email"]).status).toBe(0);
+		expect(bare(["config", "--local", "--get", "user.email"]).status).toBe(1);
+	});
+
+	it("an identity write is audited, allowed or refused; ordinary config reads are not", () => {
+		const log = join(tmp, "identity-audit.log").replaceAll("\\", "/");
+		const env = { PAGS_SESSION_ID: "csess_1516", PAGS_GIT_AUDIT_LOG: log };
+		inCheckout(["config", "user.email", SMOKE.email], env);
+		inCheckout(["config", "--get", "user.email"], env);
+		inCheckout(["config", "--list"], env);
+		const lines = readFileSync(log, "utf8").split("\n").filter(Boolean);
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).toMatch(/\trefused\tconfig\tsession=csess_1516\t/);
+		expect(lines[0]).toContain(`config user.email ${SMOKE.email}`);
+	});
+
+	it("the runner tells the shim which checkout the session works in", () => {
+		const src = readFileSync(new URL("./headless.ts", import.meta.url), "utf8");
+		expect(src).toMatch(/PAGS_CHECKOUT: this\.config\.workDir/);
 	});
 });
 

@@ -37,6 +37,10 @@
  *   clean (unless -n / --dry-run)                   deletes untracked files and directories
  *   checkout / switch -f, --force, --discard-changes  throw away local changes in order to switch
  *   checkout / restore of the WHOLE tree (".", ":/")  the worktree-wide form of the same
+ *   config user.name / user.email (and author./committer.) — #1516: written into THIS session's checkout, or at
+ *                                                   --global/--system scope anywhere. A smoke or fixture run sets
+ *                                                   GIT_AUTHOR_* / GIT_COMMITTER_* for that one command, or configures
+ *                                                   its own disposable repo; reads, --unset and `-c` are untouched.
  *
  * A targeted restore (`git checkout HEAD -- a.ts`), a staging change (`reset`, `restore --staged`), a branch switch,
  * rebase, merge and commit are untouched: they cannot reach another actor's files by accident. For bulk compare or
@@ -104,13 +108,13 @@ REAL=${sq(realGit)}
 AUDIT=${sq(auditFile)}
 set -f
 
-state=global; skip=0; sub=""; subidx=0; idx=0; action=""; ref1=""; ref2=""
+state=global; skip=0; nextc=0; cdir=""; sub=""; subidx=0; idx=0; action=""; ref1=""; ref2=""
 for a in "$@"; do
   idx=$((idx + 1))
-  if [ "$skip" = 1 ]; then skip=0; continue; fi
+  if [ "$skip" = 1 ]; then skip=0; if [ "$nextc" = 1 ]; then cdir="$a"; nextc=0; fi; continue; fi
   if [ "$state" = global ]; then
     case "$a" in
-      -C|-c|--git-dir|--work-tree|--namespace|--config-env|--super-prefix) skip=1 ;;
+      -C|-c|--git-dir|--work-tree|--namespace|--config-env|--super-prefix) skip=1; [ "$a" = -C ] && nextc=1 ;;
       -*) : ;;
       *) sub="$a"; subidx=$idx; state=args ;;
     esac

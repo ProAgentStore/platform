@@ -339,7 +339,7 @@ export class HeadlessSession {
 
 	/** The env every turn is spawned with — one expression, three call sites. See engine-env.ts. */
 	private get spawnEnv(): NodeJS.ProcessEnv {
-		return engineSpawnEnv({ ...(this.config.env ?? {}), PAGS_SESSION_ID: this.config.id }, this.config.ghScope, this.config.ghGuardRoot); // #1489: PAGS_SESSION_ID names whose git command the shim audits
+		return engineSpawnEnv({ ...(this.config.env ?? {}), PAGS_SESSION_ID: this.config.id, PAGS_CHECKOUT: this.config.workDir }, this.config.ghScope, this.config.ghGuardRoot); // #1489/#1516: the git shim audits by session and guards this checkout's identity
 	}
 
 	/** The env an engine is SPAWNED with (#1265): the credential env plus the session marker and a per-run TMPDIR. Apart from {@link spawnEnv}, which `authResolved` reads. */
