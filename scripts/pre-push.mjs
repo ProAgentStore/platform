@@ -7,7 +7,8 @@
  * a round trip. Run it by hand with `node scripts/pre-push.mjs` (it then checks against origin/main).
  *
  * 1. CI's guard scripts, with CI's arguments (`CI_GUARDS`), and the docs-drift check.
- * 2. The typecheck of each workspace project the push touches, as CI runs it.
+ * 2. The typecheck of each workspace project the push touches, as CI runs it. Where that needs the host
+ *    Worker's generated pages (#1564) they are built if their inputs exist, else the hook stops and says what to build.
  * 3. `vitest related` over the pushed source files — the unit tests that import them. NOT the full
  *    suite (`pnpm -w test:full`), which stays CI's job: a change to a core module can still pull in
  *    a few thousand tests here (about 40s measured), a leaf module a few hundred (about 10s).
@@ -16,7 +17,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { spawnPortableSync } from "./lib/portable-command.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { CI_GUARDS, relatedTestTargets, typecheckCommands } from "./lib/hook-plan.mjs";
+import { CI_GUARDS, hostPagesPlan, relatedTestTargets, typecheckCommands } from "./lib/hook-plan.mjs";
 import { workspaceMembers } from "./lib/workspace-members.mjs";
 
 const root = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
@@ -66,7 +67,15 @@ if (changed.length) {
 		const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
 		return { typecheck: Boolean(pkg.scripts?.typecheck), testConfig: existsSync(join(dir, "tsconfig.test.json")) };
 	};
-	for (const [cmd, ...args] of typecheckCommands(changed, members, info)) run(cmd, args);
+	const typechecks = typecheckCommands(changed, members, info);
+	// #1564: `tsc` has no stub resolver, so a clean checkout's missing generated host pages are built (as CI does) or reported precisely.
+	const host = hostPagesPlan(typechecks, (p) => existsSync(join(root, p)));
+	if (host.action === "build") run(host.command[0], host.command.slice(1));
+	else if (host.action === "report") {
+		console.error(host.message);
+		process.exit(1);
+	}
+	for (const [cmd, ...args] of typechecks) run(cmd, args);
 
 	const related = relatedTestTargets(changed);
 	if (related.length) run("pnpm", ["exec", "vitest", "related", "--run", "--project", "unit", "--passWithNoTests", ...related]);

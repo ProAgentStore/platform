@@ -72,6 +72,77 @@ export function typecheckCommands(files, members, info) {
 	return cmds;
 }
 
+/**
+ * The host Worker's generated pages (#1564). `workers/host/src/pages.ts` is build output — `build.js` inlines `store/` into it —
+ * and gitignored, so a clean checkout does not have it. Vitest never notices (`vitest.config.ts` routes `./pages.js` to a stub), but
+ * `tsc` has no such resolver: the API's cross-package tests import `workers/host/src/index.ts`, which imports `./pages.js`, and
+ * `tsc -p tsconfig.test.json` fails with TS2307 on a bare frozen-lockfile install.
+ */
+export const HOST_PAGES = "workers/host/src/pages.ts";
+
+/** Everything `workers/host/build.js` READS before it can write {@link HOST_PAGES} — it cannot run standalone. */
+export const HOST_BUILD_INPUTS = [
+	"store/console/dist/assets/bundle.js",
+	"store/console/dist/assets/index.css",
+	"store/admin/dist/assets/bundle.js",
+	"store/admin/dist/assets/index.css",
+	"store/docs/sitemap.xml",
+];
+
+/** CI's own prerequisite steps for that build, verbatim and in order (`.github/workflows/ci.yml`); `hook-plan.test.mjs` pins them. */
+export const HOST_PREREQUISITES = [
+	"python3 -m pip install zensical==0.0.44",
+	"cd packages/sdk && npx tsc",
+	"pnpm docs:build",
+	"cd store/console && npx vite build",
+	"cd store/admin && npx vite build",
+	"cd workers/host && node build.js",
+];
+
+/** The projects whose TEST typecheck reaches the host Worker's index (cross-package tests). Add a member here if its tests start to. */
+const HOST_TEST_DEPENDENTS = ["workers/api"];
+
+/** The typecheck commands (argv lists, as {@link typecheckCommands} returns them) that need {@link HOST_PAGES} to exist. */
+export function commandsNeedingHostPages(cmds) {
+	return cmds.filter((argv) => {
+		const dir = argv[argv.indexOf("--dir") + 1];
+		if (dir === "workers/host") return true; // the host's own program imports ./pages.js
+		return HOST_TEST_DEPENDENTS.includes(dir) && argv.includes("tsconfig.test.json");
+	});
+}
+
+/**
+ * What to do about the generated host pages before these typecheck commands run (#1564):
+ *   `none`   — nothing needs them, or they exist;
+ *   `build`  — they are missing but everything `build.js` reads is on disk: run it, exactly as CI does;
+ *   `report` — they are missing AND so is something `build.js` needs: stop, and say precisely what and how, instead of letting
+ *              `tsc` fail with a bare TS2307 that names neither the file nor the way back.
+ * Nothing is faked: no stub declaration is ever written for `tsc`.
+ *
+ * @param {string[][]} cmds the typecheck commands about to run
+ * @param {(repoRelativePath: string) => boolean} exists
+ */
+export function hostPagesPlan(cmds, exists) {
+	const needing = commandsNeedingHostPages(cmds);
+	if (!needing.length || exists(HOST_PAGES)) return { action: "none" };
+	const missing = HOST_BUILD_INPUTS.filter((p) => !exists(p));
+	if (!missing.length) return { action: "build", command: ["node", "workers/host/build.js"] };
+	return { action: "report", missing, needing, message: hostPagesMessage(missing, needing) };
+}
+
+/** The refusal, written for someone standing in a clean checkout with a push that just stopped. */
+export function hostPagesMessage(missing, needing) {
+	return [
+		`[pre-push] ${HOST_PAGES} is missing, and it is build output (gitignored), so a clean checkout never has it.`,
+		`  \`tsc\` cannot resolve ./pages.js without it, so this step would fail with TS2307: ${needing.map((a) => a.join(" ")).join("; ")}`,
+		"  Building it needs files that are missing too:",
+		...missing.map((p) => `    - ${p}`),
+		"  Build them the way CI does, in this order, then push again:",
+		...HOST_PREREQUISITES.map((c) => `    ${c}`),
+		"  (Nothing was pushed. The hook never writes a stand-in for pages.ts: that would hide a real failure.)",
+	].join("\n");
+}
+
 /** Files `vitest related` can trace — it runs the tests that import them, and changed tests themselves. */
 export function relatedTestTargets(files) {
 	return files.filter((f) => TESTABLE_EXT.test(f) && !f.endsWith(".d.ts"));

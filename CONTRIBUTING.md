@@ -44,7 +44,11 @@ activation (a packaging job, say), install with `HUSKY=0`.
   runs CI's Biome lint (`--error-on-warnings`) over the staged files CI lints.
 - **pre-push** (typically 30-60 s): runs CI's guard scripts with CI's arguments, plus
   `docs:drift`. Then it typechecks each workspace project the push touches, as CI does: its
-  `typecheck` script, plus `tsconfig.test.json` where one exists. Last, it runs
+  `typecheck` script, plus `tsconfig.test.json` where one exists. The API's test typecheck reaches
+  the host Worker's generated `workers/host/src/pages.ts`, which a clean checkout does not have
+  (#1564): if the files `workers/host/build.js` reads are on disk the hook runs it, as CI does;
+  if not, it stops and lists exactly what is missing and CI's build steps, in order, instead of
+  letting `tsc` fail with a bare TS2307. It never writes a stand-in for the file. Last, it runs
   `vitest related` over the pushed source files. That is the unit tests importing them, not the
   full suite.
 
