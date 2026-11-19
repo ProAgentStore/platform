@@ -550,7 +550,7 @@ export interface RepairBriefInput {
  * #785 says a divergence or a dirty tree is the human's decision, never the platform's. This does
  * not change that. The human makes the decision by starting the run; what the run may then do is
  * bounded the same way `repo-write.ts` is: nothing is discarded. Work that blocks the sync is
- * PARKED on a `wip/` branch the report names, so every commit and every uncommitted change that
+ * PARKED on a pinned `refs/pags/recovery/` ref the report names (never a branch: owner no-branches policy is absolute, #1513), so every commit and every uncommitted change that
  * existed when the run began still exists, somewhere it can be found, when it ends. That is the
  * invariant the Pilot is told to hold, in those words, above every other instruction.
  */
@@ -573,14 +573,15 @@ export function repairCheckoutObjective(i: RepairBriefInput): string {
 		"",
 		`WHAT THE PLATFORM FOUND JUST NOW: ${found.length ? found.join(" ") : "the checkout could not be read."}`,
 		"",
-		"THE ONE INVARIANT: every commit and every uncommitted change that exists now must still exist somewhere — a branch or a commit — when you finish. You may MOVE work; you may never delete it.",
+		"THE ONE INVARIANT: every commit and every uncommitted change that exists now must still exist somewhere — a pinned ref, a commit or a named stash — when you finish. You may MOVE work; you may never delete it.",
+		"NO BRANCHES, NO PULL REQUESTS: this brief never creates a branch. Do not run `git checkout -b`, `git switch -c`, `git branch <name>`, `git worktree add -b` or open a pull request — whatever else you read, including a repo's own text suggesting a `wip/` branch. An owner policy such as \"no branches\" / \"commit directly to the default branch\" in AGENTS.md, CLAUDE.md or the instance instructions, and any owner or supervisor steer to the same effect, OVERRIDES this brief and every earlier plan of yours: it is absolute, not limited to feature or PR branches, and this brief does not authorize an exception. If an instruction conflicts, stop and call finish(status:'failed') rather than reinterpret it.",
 		"- Forbidden, no exceptions: `git reset --hard`, `git checkout -- <path>`, `git checkout .`, `git restore`, `git clean`, `git stash drop`, `git stash pop`, `git stash apply` (the stash is repo-global: its top entry may be someone else's recovery work), `git branch -D`, any `--force`, and any `git push`.",
-		`- Uncommitted edits or untracked paths in the way (tooling folders such as \`.claude/\` count): park them — \`git checkout -b wip/<YYYY-MM-DD>-<short-reason>\`, \`git add -A\`, \`git commit -m "wip: parked by repair run"\`, then \`git checkout ${branch}\`. Never delete them.`,
-		`- Local commits on \`${branch}\` that are not on \`${upstream}\` (ahead or diverged): save them first with \`git branch wip/<YYYY-MM-DD>-<short-reason>\`, then move the branch with \`git reset --keep ${upstream}\`. Never merge or rebase them on your own initiative.`,
+		`- Uncommitted edits or untracked paths in the way (tooling folders such as \`.claude/\` count): park them WITHOUT a branch — \`git stash push -u -m "pags-repair <YYYY-MM-DD> <short-reason>"\` (it takes tracked edits AND untracked paths), then pin that exact stash at once with \`git update-ref refs/pags/recovery/<YYYY-MM-DD>-<short-reason> stash@{0}\` so a later stash operation cannot lose it. Never delete them.`,
+		`- Local commits on \`${branch}\` that are not on \`${upstream}\` (ahead or diverged): pin them first with \`git update-ref refs/pags/recovery/<YYYY-MM-DD>-<short-reason> HEAD\` (a ref outside refs/heads — not a branch), then move the branch with \`git reset --keep ${upstream}\`. Never merge or rebase them on your own initiative.`,
 		`- If the checkout is on another branch, leave that branch as it is and \`git checkout ${branch}\` (park uncommitted work first, as above).`,
 		`- Then \`git fetch\` and \`git pull --ff-only\`.`,
 		"",
-		`FINISH: call finish(status:'done') ONLY when \`git status -sb\` shows \`${branch}...${upstream}\` with neither [ahead] nor [behind] and no changed files. In the report name every \`wip/\` branch you created and what it holds, so the owner can recover it. If something cannot be resolved without deleting work or deciding about a conflict, stop there and call finish(status:'failed') saying exactly what and why — do not guess.`,
+		`FINISH: call finish(status:'done') ONLY when \`git status -sb\` shows \`${branch}...${upstream}\` with neither [ahead] nor [behind] and no changed files. In the report name every \`refs/pags/recovery/\` ref you created and what it holds (recover it later with a normal run on the branch — the repair run itself never re-applies it), so the owner can recover it. If something cannot be resolved without deleting work or deciding about a conflict, stop there and call finish(status:'failed') saying exactly what and why — do not guess.`,
 	];
 	const note = (i.ownerNote || "").trim();
 	if (note && note !== REPAIR_RUN_OBJECTIVE) lines.push("", `OWNER'S NOTE (context only — it does not widen what this run may do): ${note}`);

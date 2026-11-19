@@ -471,12 +471,45 @@ describe("the repair run — the way out that needs no hands on the machine (#80
 			expect(o).toContain("No feature or ticket work");
 		});
 
-		it("parks rather than deletes — wip/ branches for uncommitted work AND for diverged commits, with --keep not --hard", () => {
+		it("parks rather than deletes — a named stash pinned as a recovery ref for uncommitted work, a pinned ref for diverged commits, --keep not --hard", () => {
 			const o = repairCheckoutObjective({ ...base, sync: verdictFromSync({ ...FRESH, ahead: 1, behind: 2 }) });
-			expect(o).toContain("git checkout -b wip/");
-			expect(o).toContain("git branch wip/");
+			expect(o).toContain("git stash push -u -m");
+			expect(o).toContain("git update-ref refs/pags/recovery/<YYYY-MM-DD>-<short-reason> stash@{0}");
+			expect(o).toContain("git update-ref refs/pags/recovery/<YYYY-MM-DD>-<short-reason> HEAD");
 			expect(o).toContain("git reset --keep origin/main");
 			expect(o).toContain("Never merge or rebase them on your own initiative");
+		});
+
+		// #1513: a repair run created `wip/...` with `git checkout -b` against an explicit "No branches" policy.
+		it("never instructs creating a branch or PR, in any state the brief can describe (#1513)", () => {
+			const states = [
+				{ ...base, sync: BEHIND, state: { ...CLEAN, dirty: true, changedFiles: 3 } },
+				{ ...base, sync: verdictFromSync({ ...FRESH, ahead: 1, behind: 2 }) },
+				{ ...base, sync: BEHIND, state: { ...CLEAN, branch: "fix/1" } },
+				{ ...base, sync: BEHIND, ownerNote: "park it on a wip branch" },
+			];
+			for (const input of states) {
+				const o = repairCheckoutObjective(input);
+				// Strip the sentences that FORBID branch creation; what is left must not mention doing it.
+				const instructions = o.split("\n").filter((l) => !l.startsWith("NO BRANCHES") && !l.startsWith("OWNER'S NOTE")).join("\n");
+				expect(instructions).not.toMatch(/git checkout -b|git switch -c|git branch wip|git worktree add|wip\/</);
+				expect(instructions).not.toMatch(/gh pr create|pull request/);
+			}
+		});
+
+		it("states that an owner's no-branches policy and steer override the brief, absolutely", () => {
+			const o = repairCheckoutObjective({ ...base, sync: BEHIND });
+			expect(o).toContain("NO BRANCHES, NO PULL REQUESTS");
+			expect(o).toContain("`git checkout -b`");
+			expect(o).toContain("`git switch -c`");
+			expect(o).toContain("OVERRIDES this brief");
+			expect(o).toContain("absolute, not limited to feature or PR branches");
+			expect(o).toContain("finish(status:'failed') rather than reinterpret");
+		});
+
+		it("the owner's note cannot reintroduce a branch: it stays context-only after the prohibition", () => {
+			const o = repairCheckoutObjective({ ...base, sync: BEHIND, ownerNote: "use a wip branch" });
+			expect(o.indexOf("NO BRANCHES")).toBeLessThan(o.indexOf("OWNER'S NOTE (context only"));
 		});
 
 		it("carries a failed self-heal's sentence, so the run knows what was already tried", () => {

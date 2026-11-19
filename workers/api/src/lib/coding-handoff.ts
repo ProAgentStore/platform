@@ -40,7 +40,7 @@
  *   continue it     a run for the claimed issue is admitted, and told it is recovering.
  *   repair it       `repair_checkout` is admitted: a repair run's whole brief is to get a checkout
  *                   back in order without discarding anything (work in the way is parked on a
- *                   `wip/` branch its report names).
+ *                   pinned `refs/pags/recovery/` ref its report names).
  *
  * PURE — no D1, no Env, no fetch. `coding-handoff-store.ts` brings the claim and the probe.
  */
