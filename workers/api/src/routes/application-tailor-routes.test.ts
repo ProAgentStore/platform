@@ -708,3 +708,154 @@ describe("reading a tailoring run from any instance of the pipeline (#1548)", ()
 		expect(await runCount()).toBe(1);
 	});
 });
+
+/**
+ * #1552 — `retry_tailoring` retained a failed lead verification without rechecking the live job.
+ *
+ * An email-sourced lead is verified by the target Application Runner before any run exists. On HCL application f4b8782d that stopped
+ * with verification.state `unverifiable`, reason `runner_unavailable`, because the Tailor→Runner connection was paused. After the
+ * connection was restored, retry_tailoring started a run — carrying the FAILED snapshot, never asking the now-connected Runner about
+ * the live page or its apply path. A retry now rechecks whenever the stored verification is not `live`, and an unverifiable or
+ * expired lead stays blocked with the NEW evidence rather than the old one.
+ */
+describe("retry_tailoring rechecks the live job through the connected Runner (#1552)", () => {
+	const URL1 = "https://jobs.example.com/role/hcl";
+	const APPLY1 = "https://jobs.example.com/role/hcl/apply";
+	const LIVE = { state: "live", jobUrl: URL1, applyUrl: APPLY1, evidence: "apply_control_present" };
+	const pathsSent = () => sent.map((x) => x.path);
+
+	function emailEvent(id = "email-hcl", url = URL1) {
+		const plan = planJobLeadTriage({ id, data: { ...LEAD_RECORD.data, source: "Gmail", status: "unverified", url } } as never, { action: "apply", sourceInstanceId: "scout" }, { now: "2026-10-07T00:00:00.000Z" });
+		if (!plan.ok || !plan.event) throw new Error("email fixture did not plan");
+		return plan.event;
+	}
+	type Row = { id: string; status: string; state_version: number; block_reason: string | null; block_questions: string | null; lead: string; idempotency_key: string; submit_attempted_at: number | null };
+	const row = (leadId = "email-hcl") =>
+		d1.DB.prepare("SELECT id, status, state_version, block_reason, block_questions, lead, idempotency_key, submit_attempted_at FROM job_applications WHERE lead_id = ?1").bind(leadId).first<Row>();
+	const verification = async (leadId?: string) => JSON.parse((await row(leadId))!.lead) as { verification?: Record<string, unknown>; leadUrl?: string; lead?: { url?: string } };
+	const retry = (id: string, version: number, status = "blocked") => call("POST", "/t1/application-queue/actions", { action: "retry_tailoring", application_id: id, expected_status: status, expected_version: version });
+
+	/** The reported start: the Tailor→Runner connection is paused, so the lead stops unverifiable (runner_unavailable). */
+	async function stoppedWhilePaused(): Promise<Row> {
+		d1.exec("UPDATE agent_connections SET enabled = 0 WHERE id = 'c-ready'");
+		await deliverEvent(env(), "scout", "u1", JOB_LEAD_APPLY_EVENT, [emailEvent()], { traceId: "t-hcl" });
+		const blocked = (await row())!;
+		expect(blocked).toMatchObject({ status: "blocked", block_reason: "unverifiable_lead" });
+		expect((await verification()).verification).toMatchObject({ state: "unverifiable", reason: "runner_unavailable", checked_by: "application_runner" });
+		expect(sent).toEqual([]); // nothing was read, nothing was prepared
+		sent.length = 0;
+		return blocked;
+	}
+	const reconnect = () => d1.exec("UPDATE agent_connections SET enabled = 1 WHERE id = 'c-ready'");
+
+	it("THE REPORTED FAILURE: unavailable → available — the retry reads the live job first, then prepares with the REFRESHED evidence", async () => {
+		const blocked = await stoppedWhilePaused();
+		reconnect();
+		answers["/local-apply/preflight"] = { status: 200, body: LIVE };
+		const r = await retry(blocked.id, blocked.state_version);
+		expect(r.status, JSON.stringify(r.body)).toBe(200);
+		// The Runner is asked about the live page BEFORE the Tailor's run, in that order.
+		expect(pathsSent()).toEqual(["/local-apply/preflight", "/local-artifact/run"]);
+		expect(sent[0].body).toMatchObject({ jobUrl: URL1 });
+		// The failed snapshot is gone: the stored verification is the new live one, and the lead now points at the apply path.
+		const after = await verification();
+		expect(after.verification).toMatchObject({ state: "live", applyUrl: APPLY1, checked_by: "application_runner" });
+		expect(after.leadUrl).toBe(APPLY1);
+		expect(after.lead?.url).toBe(APPLY1);
+		expect((sent[1].body as { lead: { leadUrl: string } }).lead.leadUrl).toBe(APPLY1);
+		// Same application, same key: no duplicate work.
+		const now = (await row())!;
+		expect(now).toMatchObject({ id: blocked.id, idempotency_key: blocked.idempotency_key, status: "tailoring", block_reason: null });
+		expect(await appCount()).toBe(1);
+		expect(await runCount()).toBe(1);
+		expect(now.submit_attempted_at).toBeNull();
+	});
+
+	it("a lead that is STILL unverifiable stays blocked with the new evidence and reason, prepares nothing, and says so", async () => {
+		const blocked = await stoppedWhilePaused();
+		reconnect();
+		answers["/local-apply/preflight"] = { status: 200, body: { state: "unverifiable", jobUrl: URL1, reason: "no_active_apply_path" } };
+		const r = await retry(blocked.id, blocked.state_version);
+		expect(r.status).toBe(409);
+		expect(JSON.stringify(r.body)).toMatch(/no materials were prepared/);
+		expect(pathsSent()).toEqual(["/local-apply/preflight"]); // asked, and nothing was started
+		const now = (await row())!;
+		expect(now).toMatchObject({ id: blocked.id, status: "blocked", block_reason: "unverifiable_lead", state_version: blocked.state_version });
+		expect((await verification()).verification).toMatchObject({ state: "unverifiable", reason: "no_active_apply_path", checked_by: "application_runner" });
+		expect(JSON.parse(now.block_questions ?? "[]").length).toBeGreaterThan(0);
+		expect(await runCount()).toBe(0);
+	});
+
+	it("a Runner that is STILL unavailable keeps the lead blocked and says that, with fresh evidence — the old reason is not recycled as new", async () => {
+		const blocked = await stoppedWhilePaused();
+		const before = (await verification()).verification as { checked_at: string };
+		const r = await retry(blocked.id, blocked.state_version);
+		expect(r.status).toBe(409);
+		expect(pathsSent()).toEqual([]); // no connected Runner exists to ask
+		expect(await runCount()).toBe(0);
+		const after = (await verification()).verification as { state: string; reason: string; checked_at: string };
+		expect(after).toMatchObject({ state: "unverifiable", reason: "runner_unavailable" });
+		expect(Date.parse(after.checked_at)).toBeGreaterThanOrEqual(Date.parse(before.checked_at));
+		expect((await row())?.status).toBe("blocked");
+	});
+
+	it("an EXPIRED posting found on the retry is recorded as unavailable and blocks with its own reason", async () => {
+		const blocked = await stoppedWhilePaused();
+		reconnect();
+		answers["/local-apply/preflight"] = { status: 200, body: { state: "unavailable", jobUrl: URL1, reason: "expired" } };
+		const r = await retry(blocked.id, blocked.state_version);
+		expect(r.status).toBe(409);
+		expect(pathsSent()).toEqual(["/local-apply/preflight"]);
+		expect(await row()).toMatchObject({ status: "blocked", block_reason: "job_unavailable" });
+		expect((await verification()).verification).toMatchObject({ state: "unavailable", reason: "expired" });
+		expect(await runCount()).toBe(0);
+	});
+
+	it("recovery then a second click: the stale retry finds the same application and neither rechecks nor starts another run", async () => {
+		const blocked = await stoppedWhilePaused();
+		reconnect();
+		answers["/local-apply/preflight"] = { status: 200, body: LIVE };
+		expect((await retry(blocked.id, blocked.state_version)).status).toBe(200);
+		sent.length = 0;
+		const again = await retry(blocked.id, blocked.state_version); // stale: the application has moved on
+		expect(again.status).toBeGreaterThanOrEqual(400);
+		expect(pathsSent()).not.toContain("/local-apply/preflight");
+		expect(await appCount()).toBe(1);
+		expect(await runCount()).toBe(1);
+	});
+
+	it("CONTROL: a lead whose stored verification is already LIVE is not read again — no duplicate work", async () => {
+		answers["/local-apply/preflight"] = { status: 200, body: LIVE };
+		await deliverEvent(env(), "scout", "u1", JOB_LEAD_APPLY_EVENT, [emailEvent()], { traceId: "t-live" });
+		const app = (await row())!;
+		expect(app.status).toBe("tailoring");
+		expect((await verification()).verification).toMatchObject({ state: "live" });
+		const cancelled = await call("POST", `/t1/applications/${app.id}/cancel`);
+		expect(cancelled.status).toBe(200);
+		sent.length = 0;
+		const r = await retry(app.id, (await row())!.state_version, "cancelled");
+		expect(r.status, JSON.stringify(r.body)).toBe(200);
+		expect(pathsSent()).toEqual(["/local-artifact/run"]); // the run, and NO second preflight
+	});
+
+	it("CONTROL: a Scout lead that never needed verification is retried exactly as before", async () => {
+		const started = await call("POST", "/t1/applications", { event: leadEvent() });
+		const app = started.body.application as { id: string };
+		expect((await call("POST", `/t1/applications/${app.id}/cancel`)).status).toBe(200);
+		sent.length = 0;
+		const r = await retry(app.id, (await d1.DB.prepare("SELECT state_version FROM job_applications WHERE id = ?1").bind(app.id).first<{ state_version: number }>())!.state_version, "cancelled");
+		expect(r.status, JSON.stringify(r.body)).toBe(200);
+		expect(pathsSent()).toEqual(["/local-artifact/run"]);
+	});
+
+	it("CONTROL: an application whose submission may have been attempted is refused BEFORE any recheck, and its state is untouched", async () => {
+		const blocked = await stoppedWhilePaused();
+		reconnect();
+		d1.exec(`UPDATE job_applications SET submit_attempted_at = 1 WHERE id = '${blocked.id}'`);
+		answers["/local-apply/preflight"] = { status: 200, body: LIVE };
+		const r = await retry(blocked.id, blocked.state_version);
+		expect(r.status).toBe(409);
+		expect(pathsSent()).toEqual([]);
+		expect(await row()).toMatchObject({ status: "blocked", submit_attempted_at: 1 });
+	});
+});

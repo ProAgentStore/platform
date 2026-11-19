@@ -258,6 +258,32 @@ function preflightDisposition(app: JobApplication): { disposition: LeadDispositi
 	return null;
 }
 
+/**
+ * Replace an application's stored lead with a fresh live-verification result (#1552) — compare-and-set on its status and
+ * state version, and NO state change: the status, the version and the audit trail stay exactly as they were. `block` also
+ * rewrites the application's stated blocker, but only while it is `blocked`, so a still-unverifiable lead says why NOW rather
+ * than repeating a reason from before the Runner reconnected.
+ */
+export async function recordLeadVerification(
+	env: DB,
+	app: Pick<JobApplication, "id" | "status" | "stateVersion">,
+	userId: string,
+	lead: unknown,
+	block: { reason: string; questions: string[] } | null,
+	now: number,
+): Promise<boolean> {
+	const res = await env.DB.prepare(
+		`UPDATE job_applications
+		    SET lead = ?1, updated_at = ?2,
+		        block_reason = CASE WHEN ?3 IS NOT NULL AND status = 'blocked' THEN ?3 ELSE block_reason END,
+		        block_questions = CASE WHEN ?3 IS NOT NULL AND status = 'blocked' THEN ?4 ELSE block_questions END
+		  WHERE id = ?5 AND user_id = ?6 AND status = ?7 AND state_version = ?8`,
+	)
+		.bind(JSON.stringify(lead ?? null), now, block?.reason ?? null, block ? JSON.stringify(block.questions) : null, app.id, userId, app.status, app.stateVersion)
+		.run();
+	return (res.meta?.changes ?? 0) > 0;
+}
+
 export async function writeBackToLead(env: DB, userId: string, applicationId: string): Promise<boolean> {
 	if (!env.AGENT) return false;
 	const app = await getOwnedApplication(env, userId, applicationId);

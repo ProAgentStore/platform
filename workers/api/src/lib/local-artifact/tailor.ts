@@ -55,6 +55,7 @@ import {
 	type TraceEvent,
 	activeTailorRuns,
 	claimApplication,
+	recordLeadVerification,
 	createTailorRun,
 	effectiveTailorSettings,
 	getApplication,
@@ -145,6 +146,39 @@ async function preflightEmailLead(env: Env, tailorInstanceId: string, uid: strin
 		if (error instanceof Error && /^(Website access requires CLI|Saved website access settings are invalid)/.test(error.message)) return { ok: false, reason: "unverifiable_lead", question: error.message, result: { state: "unverifiable", jobUrl, reason: "runner_incompatible" } };
 		return { ok: false, reason: "unverifiable_lead", question: "The Application Runner could not complete the read-only live-page verification. No materials were prepared.", result: { state: "unverifiable", jobUrl, reason: "navigation_failed" } };
 	}
+}
+
+/**
+ * Recheck a lead's live job through the CURRENTLY connected Runner before a retry prepares anything (#1552).
+ *
+ * `startTailoring` verifies an email-sourced or pasted lead with the Runner before a run exists. A Runner that was paused or
+ * offline then leaves `verification.state: unverifiable` on the application, and `retryTailoring` used to read that stored lead
+ * and dispatch with the failed snapshot still attached — never asking the now-connected Runner about the live page or its apply
+ * path. A retry now looks again whenever the stored verification is not `live`:
+ *   - live: the refreshed evidence and apply URL are stored, and the retry goes on with them;
+ *   - anything else (still unverifiable, expired): the NEW evidence and reason are stored, the application stays blocked, nothing
+ *     is prepared, and the owner is told why — an unknown or failed verification is never papered over.
+ * A lead that is not email-sourced and carries no verification, and one already verified `live`, are left alone: no second read,
+ * no second run. The application's identity, key, status and any submission authorization are untouched either way.
+ */
+async function reverifyLeadOnRetry(env: Env, tailorInstanceId: string, uid: string, app: JobApplication, lead: LocalArtifactLead, now: number): Promise<LocalArtifactLead> {
+	const stored = app.lead && typeof app.lead === "object" && !Array.isArray(app.lead) ? (app.lead as Record<string, unknown>) : {};
+	const verification = stored.verification && typeof stored.verification === "object" ? (stored.verification as { state?: unknown }) : null;
+	const verifies = lead.lead.source?.toLowerCase() === "gmail" || verification !== null;
+	if (!verifies || verification?.state === "live") return lead;
+	const check = await preflightEmailLead(env, tailorInstanceId, uid, lead.leadUrl || lead.lead.url || "");
+	if (!check.ok) {
+		const evidence = { ...check.result, checked_by: "application_runner", checked_at: iso(now) };
+		await recordLeadVerification(env, app, uid, { ...stored, verification: evidence }, { reason: check.reason, questions: [check.question] }, now);
+		throw new HttpError(409, `${check.question} The live job could not be verified, so no materials were prepared.`);
+	}
+	const url = check.result.applyUrl;
+	const placeholder = lead.lead.source === "manual_url" && /^Job posting on /.test(lead.lead.title ?? "");
+	const title = placeholder && check.result.title?.trim() ? clipMarked(check.result.title.trim(), 300, { within: true }) : undefined;
+	const storedLead = stored.lead && typeof stored.lead === "object" ? (stored.lead as Record<string, unknown>) : {};
+	const evidence = { ...check.result, checked_by: "application_runner", checked_at: iso(now) };
+	await recordLeadVerification(env, app, uid, { ...stored, leadUrl: url, lead: { ...storedLead, url, ...(title ? { title } : {}) }, verification: evidence }, null, now);
+	return { ...lead, leadUrl: url, lead: { ...lead.lead, url, ...(title ? { title } : {}) } };
 }
 
 export type StartTailoringOutcome = { kind: "started" | "existing" | "blocked"; application: JobApplication; run: TailorRun | null };
@@ -342,18 +376,20 @@ export async function retryTailoring(env: Env, instanceId: string, uid: string, 
 	if (overloadedRetry) throw new HttpError(503, overloadedRetry);
 	const cloudProblem = cloudDocumentsRunnerProblem(runtime.runner_version, runtime.runner_node);
 	if (cloudProblem) throw new HttpError(409, cloudProblem);
+	// #1552: an unverified email/pasted lead is rechecked through the connected Runner BEFORE anything is prepared.
+	const lead = await reverifyLeadOnRetry(env, instanceId, uid, app, parsed.lead, now);
 	let uploadedSources: LocalArtifactUploadedSource[] | undefined;
 	// #1624: the CV app's career book when this Tailor takes its sources from there, else the uploaded-file selection.
 	if ((await cvSourcesEnabled(env, instanceId)) || (await listUploadedTailorSourceSelections(env, instanceId, uid)).length > 0) {
 		const incompatibility = uploadedSourcesRunnerProblem(runtime.runner_version, runtime.runner_node);
 		if (incompatibility) throw new HttpError(409, incompatibility);
-		try { uploadedSources = await resolveTailorSources(env, { userId: uid, instanceId }, parsed.lead, undefined, now); }
+		try { uploadedSources = await resolveTailorSources(env, { userId: uid, instanceId }, lead, undefined, now); }
 		catch (err) { throw new HttpError(409, `Uploaded sources are not ready: ${err instanceof Error ? err.message : "unknown error"}. No local or historical résumé was used.`); }
 	}
 	const instancePreferences = await instancePreferencesFor(env, instanceId, uid, runtime.runner_version, now);
 	const moved = await moveApplication(env, app, uid, { to: "tailoring", actor: "owner", actorInstanceId: instanceId, reason: "retry_tailoring" }, now);
 	if (!moved) throw new HttpError(409, "The application changed while retrying — reload it.");
-	const run = await dispatchTailoring(env, instanceId, uid, app.id, parsed.lead, settings.settings, `${app.idempotencyKey}:retry:${app.stateVersion + 1}`, "retry", runtime, now, uploadedSources, instancePreferences);
+	const run = await dispatchTailoring(env, instanceId, uid, app.id, lead, settings.settings, `${app.idempotencyKey}:retry:${app.stateVersion + 1}`, "retry", runtime, now, uploadedSources, instancePreferences);
 	return { application: (await getApplication(env, instanceId, uid, app.id)) as JobApplication, run, savedAnswers: answers.length };
 }
 
