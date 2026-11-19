@@ -771,20 +771,22 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		// `result` is SET rather than thrown. A thrown gate reaches `codingCrashReport` below and
 		// reads as "run error:", which is the exact confusion #523 closed — and worse, it would
 		// be classified for a platform resume and replayed against the same unconfirmed base.
-		const syncGate = (await step.do("repo-sync-gate", async () =>
-			gateRunOnSync(env, { instanceId, userId, sessionId, node: conn.runnerNode ?? null, repo: goal.repo, heal, repair }, syncAtStart),
-		)) as SyncGateOutcome;
+		// The repo's admission blocker is kept INSIDE this existing step (#1515, #1671): a new `step.do` here would change the durable step names
+		// a run parked for days replays by (#1359). The queue holds behind ONE recorded condition instead of starting — and failing — each entry in
+		// turn, and a pass clears it (whoever fixed the checkout by hand has just proved it). The blocked run stays on the record, marked, so the
+		// per-issue failure tallies skip a stop that never executed the objective.
+		const syncGate = (await step.do("repo-sync-gate", async () => {
+			const gate = await gateRunOnSync(env, { instanceId, userId, sessionId, node: conn.runnerNode ?? null, repo: goal.repo, heal, repair }, syncAtStart);
+			if (repoId && !repair) {
+				if (!gate.blocked) await clearRepoBlocker(env, { instanceId, userId, repoId });
+				else {
+					await setRepoBlocker(env, { instanceId, userId, repoId, message: gate.message, runId: event.payload.loopRunId ?? null });
+					if (event.payload.loopRunId) await markRunPreflightBlocked(env, event.payload.loopRunId);
+				}
+			}
+			return gate;
+		})) as SyncGateOutcome;
 		if (syncGate.blocked) result = { outcome: "failed", detail: syncGate.message, steps: 0 };
-		// #1515: remember it ON THE REPO, so the queue holds behind this one condition instead of starting — and failing — each entry in turn.
-		// A pass clears it: whoever fixed the checkout by hand has just proved it.
-		if (repoId && !repair) {
-			await step.do("repo-admission-blocker", async () => {
-				if (!syncGate.blocked) return void (await clearRepoBlocker(env, { instanceId, userId, repoId }));
-				await setRepoBlocker(env, { instanceId, userId, repoId, message: syncGate.message, runId: event.payload.loopRunId ?? null });
-				// #1671: the run stays on the record, marked, so the per-issue failure tallies skip a stop that never executed the objective.
-				if (event.payload.loopRunId) await markRunPreflightBlocked(env, event.payload.loopRunId);
-			});
-		}
 		// A run the PLATFORM cut off leaves its work on the record and its PLAN nowhere (#523):
 		// `runCodingLoop`'s action log is a function-local array, so it dies with the invocation
 		// and the next run starts from the objective — re-implementing ten issues that are
@@ -1142,9 +1144,12 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		//
 		// `tryDequeueAndStart` never throws, so no `.catch` here: a queue that cannot be drained
 		// is recorded in `error_log` and must not turn a finished run into a failed step.
-		// A repair run that finished has put the checkout right (#1515): clear the blocker BEFORE the drain, so the queue resumes in order.
-		if (goal.repairCheckout === true && repoId && runSucceeded(result.outcome)) await step.do("repo-admission-blocker-clear", async () => void (await clearRepoBlocker(env, { instanceId, userId, repoId })));
-		const drained = (await step.do("objective-queue-drain", () => tryDequeueAndStart(env, instanceId, repoId, userId))) as { drained?: boolean } | null;
+		// A repair run that finished has put the checkout right (#1515): its blocker clears BEFORE the drain, inside the same durable step, so the queue resumes in order.
+		const repairedRepo = goal.repairCheckout === true && repoId && runSucceeded(result.outcome) ? repoId : null;
+		const drained = (await step.do("objective-queue-drain", async () => {
+			if (repairedRepo) await clearRepoBlocker(env, { instanceId, userId, repoId: repairedRepo });
+			return tryDequeueAndStart(env, instanceId, repoId, userId);
+		})) as { drained?: boolean } | null;
 		// #1232/#1233: nothing queued behind it → wake the coder's picker now (triage, else auto-pickup), not at the next hourly window.
 		if (drained?.drained !== true) await step.do("idle-coder-wake", () => wakeIdleCoder(env, instanceId, userId));
 	}
