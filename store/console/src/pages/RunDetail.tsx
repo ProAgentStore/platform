@@ -67,12 +67,23 @@ function levelClass(type: string): string {
  * One tappable answer to the agent's question (#1129) — the single option list and each decision of a
  * multi-part question draw the same control. `pressed` marks a decision's current pick.
  */
-function OptionButton({ label, pressed, onClick }: { label: string; pressed?: boolean; onClick: () => void }) {
+function OptionButton({ label, pressed, onClick, disabled, saving }: { label: string; pressed?: boolean; onClick: () => void; disabled?: boolean; saving?: boolean }) {
 	return (
-		<button type="button" aria-pressed={pressed} onClick={onClick} className={`px-3.5 py-2.5 min-h-11 rounded-lg border text-sm text-ink font-medium text-left break-words max-w-full hover:border-accent hover:bg-accent-soft ${pressed ? "bg-accent-soft border-accent" : "bg-panel border-line"}`}>
-			{label}
+		<button type="button" aria-pressed={pressed} aria-busy={saving || undefined} disabled={disabled} onClick={onClick} className={`px-3.5 py-2.5 min-h-11 rounded-lg border text-sm text-ink font-medium text-left break-words max-w-full hover:border-accent hover:bg-accent-soft disabled:cursor-not-allowed ${saving ? "bg-accent-soft border-accent" : disabled ? "opacity-50" : ""} ${pressed ? "bg-accent-soft border-accent" : "bg-panel border-line"}`}>
+			{saving ? `Saving… ${label}` : label}
 		</button>
 	);
+}
+
+/** What the answer controls say about the last send (#1669). `saved` means the server accepted it, not that the coder resumed. */
+type AnswerSend = { status: "idle" } | { status: "saving"; value: string; slow: boolean } | { status: "saved"; value: string } | { status: "failed"; value: string; message: string };
+
+function AnswerStatus({ send, resumed }: { send: AnswerSend; resumed: boolean }) {
+	if (send.status === "idle") return null;
+	const base = "text-sm rounded-lg border px-3 py-2 mt-3 break-words";
+	if (send.status === "saving") return <div role="status" data-testid="answer-saving" className={`${base} bg-accent-soft border-accent/40 text-ink`}>{send.slow ? "Still saving your answer — this is taking longer than usual. Please wait; don’t tap again." : "Saving your answer…"}</div>;
+	if (send.status === "saved") return <div role="status" data-testid="answer-saved" className={`${base} bg-success-soft border-success-line text-success`}>{resumed ? "Answer received — the coder has resumed." : "Answer received. Waiting for the coder to resume — this can take a moment."}</div>;
+	return <div role="alert" data-testid="answer-failed" className={`${base} bg-danger-soft border-danger-line text-danger`}>Your answer was not saved: {send.message || "request failed"}. {/stale|no longer|not waiting|not found|409/i.test(send.message) ? "The question may have changed or been answered already — refresh to see its current state." : "Your answer is kept below; tap to try again."}</div>;
 }
 
 interface TicketTurn { id: string; role: "user" | "agent"; text: string; at: string }
@@ -390,11 +401,29 @@ export default function RunDetail() {
 	// With nothing to tap, the uncut ask IS the question (#1224) — open by default, not one tap away.
 	const fullOpen = !!fullQuestion && (showFullQuestion || (options.length === 0 && parts.length === 0));
 
+	// #1669: one answer in flight at a time. The ref closes the window before React re-renders the disabled controls.
+	const [send, setSend] = useState<AnswerSend>({ status: "idle" });
+	const sending = useRef(false);
+	const saving = send.status === "saving";
 	const sendValue = async (v: string) => {
-		const t = v.trim(); if (!t) return;
-		await api(`/v1/instances/${instanceId}/input`, { method: "POST", body: JSON.stringify({ taskId, value: t }) }).catch((e) => alert(e instanceof Error ? e.message : String(e)));
-		setInputVal(""); load();
+		const t = v.trim(); if (!t || sending.current) return;
+		sending.current = true;
+		setSend({ status: "saving", value: t, slow: false });
+		const slowTimer = setTimeout(() => setSend((s) => (s.status === "saving" ? { ...s, slow: true } : s)), 8000);
+		try {
+			await api(`/v1/instances/${instanceId}/input`, { method: "POST", body: JSON.stringify({ taskId, value: t }) });
+			setSend({ status: "saved", value: t });
+			setInputVal(""); setPicks({}); setOtherAnswer(false);
+		} catch (e) {
+			// The answer stays in the field / picks so a retry needs no retyping.
+			setSend({ status: "failed", value: t, message: e instanceof Error ? e.message : String(e) });
+		} finally {
+			clearTimeout(slowTimer);
+			sending.current = false;
+		}
+		load();
 	};
+	const savingValue = send.status === "saving" ? send.value : "";
 	/**
 	 * Resume after a handoff. This USED to fall back to `POST /tasks/:taskId/resume` when the
 	 * takeover resume failed — a route the API has never registered (`instances.contract.test.ts`
@@ -515,13 +544,13 @@ export default function RunDetail() {
 									<legend className="text-sm font-semibold text-ink mb-2"><MarkdownText text={`${i + 1}. ${part.question}`} /></legend>
 									<div className="flex flex-wrap gap-2">
 										{part.options.map((opt) => (
-											<OptionButton key={opt} label={opt} pressed={picks[i] === opt} onClick={() => setPicks({ ...picks, [i]: opt })} />
+											<OptionButton key={opt} label={opt} disabled={saving} pressed={picks[i] === opt} onClick={() => setPicks({ ...picks, [i]: opt })} />
 										))}
 									</div>
 								</fieldset>
 							))}
 							<div>
-								<Button variant="primary" size="lg" disabled={parts.some((_, i) => !picks[i])} onClick={() => sendValue(partsAnswer(parts, picks))}>Send</Button>
+								<Button variant="primary" size="lg" disabled={saving || parts.some((_, i) => !picks[i])} onClick={() => sendValue(partsAnswer(parts, picks))}>{saving ? "Saving…" : "Send"}</Button>
 								{!otherAnswer && (
 									<button type="button" onClick={() => setOtherAnswer(true)} className="block text-xs text-accent underline mt-3">None of these — type a different answer</button>
 								)}
@@ -533,7 +562,7 @@ export default function RunDetail() {
 							<div className="text-xs font-bold uppercase tracking-wide text-muted-soft mb-2">Tap your answer</div>
 							<div className="flex flex-wrap gap-2">
 								{options.map((opt) => (
-									<OptionButton key={opt} label={opt} onClick={() => sendValue(opt)} />
+									<OptionButton key={opt} label={opt} disabled={saving} saving={saving && savingValue === opt.trim()} onClick={() => sendValue(opt)} />
 								))}
 							</div>
 							{/* Options ARE the answer (#1129): free text is an explicit escape, never the default beside them. */}
@@ -547,11 +576,14 @@ export default function RunDetail() {
 						    duplicating it into a placeholder that vanishes mid-answer. This is the
 						    field where someone types a legal name or a salary because the agent
 						    refused to guess — losing the question while typing is the worst case. */}
-						<input aria-labelledby={fieldLabelId} value={inputVal} onChange={(e) => setInputVal(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") sendValue(inputVal); }} placeholder={field} className="flex-1 min-w-0 bg-panel border border-line rounded-lg px-3 py-2.5 text-base text-ink" />
-						<button type="button" disabled={!inputVal.trim()} onClick={() => sendValue(inputVal)} className="px-5 py-2.5 rounded-lg bg-accent text-white font-bold text-base disabled:opacity-40 shrink-0">Send</button>
+						<input aria-labelledby={fieldLabelId} value={inputVal} onChange={(e) => setInputVal(e.target.value)} readOnly={saving} aria-busy={saving || undefined} onKeyDown={(e) => { if (e.key === "Enter") sendValue(inputVal); }} placeholder={field} className="flex-1 min-w-0 bg-panel border border-line rounded-lg px-3 py-2.5 text-base text-ink" />
+						<button type="button" disabled={saving || !inputVal.trim()} onClick={() => sendValue(inputVal)} className="px-5 py-2.5 rounded-lg bg-accent text-white font-bold text-base disabled:opacity-40 shrink-0">{saving ? "Saving…" : "Send"}</button>
 					</div>}
+					<AnswerStatus send={send} resumed={false} />
 				</div>
 			)}
+
+			{!(needsHuman && kind === "value") && send.status === "saved" && <AnswerStatus send={send} resumed={!needsHuman} />}
 
 			{needsHuman && kind !== "value" && (
 				<div className="bg-amber-500/10 border border-amber-500/40 rounded-xl p-4 sm:p-5 mb-5">
