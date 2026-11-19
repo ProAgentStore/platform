@@ -10,12 +10,15 @@
  */
 import type { Hono } from "hono";
 import { HttpError } from "../lib/auth.js";
-import { autoStashApproved, readAutoStashPolicy, runCheckoutAction, type CheckoutActionFailure } from "../lib/checkout-actions.js";
+import { autoStashApproved, readAutoStashPolicy, runCheckoutAction, uniqueCheckoutLabel, type CheckoutActionFailure } from "../lib/checkout-actions.js";
 import { patchInstanceConfig } from "../lib/instance-config.js";
 import { requireOwned } from "./coding-shared.js";
 import type { Env } from "../types.js";
 
-const STATUS: Record<CheckoutActionFailure, 404 | 409 | 422 | 502 | 500> = { no_repo: 404, busy: 409, unreachable: 502, old_runner: 422, refused: 422, failed: 500 };
+// `unreachable` is a determinate answer (no runner connection, so nothing ran) and must not look like a gateway's lost
+// reply, which MCP clients read as an unknown outcome and which is 502/504 (#1514). Only `unconfirmed` — the machine went
+// away MID-call — is 502.
+const STATUS: Record<CheckoutActionFailure, 404 | 409 | 422 | 502 | 503 | 500> = { no_repo: 404, busy: 409, unreachable: 503, unconfirmed: 502, old_runner: 422, refused: 422, failed: 500 };
 
 export function registerCheckoutActionRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 	codingRoutes.post("/:instanceId/coding/repos/:repoId/checkout/:action", async (c) => {
@@ -30,7 +33,7 @@ export function registerCheckoutActionRoutes(codingRoutes: Hono<{ Bindings: Env 
 			userId: uid,
 			repoId: c.req.param("repoId") ?? "",
 			action,
-			label: typeof body.label === "string" && body.label.trim() ? body.label : `owner ${action}`,
+			label: typeof body.label === "string" && body.label.trim() ? body.label : uniqueCheckoutLabel(`owner ${action}`),
 			pull: body.pull !== false,
 			node: typeof body.runner_node === "string" && body.runner_node.trim() ? body.runner_node.trim() : null,
 		});

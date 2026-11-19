@@ -4,7 +4,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
-import { AUTO_STASH_HINT, attemptSyncSelfHealWithStash, autoStashApproved, blockedByLocalChanges, CHECKOUT_CLEAN_MIN_CLI, describeCheckoutAction, readAutoStashPolicy, runCheckoutAction, type CheckoutCleanWire } from "./checkout-actions.js";
+import { AUTO_STASH_HINT, attemptSyncSelfHealWithStash, autoStashApproved, blockedByLocalChanges, CHECKOUT_CLEAN_MIN_CLI, describeCheckoutAction, readAutoStashPolicy, runCheckoutAction, uniqueCheckoutLabel, type CheckoutCleanWire } from "./checkout-actions.js";
 import { describeSyncHeal, type SyncHealOutcome } from "./repo-sync-gate.js";
 import { RunnerUnreachableError } from "./runner-unreachable.js";
 import type { RunnerConn } from "./runner-client.js";
@@ -61,15 +61,42 @@ describe("runCheckoutAction", () => {
 	it("an unreachable machine is an explicit error naming it — nothing was run", async () => {
 		const seen: unknown[] = [];
 		const out = await runCheckoutAction(env, { ...base, action: "discard", node: "Macmini.modem" }, { conn: null, call: call(stashWire, seen as never) });
-		expect(out).toMatchObject({ ok: false, reason: "unreachable", machine: "Macmini.modem" });
-		expect((out as { error: string }).error).toMatch(/Macmini\.modem.*not connected.*nothing was changed/s);
+		expect(out).toMatchObject({ ok: false, reason: "unreachable", outcome: "not-started", machine: "Macmini.modem" });
+		expect((out as { error: string }).error).toMatch(/Macmini\.modem.*no live runner connection.*paused or not attached.*NOT run.*nothing was changed/s);
 		expect(seen).toEqual([]);
 	});
 
 	it("a machine that drops mid-call says it is not known whether the action ran", async () => {
 		const out = await runCheckoutAction(env, { ...base, action: "stash" }, { conn, call: call(new RunnerUnreachableError("the relay has no live socket")) });
-		expect(out).toMatchObject({ ok: false, reason: "unreachable" });
+		// Genuinely unknown, and said so: with the label to repeat, which is what settles it (#1514).
+		expect(out).toMatchObject({ ok: false, reason: "unconfirmed", outcome: "unknown", label: "run 0c59a0bf" });
 		expect((out as { error: string }).error).toContain("not known whether the stash ran");
+		expect((out as { error: string }).error).toContain("SAME label (run 0c59a0bf)");
+	});
+
+	it("a lost discard is not offered a repeat — only a stash is idempotent", async () => {
+		const out = await runCheckoutAction(env, { ...base, action: "discard" }, { conn, call: call(new RunnerUnreachableError("the relay has no live socket")) });
+		expect(out).toMatchObject({ ok: false, reason: "unconfirmed", outcome: "unknown" });
+		expect((out as { error: string }).error).toContain("not repeated automatically");
+		expect((out as { error: string }).error).not.toContain("SAME label");
+	});
+
+	it("sends the SAME normalized label on every attempt, so a retry can be reconciled with the first call", async () => {
+		const seen: Array<{ path: string; body: Record<string, unknown> }> = [];
+		await runCheckoutAction(env, { ...base, label: "FAS #349 recovery!!", action: "stash" }, { conn, call: call(stashWire, seen) });
+		await runCheckoutAction(env, { ...base, label: "FAS #349 recovery!!", action: "stash" }, { conn, call: call(stashWire, seen) });
+		expect(seen.map((s) => s.body.label)).toEqual(["FAS #349 recovery", "FAS #349 recovery"]);
+	});
+
+	it("describes a reconciled retry as already stashed, with the original receipt", () => {
+		const text = describeCheckoutAction("stash", { ...stashWire, reconciled: true, files: 0 });
+		expect(text).toContain("already stashed — nothing was stashed again");
+		expect(text).toContain("refs/pags/stash/20261023T195800");
+	});
+
+	it("two calls with no label of their own never share one", () => {
+		expect(uniqueCheckoutLabel("owner stash")).not.toBe(uniqueCheckoutLabel("owner stash"));
+		expect(uniqueCheckoutLabel("owner stash")).toMatch(/^owner stash [a-z0-9]+$/);
 	});
 
 	it("refuses while a live run is working in the checkout, naming it, and calls nothing", async () => {
@@ -125,7 +152,7 @@ describe("auto-stash on the pull-before-run self-heal", () => {
 		const out = await attemptSyncSelfHealWithStash(conn, { ...input, approved: true }, { heal: heals(blocked, healed), call: call(stashWire, seen) });
 		expect(out.status).toBe("healed");
 		expect(seen).toHaveLength(1);
-		expect(seen[0].body).toMatchObject({ action: "stash", pull: false, label: "auto run 0c59a0bf" });
+		expect(seen[0].body).toMatchObject({ action: "stash", pull: false, label: expect.stringMatching(/^auto run 0c59a0bf [a-z0-9]+$/) }); // unique per attempt (#1514): a second auto-stash must not be answered with the first's receipt
 		expect(out.stashed).toMatchObject({ ref: "refs/pags/stash/20261023T195800", commit: "a".repeat(40), files: 59 });
 		expect(describeSyncHeal(out)).toMatch(/Auto-stashed local changes first \(approved\): Stashed 59 changed files.*Fast-forwarded `main` by 2 commits.*because the checkout was behind\./s);
 	});

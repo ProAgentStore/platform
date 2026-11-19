@@ -49,6 +49,31 @@ export interface CheckoutCleanResult {
 	pulled: { changed: boolean; from: string | null; to: string | null; commits: number | null; refused?: string; error?: string } | null;
 	/** Why the action did not finish, credential-free; absent on success. */
 	error?: string;
+	/**
+	 * True when this label had ALREADY been stashed and `backup` is that earlier receipt (#1514): a retry after a lost
+	 * reply is answered from the record, never by stashing a second time.
+	 */
+	reconciled?: boolean;
+}
+
+/**
+ * The stash this label already produced, if any (#1514). A stash is pinned on `refs/pags/stash/<stamp>` and its commit
+ * subject ends with the label, so a retry carrying the same label can be answered with the original receipt: whether the
+ * first call landed is then a readable fact, not a guess. An exact label match only — never a prefix.
+ */
+function existingStash(workDir: string, label: string): { ref: string; commit: string } | null {
+	let out: string;
+	try {
+		out = git(workDir, ["for-each-ref", "--sort=-refname", "--format=%(refname)%09%(objectname)%09%(subject)", "refs/pags/stash/"]);
+	} catch {
+		return null;
+	}
+	for (const line of out.split("\n").filter(Boolean)) {
+		const [ref, commit, subject] = line.split("\t");
+		const m = /pags-stash \d{8}T\d{6} (.*)$/.exec(subject ?? "");
+		if (m && m[1] === label) return { ref, commit };
+	}
+	return null;
 }
 
 function git(workDir: string, argv: string[]): string {
@@ -95,7 +120,14 @@ export function cleanCheckout(workDir: string, input: { action: CheckoutCleanAct
 	const before = changes(workDir);
 	const result: CheckoutCleanResult = { ok: false, action, files: before.length, backup: null, head: head(workDir), clean: before.length === 0, pulled: null };
 
-	if (before.length > 0) {
+	// A retry of a stash that already landed: answer with its receipt, change nothing (#1514).
+	const prior = action === "stash" ? existingStash(workDir, label) : null;
+	if (prior) {
+		result.backup = { kind: "stash", ref: prior.ref, commit: prior.commit };
+		result.reconciled = true;
+		if (before.length > 0) return { ...result, error: `this label was already stashed (${prior.ref}); the ${before.length} change${before.length === 1 ? "" : "s"} present now are newer and were left in place — use a new label to stash them` };
+	}
+	if (before.length > 0 && !prior) {
 		try {
 			if (action === "stash") {
 				const message = `pags-stash ${stamp} ${label}`;

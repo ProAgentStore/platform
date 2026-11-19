@@ -41,23 +41,32 @@ export interface CheckoutCleanWire {
 	clean: boolean;
 	pulled: { changed: boolean; from: string | null; to: string | null; commits: number | null; refused?: string; error?: string } | null;
 	error?: string;
+	/** The backup is the receipt of an EARLIER call with the same label — a retry was answered, nothing was stashed again (#1514). */
+	reconciled?: boolean;
 }
 
 /** Why an action did not run, as a value: `unreachable` is a machine problem, `busy` a live session, `old_runner` a CLI below the floor. */
-export type CheckoutActionFailure = "no_repo" | "unreachable" | "busy" | "old_runner" | "refused" | "failed";
+export type CheckoutActionFailure = "no_repo" | "unreachable" | "unconfirmed" | "busy" | "old_runner" | "refused" | "failed";
 
 export type CheckoutActionOutcome =
 	| { ok: true; action: CheckoutAction; machine: string | null; result: CheckoutCleanWire; summary: string }
-	| { ok: false; reason: CheckoutActionFailure; machine: string | null; error: string; result?: CheckoutCleanWire };
+	| { ok: false; reason: CheckoutActionFailure; machine: string | null; error: string; result?: CheckoutCleanWire; outcome?: "not-started" | "unknown"; label?: string };
 
 /** A commit id for a sentence a person reads: eight characters, which is how git itself shortens it. An id is not prose, so it carries no cut marker. */
 const shortSha = (sha: string | null | undefined): string | undefined => sha?.slice(0, 8);
 
 export const checkoutLabel = (s: string): string => s.replace(/[^A-Za-z0-9 ._:#/@-]/g, " ").replace(/\s+/g, " ").trim().slice(0, 60) || "pags";
 
+/**
+ * A label no earlier call used (#1514). A stash is idempotent by label — a retry carrying the same label is answered with
+ * the first call's receipt — so a call with no label of its own must not borrow another call's.
+ */
+export const uniqueCheckoutLabel = (base: string): string => checkoutLabel(`${base.slice(0, 45)} ${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`);
+
 /** One sentence for the owner: what was kept, where, and where the checkout stands now. */
 export function describeCheckoutAction(action: CheckoutAction, r: CheckoutCleanWire): string {
 	const verb = action === "stash" ? "Stashed" : "Discarded";
+	if (r.reconciled && r.backup?.kind === "stash") return `This label was already stashed — nothing was stashed again. It is saved as \`${r.backup.ref}\` (${shortSha(r.backup.commit)}); \`git stash apply ${r.backup.commit}\` in that checkout brings it back. The checkout is ${r.clean ? "clean" : "NOT clean"} at ${shortSha(r.head) ?? "an unknown commit"}.${r.pulled?.changed ? ` Fast-forwarded to ${shortSha(r.head)}.` : ""}`;
 	if (r.files === 0) return `The checkout had no local changes, so nothing was ${action === "stash" ? "stashed" : "discarded"}.${r.pulled?.changed ? ` Fast-forwarded to ${shortSha(r.head)}.` : ""}`;
 	const kept = !r.backup
 		? ""
@@ -85,13 +94,14 @@ export async function runCheckoutAction(
 	const conn = deps.conn !== undefined ? deps.conn : input.node ? await getRunnerConn(env, input.instanceId, input.userId, input.node).catch(() => null) : await getBoundRunnerConn(env, input.instanceId, input.userId).catch(() => null);
 	const machine = conn?.runnerNode ?? input.node ?? null;
 	if (!conn) {
-		return { ok: false, reason: "unreachable", machine, error: `${machine ? `The machine ${machine}` : "The machine that holds this checkout"} is not connected (offline, its \`pags up\` is not running, or it is not reachable), so the ${input.action} was not run and nothing was changed. Bring it online and try again.` };
+		return { ok: false, reason: "unreachable", outcome: "not-started", machine, error: `${machine ? `The machine ${machine}` : "The machine that holds this checkout"} has no live runner connection (it is offline, its \`pags up\` is not running, or the instance is paused or not attached to it), so the ${input.action} was NOT run and nothing was changed. Bring the runner online or attach the instance, then try again.` };
 	}
+	const label = checkoutLabel(input.label);
 	try {
 		const result = await (deps.call ?? callRunner)<CheckoutCleanWire>(
 			conn,
 			"/coding/checkout-clean",
-			{ workDir: repo.workdir || undefined, repoId: repo.id, action: input.action, label: checkoutLabel(input.label), pull: input.pull === true, branch: repo.branch || undefined },
+			{ workDir: repo.workdir || undefined, repoId: repo.id, action: input.action, label, pull: input.pull === true, branch: repo.branch || undefined },
 			{ timeoutMs: CHECKOUT_CLEAN_TIMEOUT_MS },
 		);
 		if (!result.ok) return { ok: false, reason: "failed", machine, error: `${result.error ?? "the machine reported a failure"} ${describeCheckoutAction(input.action, result)}`.trim(), result };
@@ -99,7 +109,7 @@ export async function runCheckoutAction(
 	} catch (e) {
 		const message = e instanceof Error ? e.message : String(e);
 		if (/→ 404|not found/i.test(message)) return { ok: false, reason: "old_runner", machine, error: runnerUpgradeClause({ what: `${input.action} this checkout`, minCli: CHECKOUT_CLEAN_MIN_CLI, node: machine }) };
-		if (isRunnerUnreachable(e)) return { ok: false, reason: "unreachable", machine, error: `${machine ? `The machine ${machine}` : "The machine"} went away before it answered (${clipMarked(message, 120, { within: true })}), so it is not known whether the ${input.action} ran. Read the checkout's state before retrying.` };
+		if (isRunnerUnreachable(e)) return { ok: false, reason: "unconfirmed", outcome: "unknown", label, machine, error: `${machine ? `The machine ${machine}` : "The machine"} went away before it answered (${clipMarked(message, 120, { within: true })}), so it is not known whether the ${input.action} ran.${input.action === "stash" ? ` Repeat the call with the SAME label (${label}): if the stash landed you get its receipt and nothing is stashed twice; if it did not, it runs now.` : " Read the checkout's state before retrying — a discard is not repeated automatically."}` };
 		return { ok: false, reason: /→ 400/.test(message) ? "refused" : "failed", machine, error: `The machine declined or failed the ${input.action}: ${clipMarked(message, 200, { within: true })}` };
 	}
 }
@@ -149,7 +159,7 @@ export async function attemptSyncSelfHealWithStash(
 		const stash = await (deps.call ?? callRunner)<CheckoutCleanWire>(
 			conn,
 			"/coding/checkout-clean",
-			{ workDir: input.repo.workdir || undefined, repoId: input.repo.id, action: "stash", label: checkoutLabel(`auto ${input.runLabel}`), pull: false },
+			{ workDir: input.repo.workdir || undefined, repoId: input.repo.id, action: "stash", label: uniqueCheckoutLabel(`auto ${input.runLabel}`), pull: false },
 			{ timeoutMs: CHECKOUT_CLEAN_TIMEOUT_MS },
 		);
 		if (!stash.ok) return { ...first, detail: `${first.detail} Auto-stash was approved but did not complete: ${stash.error ?? "the machine reported a failure"}.` };

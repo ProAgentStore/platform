@@ -371,7 +371,14 @@ export function registerMachineControlTools(server: McpServer, ctx: InstanceTool
 			const unconfirmed = await requireConfirmation(safetyFor(token), tool, confirm, tool, input);
 			if (unconfirmed) return unconfirmed;
 		}
-		const data = (await authedAsyncCall(checkoutEndpoint, sessionToken, { method: "POST", body: JSON.stringify({ label, pull, runner_node, ...(action === "discard" ? { confirm: "discard_checkout" } : {}) }) }, env, { tool, possibleOutcomes: ["not-started", "stashed", "discarded"], poll: { tool: "coding_repos_list", input: { instance_id } } })) as { error?: string; outcome?: string };
+		// #1514: a stash is idempotent BY LABEL — a repeat carrying the same label is answered with the first call's receipt and
+		// never stashes twice — so each call gets a label of its own, and an unknown outcome is settled by repeating the call.
+		const callLabel = label?.trim() || `mcp ${action} ${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+		const sameCall = { instance_id, repo_id, label: callLabel, pull, runner_node };
+		const recovery = action === "stash"
+			? { tool, possibleOutcomes: ["not-started", "stashed"], poll: { tool, input: sameCall }, retry: { tool, input: sameCall }, hint: `Repeat this exact call (label "${callLabel}"): if the stash already landed you get its receipt (\`reconciled: true\`, the ref and commit) and nothing is stashed twice; if it did not, it runs now.` }
+			: { tool, possibleOutcomes: ["not-started", "discarded"], poll: { tool: "coding_repos_list", input: { instance_id } }, hint: "A discard is NOT repeated automatically: read the checkout's state on the machine before deciding." };
+		const data = (await authedAsyncCall(checkoutEndpoint, sessionToken, { method: "POST", body: JSON.stringify({ label: callLabel, pull, runner_node, ...(action === "discard" ? { confirm: "discard_checkout" } : {}) }) }, env, recovery)) as { error?: string; outcome?: string };
 		// A failure carries `reason` (unreachable | busy | old_runner | refused | failed) and a sentence saying what to do: pass it through whole.
 		if (data.outcome === "unknown") return jsonText(data);
 		if (!data.error) await audit(safetyFor(token), { tool, action: "completed", input, result: data });

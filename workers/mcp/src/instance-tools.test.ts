@@ -1019,6 +1019,65 @@ describe("coding loop tools drive the server's durable, budgeted run (#502)", ()
 
 	// ── Queued follow-up objectives (#788) ──
 
+	// ── stash_checkout / discard_checkout: an unconfirmed outcome must be settleable (#1514) ──
+
+	describe("stash_checkout and discard_checkout outcomes (#1514)", () => {
+		const stash = (h: ReturnType<typeof setup>, input: Record<string, unknown> = {}) => h.tools.get("stash_checkout")!.handler({ instance_id: "coder", repo_id: "r1", ...input });
+		const sentBody = (h: ReturnType<typeof setup>) => JSON.parse(h.fetchStub.calls.find((c) => c.url.endsWith("/checkout/stash") && c.method === "POST")?.body ?? "{}");
+
+		it("a gateway-lost stash reply is unknown, names only outcomes that exist, and is settled by repeating the same labelled call", async () => {
+			const h = setup();
+			withInstance(h);
+			h.fetchStub.respond((u, m) => u.endsWith("/checkout/stash") && m === "POST", { status: 502, body: { error: "Bad gateway" } });
+			const out = JSON.parse((await stash(h)).content[0].text);
+			expect(out).toMatchObject({ outcome: "unknown", confirmation: { reason: "gateway-error", httpStatus: 502 } });
+			expect(out.possibleOutcomes).toEqual(["not-started", "stashed"]); // a stash cannot have discarded anything
+			const label = sentBody(h).label;
+			expect(label).toMatch(/^mcp stash /); // generated, so it is its own receipt key
+			expect(out.retry).toMatchObject({ tool: "stash_checkout", input: { repo_id: "r1", label } });
+			expect(out.poll).toMatchObject({ tool: "stash_checkout", input: { label } });
+			expect(out.detail).toContain("nothing is stashed twice");
+		});
+
+		it("a caller's own label is sent unchanged, so a repeat reconciles against the first call", async () => {
+			const h = setup();
+			withInstance(h);
+			h.fetchStub.respond((u, m) => u.endsWith("/checkout/stash") && m === "POST", { body: { ok: true, action: "stash", reconciled: true, result: { reconciled: true } } });
+			await stash(h, { label: "FAS 349 recovery" });
+			expect(sentBody(h).label).toBe("FAS 349 recovery");
+		});
+
+		it("calls without a label get different labels, so one call never borrows another's receipt", async () => {
+			const h = setup();
+			withInstance(h);
+			h.fetchStub.respond((u, m) => u.endsWith("/checkout/stash") && m === "POST", { body: { ok: true } });
+			await stash(h);
+			await stash(h);
+			const labels = h.fetchStub.calls.filter((c) => c.url.endsWith("/checkout/stash")).map((c) => JSON.parse(c.body ?? "{}").label);
+			expect(new Set(labels).size).toBe(2);
+		});
+
+		it("the API's own determinate refusal (503 unreachable, nothing started) is passed through whole, not turned into unknown", async () => {
+			const h = setup();
+			withInstance(h);
+			const refusal = { ok: false, reason: "unreachable", outcome: "not-started", machine: "pink-laptop", error: "The machine pink-laptop has no live runner connection, so the stash was NOT run and nothing was changed." };
+			h.fetchStub.respond((u, m) => u.endsWith("/checkout/stash") && m === "POST", { status: 503, body: refusal });
+			const out = JSON.parse((await stash(h)).content[0].text);
+			expect(out).toMatchObject({ error: refusal.error, reason: "unreachable", outcome: "not-started" });
+			expect(out.possibleOutcomes).toBeUndefined();
+		});
+
+		it("a discard whose reply was lost never offers an automatic repeat, and does not list stashed", async () => {
+			const h = setup();
+			withInstance(h);
+			h.fetchStub.respond((u, m) => u.endsWith("/checkout/discard") && m === "POST", { status: 502, body: {} });
+			const out = JSON.parse((await h.tools.get("discard_checkout")!.handler({ instance_id: "coder", repo_id: "r1", confirm: "discard_checkout" })).content[0].text);
+			expect(out).toMatchObject({ outcome: "unknown", possibleOutcomes: ["not-started", "discarded"], poll: { tool: "coding_repos_list" } });
+			expect(out.retry).toBeUndefined();
+			expect(out.detail).toContain("NOT repeated automatically");
+		});
+	});
+
 	// ── Repair runs (#804) ──
 
 	it("repair_checkout is passed through, and needs no objective — the platform writes that one", async () => {

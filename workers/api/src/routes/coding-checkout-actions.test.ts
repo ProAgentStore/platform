@@ -48,9 +48,9 @@ describe("POST …/checkout/:action", () => {
 		expect(runCheckoutAction.mock.calls[0][1]).toMatchObject({ action: "discard", pull: false, node: "Macmini.modem" });
 	});
 
-	it("each named failure has its own status: an unreachable machine is a 502 that says so", async () => {
+	it("each named failure has its own status; only a machine lost MID-call is 502, a gateway-shaped status (#1514)", async () => {
 		const { call } = build();
-		const cases: Array<[string, number]> = [["unreachable", 502], ["busy", 409], ["no_repo", 404], ["old_runner", 422], ["failed", 500]];
+		const cases: Array<[string, number]> = [["unreachable", 503], ["unconfirmed", 502], ["busy", 409], ["no_repo", 404], ["old_runner", 422], ["failed", 500]];
 		for (const [reason, status] of cases) {
 			runCheckoutAction.mockResolvedValueOnce({ ok: false, reason, machine: "Macmini.modem", error: `explicit ${reason}` });
 			const res = await call("POST", "/repos/r1/checkout/stash", {});
