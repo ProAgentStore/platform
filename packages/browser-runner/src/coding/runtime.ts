@@ -147,6 +147,7 @@ export type CodingAction =
 			 * instruction and attributed to the platform, not to whoever wrote `text`.
 			 */
 			objective?: { runId: string; text: string; origin?: { kind?: string; by?: string }; constraints?: string[] };
+			/** `"interrupt"` replaces a running one-shot turn (deliberate steering); anything else waits behind it (#1493). */ whenBusy?: "queue" | "interrupt";
 	  }
 	/**
 	 * Still in the union, and refused by `act` (#448). The cloud no longer constructs it — the
@@ -646,6 +647,7 @@ export class CodingRuntime {
 					inputId,
 					digest,
 					objective,
+					whenBusy: action.whenBusy === "interrupt" ? "interrupt" : "queue",
 				});
 				break;
 			}
@@ -808,7 +810,7 @@ export class CodingRuntime {
 	takeoverInput(sessionId: string, value: { text?: string; keys?: string }): CodingSnapshot {
 		const session = this.require(sessionId);
 		if (value.keys) session.key(value.keys);
-		else if (value.text != null) session.input(value.text);
+		else if (value.text != null) session.input(value.text, { whenBusy: "interrupt" }); // a human at the keyboard is deliberate (#1493)
 		return this.snapshot(sessionId);
 	}
 

@@ -109,8 +109,10 @@ export interface HeadlessSessionConfig {
 	seed?: string;
 	/** Override the spawned binary (tests). Defaults to "claude". */
 	bin?: string;
-	/** Override the one-shot turn ceiling in ms (tests). Defaults to {@link MAX_ONE_SHOT_TURN_MS}. */
+	/** Override how long a one-shot turn may produce NO output before it is ended, in ms (tests). Defaults to {@link MAX_ONE_SHOT_TURN_MS}. */
 	maxTurnMs?: number;
+	/** Override the absolute cap on one turn even while it keeps producing output, in ms (tests). Defaults to {@link MAX_ONE_SHOT_TURN_ABSOLUTE_MS}. */
+	maxTurnAbsoluteMs?: number;
 	/** Repositories a `gh` WRITE from this session may name (#679). Absent = the guard is not installed. */
 	ghScope?: string[];
 	/** Override where the generated `gh` guard is written (tests). Defaults to the runner's config dir. */
@@ -154,6 +156,26 @@ const MAX_PENDING_ACTS = 100;
  * path can unstick a process that never exits, and the console's Restart is a human noticing.
  */
 const MAX_ONE_SHOT_TURN_MS = 15 * 60 * 1000;
+
+/**
+ * The runaway cap that holds even while a turn keeps writing (#1493).
+ *
+ * #391's ceiling was an absolute 15-minute timer, so a healthy engine that was running a long test suite and
+ * reading its output was killed mid-work (exit 143) with nothing wrong with it. The 15 minutes is now a limit on
+ * SILENCE — it is measured from the engine's last output byte — and this is the only thing that bounds a turn that
+ * never goes quiet. Runaway protection is not removed; its two causes are told apart in the transcript.
+ */
+const MAX_ONE_SHOT_TURN_ABSOLUTE_MS = 3 * 60 * 60 * 1000;
+
+/** How many instructions may wait behind a running turn (#1493). Beyond it the newest is refused, loudly. */
+const MAX_QUEUED_INPUTS = 8;
+
+/** A duration as a person reads it in the transcript: "15m", or seconds for the short ones tests use. */
+function spanLabel(ms: number): string {
+	return ms >= 60_000 ? `${Math.round(ms / 60_000)}m` : `${Math.max(1, Math.round(ms / 1000))}s`;
+}
+
+type InputOpts = { author?: TurnAuthor; replay?: string; inputId?: string; digest?: string; objective?: { runId: string; text: string; origin?: ObjectiveOrigin; constraints?: string[] }; whenBusy?: "queue" | "interrupt" };
 
 export class HeadlessSession {
 	/**
@@ -215,6 +237,11 @@ export class HeadlessSession {
 	 * `null` holds the place of an input sent without an id, so the ids after it stay aligned.
 	 */
 	private pendingInputs: Array<string | null> = [];
+	/**
+	 * Instructions that arrived while a one-shot turn was running, oldest first (#1493). Delivered one at a time when the
+	 * turn ends, never by killing it. `interrupt` is the only way to replace a running turn.
+	 */
+	private queuedInputs: Array<{ text: string; opts: InputOpts }> = [];
 	/** The id of the input the current one-shot turn was spawned for (#1019). */
 	private turnInputId: string | null = null;
 	/** Inputs accepted and consumed, bound to their content and the engine process that read them (#1019). */
@@ -656,7 +683,14 @@ export class HeadlessSession {
 	 * handed a summary of the conversation it is already in; when spent it replaces the one-shot
 	 * session-start brief, being the same record composed later.
 	 */
-	input(text: string, opts: { author?: TurnAuthor; replay?: string; inputId?: string; digest?: string; objective?: { runId: string; text: string; origin?: ObjectiveOrigin; constraints?: string[] } } = {}): void {
+	input(text: string, opts: InputOpts = {}): void {
+		// #1493: an instruction that arrives while a one-shot turn is running WAITS for it. Killing the turn (the old
+		// behaviour) lost the engine's tool handles and results — "Unknown process id", "Custom tool call output is
+		// missing" — and made a status poll indistinguishable from an interrupt. Deliberate steering says so.
+		if (this.oneShot && !this.adapter.persistent && this.procAlive && opts.whenBusy !== "interrupt") {
+			this.enqueue(text, opts);
+			return;
+		}
 		// The Engine reads the preamble, the pane the short marker; the instruction stays evidence.
 		const sent = authoredTurn(text, opts.author);
 		// The brief leads the turn and is spent in the reading (#693). It goes to the ENGINE only:
@@ -701,6 +735,22 @@ export class HeadlessSession {
 		} catch {
 			/* process may have died; the next snapshot reports not-alive */
 		}
+	}
+
+	/** Hold an instruction behind the running turn, and SAY so (#1493). A retry of one already waiting is not a second copy. */
+	private enqueue(text: string, opts: InputOpts): void {
+		if (opts.inputId && this.queuedInputs.some((q) => q.opts.inputId === opts.inputId)) return;
+		if (this.queuedInputs.length >= MAX_QUEUED_INPUTS) {
+			this.push(`[pags] ${this.queuedInputs.length} instructions are already waiting behind the running turn; this one was NOT accepted (nothing was interrupted)`);
+			return;
+		}
+		this.queuedInputs.push({ text, opts: { ...opts, whenBusy: undefined } });
+		this.push(`[pags] the engine is mid-turn, so this instruction is queued (${this.queuedInputs.length} waiting) and will be delivered when the turn ends — the running turn was not interrupted`);
+	}
+
+	/** How many instructions are waiting behind the running turn (#1493). */
+	get queuedInstructionCount(): number {
+		return this.queuedInputs.length;
 	}
 
 	/**
@@ -781,17 +831,28 @@ export class HeadlessSession {
 		proc.stderr?.on("data", (d: Buffer) => {
 			if (this.proc === proc) this.onStdout(d.toString());
 		});
-		// The enforced ceiling (#391). `unref` so a pending timer can never keep the runner's
-		// event loop alive past its own shutdown.
-		const maxTurnMs = this.config.maxTurnMs ?? MAX_ONE_SHOT_TURN_MS;
-		const ceiling = setTimeout(() => {
-			if (this.proc !== proc) return; // a newer turn owns the session; this one is already gone
-			this.push(`[${this.config.clientType} turn ended after ${Math.round(maxTurnMs / 60000)}m — the engine never exited, so the session was unwedged]`);
+		// The enforced ceilings (#391, #1493): SILENCE, measured from the engine's last output, and an absolute cap for a
+		// turn that never goes quiet. A turn that is still writing — a long test run whose output the engine is reading —
+		// is working, and killing it is what lost the run's process handles. `unref` so a pending timer can never keep the
+		// runner's event loop alive past its own shutdown.
+		const maxSilenceMs = this.config.maxTurnMs ?? MAX_ONE_SHOT_TURN_MS;
+		const maxTotalMs = this.config.maxTurnAbsoluteMs ?? MAX_ONE_SHOT_TURN_ABSOLUTE_MS;
+		const startedAt = Date.now();
+		this.lastOutputAt = startedAt;
+		const watchdog = setInterval(() => {
+			if (this.proc !== proc) return clearInterval(watchdog); // a newer turn owns the session; this one is already gone
+			const now = Date.now();
+			if (now - this.lastOutputAt >= maxSilenceMs) {
+				this.push(`[${this.config.clientType} turn ended after ${spanLabel(maxSilenceMs)} with no output — the engine never exited, so the session was unwedged]`);
+			} else if (now - startedAt >= maxTotalMs) {
+				this.push(`[${this.config.clientType} turn ended at the ${spanLabel(maxTotalMs)} absolute limit although it was still producing output — the engine never exited, so the session was unwedged]`);
+			} else return;
+			clearInterval(watchdog);
 			this.endProcess(proc);
-		}, maxTurnMs);
-		ceiling.unref();
+		}, Math.max(10, Math.min(30_000, Math.floor(Math.min(maxSilenceMs, maxTotalMs) / 4))));
+		watchdog.unref();
 		proc.on("close", (code: number | null, signal: NodeJS.Signals | null) => {
-			clearTimeout(ceiling); // cleared before the staleness guard: the timer belongs to THIS process
+			clearInterval(watchdog); // cleared before the staleness guard: the timer belongs to THIS process
 			// A non-zero exit is the engine's own failure (bad flags, not signed in) and the
 			// operator needs to see it — silently going idle is how "stdin is not a terminal"
 			// looked like an idle session for a whole afternoon.
@@ -849,7 +910,15 @@ export class HeadlessSession {
 			if (this.turnReport.verdict !== "killed") this.inputs.consume(inputId);
 			this.run = "idle";
 			this.proc = null;
+			this.deliverQueued();
 		});
+	}
+
+	/** The turn is over: hand the engine the next waiting instruction, if any (#1493). */
+	private deliverQueued(): void {
+		if (this.stopped || this.spawnFailed) return;
+		const next = this.queuedInputs.shift();
+		if (next) this.input(next.text, next.opts);
 	}
 
 	/**
@@ -877,6 +946,7 @@ export class HeadlessSession {
 
 	/** Tear the process down. For a one-shot engine this is the ONLY thing that ends the session. */
 	stop(): void {
+		this.queuedInputs = []; // an ended session delivers nothing (#1493)
 		if (this.proc) this.endProcess(this.proc);
 		this.proc = null;
 		this.run = "idle";

@@ -1666,7 +1666,7 @@ describe("HeadlessSession — a finishing turn must not clobber a newer one", ()
 
 		// Turn 2 starts while turn 1 is mid-flight (the exact race). Turn 1 is aborted, and its
 		// `close` lands a moment later — it must be IGNORED, because turn 2 owns the session now.
-		s.input("next");
+		s.input("next", { whenBusy: "interrupt" });
 		expect(s.runState()).toBe("thinking");
 		await wait(600); // long enough for the stale close, far short of the 1.5s idle threshold
 		expect(s.runState()).toBe("thinking");
@@ -1683,7 +1683,7 @@ describe("HeadlessSession — a finishing turn must not clobber a newer one", ()
 		s.start();
 		s.input("one");
 		await until(() => s.snapshot().includes("turn2: one"), 6000, "first turn");
-		s.input("two");
+		s.input("two", { whenBusy: "interrupt" });
 		await until(() => s.snapshot().includes("turn2: two"), 6000, "second turn");
 		// Both turns are in the transcript, and exactly one process is current.
 		expect(s.snapshot()).toContain("turn2: one");
