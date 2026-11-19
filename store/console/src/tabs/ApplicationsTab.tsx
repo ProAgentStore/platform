@@ -120,15 +120,17 @@ export function ApplicationsView({ instanceId, isTailor = false, applicationId }
 						<p className="text-sm text-muted mt-2">Checking the exact owner-authorized Runner handoff…</p>
 					) : (
 						<>
-							<p className="text-sm text-muted mt-2">
+							{/* #1668: the next action first — Take over when this exact handoff is live, otherwise why it is not. */}
+							<div className="flex flex-wrap items-center gap-2 mt-3" data-testid="handoff-next-action">
+								{handoff.state === "active" ? <Button size="lg" variant="primary" onClick={() => setHandoffOpen(true)}>Take over live browser</Button> : (
+									<p role="status" data-testid="handoff-unavailable-reason" className="text-sm text-ink break-words">Takeover unavailable — {handoff.expiresAt && new Date(handoff.expiresAt).getTime() <= Date.now() ? "this handoff expired" : "this session ended"}{handoff.reason ? ` (${handoff.reason.replace(/_/g, " ")})` : ""}. Stored screenshots below are read-only; closed or unavailable handoffs are not treated as completed submissions. Ask the agent for a new handoff if you still need to help.</p>
+								)}
+							</div>
+							<p className="text-sm text-muted mt-3">
 								{handoff.state === "active" ? reconciliationHandoff ? "Use this separate read-only browser only to sign in or complete the site challenge, then recheck. It cannot fill, upload, submit, or clear uncertainty without authoritative evidence." : handoff.reason === "owner_requested" ? "The agent is paused while you control this exact browser. Resume returns control to the agent; submission permission is unchanged." : "Use the existing Runner browser to complete the site step. Signing in does not by itself change an uncertain submission." : `This handoff is ${handoff.state.replace(/_/g, " ")}.`}
 							</p>
-							{handoff.reason && <p className="text-xs text-muted-soft mt-1">Reason: {handoff.reason.replace(/_/g, " ")}</p>}
-							{handoff.expiresAt && <p className="text-xs text-muted-soft mt-1">Available until {new Date(handoff.expiresAt).toLocaleString()}.</p>}
-							<div className="flex flex-wrap gap-2 mt-3">
-								{handoff.state === "active" && <Button size="sm" variant="primary" onClick={() => setHandoffOpen(true)}>Take over live browser</Button>}
-								{handoff.state !== "active" && <span className="text-xs text-muted">Closed or unavailable handoffs are not treated as completed submissions.</span>}
-							</div>
+							{handoff.reason && <p className="text-sm text-muted-soft mt-1 break-words">Reason: {handoff.reason.replace(/_/g, " ")}</p>}
+							{handoff.expiresAt && <p className="text-sm text-muted-soft mt-1 break-words">Available until {new Date(handoff.expiresAt).toLocaleString()}.</p>}
 						</>
 					)}
 				</Card>
@@ -281,6 +283,7 @@ function Detail({ instanceId, item, connections, onChanged, actionsRef, live = f
 	const [msg, setMsg] = useState("");
 	const [answers, setAnswers] = useState<Record<string, string>>({});
 	const [trace, setTrace] = useState<ApplicationTraceView | null>(null);
+	const [traceOpen, setTraceOpen] = useState(false);
 	const [transferConnection, setTransferConnection] = useState("");
 	const pause = item.fillRun?.pause ?? null;
 	// #988: the API's one durable, privacy-safe execution projection is authoritative. Keep the
@@ -415,11 +418,13 @@ function Detail({ instanceId, item, connections, onChanged, actionsRef, live = f
 			{/* #975: "it did nothing on the page" is a distinct, actionable cause — the counts that
 			    prove it, and the ids the runner observed. No CLI prose reaches here. */}
 			{item.diagnostic && (
-				<p className="text-xs mb-2" data-testid="run-diagnostic">
+				<details className="mb-2"><summary className="text-sm font-semibold cursor-pointer min-h-11 flex items-center">Diagnostics</summary>
+				<p className="text-sm break-words" data-testid="run-diagnostic">
 					<span className="text-warning font-bold">Diagnosis:</span> {item.diagnostic.cause.replace(/_/g, " ")} — {item.diagnostic.bridgeCalls} browser call
 					{item.diagnostic.bridgeCalls === 1 ? "" : "s"}, {item.diagnostic.filled} field{item.diagnostic.filled === 1 ? "" : "s"} filled after {Math.round(item.diagnostic.activeMs / 1000)}s (exit {item.diagnostic.engineExit})
 					{item.diagnostic.signals.length ? ` · ${item.diagnostic.signals.join(", ").replace(/_/g, " ")}` : ""}
 				</p>
+				</details>
 			)}
 			{/* #974: waiting for the machine is not a failure, and the card says which it is — the
 			    position in line and when the next attempt is due, not a terminal "runner rejected". */}
@@ -478,12 +483,12 @@ function Detail({ instanceId, item, connections, onChanged, actionsRef, live = f
 					</Button>
 				))}
 				{item.applicationId && (
-					<Button size="sm" onClick={loadTrace}>
+					<Button size="sm" onClick={() => { setTraceOpen(true); void loadTrace(); }}>
 						Trace
 					</Button>
 				)}
 			</fieldset>
-			{msg && <p className="text-xs mt-2">{msg}</p>}
+			{msg && <p className="text-sm mt-2 break-words">{msg}</p>}
 
 			{(live || !!item.fillRunId || frames.length > 0 || screenshotsOff) && (
 				<div className="mt-3">
@@ -495,15 +500,17 @@ function Detail({ instanceId, item, connections, onChanged, actionsRef, live = f
 			{live && <h4 className="font-semibold mt-4 mb-2">Live steps</h4>}
 			{live && trace?.entries.length === 0 && <p className="text-sm text-muted">No steps recorded yet.</p>}
 			{trace && (
-				<ol className="mt-3 text-xs flex flex-col gap-0.5" aria-label="Application trace">
+				<details className="mt-3" open={traceOpen} onToggle={(e) => setTraceOpen(e.currentTarget.open)}><summary className="text-sm font-semibold cursor-pointer min-h-11 flex items-center">Diagnostics / trace ({trace.entries.length})</summary>
+				<ol className="mt-1 text-sm flex flex-col gap-1" aria-label="Application trace">
 					{trace.entries.map((e) => (
 						<li key={`${e.at}|${e.source}|${e.type}|${e.runId ?? ""}|${JSON.stringify(e.detail)}`} className="flex flex-wrap sm:flex-nowrap gap-2">
-							<span className="text-muted-soft shrink-0 w-40">{e.at ? new Date(e.at).toLocaleString() : ""}</span>
-							<span className="shrink-0 w-16">{e.source}</span>
+							<span className="text-muted-soft shrink-0 sm:w-40">{e.at ? new Date(e.at).toLocaleString() : ""}</span>
+							<span className="shrink-0 sm:w-16">{e.source}</span>
 							<span className="min-w-0 basis-full sm:basis-auto break-words [overflow-wrap:anywhere]">{applicationTraceLabel(e)}</span>
 						</li>
 					))}
 				</ol>
+				</details>
 			)}
 		</Card>
 	);
@@ -671,7 +678,7 @@ export function SubmissionPolicy({ runnerId, allowance, onChanged }: { runnerId:
 					</Button>
 				)}
 			</div>
-			{msg && <p className="text-xs mt-2">{msg}</p>}
+			{msg && <p className="text-sm mt-2 break-words">{msg}</p>}
 			{confirming && (
 				<AutoSubmitConfirmDialog
 					rules={draftRules}

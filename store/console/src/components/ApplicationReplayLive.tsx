@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import type { RemoteFrame } from "./RemoteBrowser";
 import Button from "./Button";
+import ZoomableImage from "./ZoomableImage";
 
 /** A live endpoint is a separate position, never a stored screenshot or an input capability. */
 export default function ApplicationReplayLive({ instanceId, runId, handoff, reconciliation, onTakeOver, onRequestControl }: {
@@ -46,10 +47,10 @@ export default function ApplicationReplayLive({ instanceId, runId, handoff, reco
 	return <div className="min-w-0" data-testid="application-replay-live">
 		<h5 className="font-semibold">Live browser</h5>
 		{base ? <>
-			{image?.base === base && <img src={image.frame.frame} width={image.frame.width} height={image.frame.height} alt="Current Application Runner browser — read-only preview" className="w-full max-h-[520px] object-contain mt-2" />}
+			{image?.base === base && <div className="mt-2"><ZoomableImage src={image.frame.frame} width={image.frame.width} height={image.frame.height} alt="Current Application Runner browser — read-only preview" overlayExtra={<Button size="lg" variant="primary" disabled={!!error} onClick={onTakeOver}>Take over live browser</Button>} /></div>}
 			<p className="text-sm text-muted my-2 break-words">{error ? `Live browser unavailable: ${error}` : image?.base === base ? "Current browser preview. Open the secure control to interact." : "Connecting to this run’s existing browser…"}</p>
-			<Button size="sm" disabled={!!error || image?.base !== base} onClick={onTakeOver}>Take over live browser</Button>
-		</> : <p className="text-sm text-muted mt-2">Live takeover is unavailable for this run. An active owner-authorized handoff for this exact browser run is required. Stored screenshots remain read-only.</p>}
+			<Button size="lg" variant="primary" disabled={!!error || image?.base !== base} onClick={onTakeOver}>Take over live browser</Button>
+		</> : <p role="status" data-testid="replay-live-unavailable" className="text-sm text-muted mt-2 break-words">{handoff && handoff.runId === runId ? "Live takeover is unavailable for this run — this handoff is no longer active." : "Live takeover is unavailable for this run."} An active owner-authorized handoff for this exact browser run is required. Stored screenshots below are history and remain read-only.</p>}
 		{!base && onRequestControl && <><p className="text-sm text-muted my-2">Pause the agent and wait for its browser actions to settle before taking control. This does not grant submission permission.</p><Button size="sm" disabled={requesting} onClick={() => void request()}>{requesting ? "Pausing browser…" : "Pause and take control"}</Button></>}
 		{requestError && <p role="alert" className="text-sm text-danger mt-2 break-words">{requestError}</p>}
 	</div>;

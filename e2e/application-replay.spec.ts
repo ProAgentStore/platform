@@ -1,5 +1,9 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+async function expandTrace(page: Page) {
+	if (!(await page.getByRole("list", { name: "Application trace" }).isVisible())) await page.getByText(/Diagnostics \/ trace/).click();
+}
+
 // #1464: each replay position must show its own bytes, capture time and action evidence.
 // The real console is rendered; every account/API request is answered by synthetic fixtures.
 const API = "https://api.proagentstore.online";
@@ -94,6 +98,7 @@ test("replay switches actual frame pixels, labels and capture timestamps", async
 	await replay.getByRole("button", { name: "Previous", exact: true }).click();
 	expect(await renderedPixel(image)).toEqual([0, 255, 0, 255]);
 	await expect(page.getByRole("heading", { name: "Live steps", exact: true })).toBeVisible();
+	await expandTrace(page); // #1668: the trace is collapsed by default
 	const trace = page.getByRole("list", { name: "Application trace" });
 	await expect(trace).toContainText(`Opened page — ${JOB_URL}`);
 	await expect(trace).toContainText("Allowed click “Apply”");
@@ -126,6 +131,7 @@ test("mobile — replay and descriptive trace wrap long URLs within 375px", asyn
 	const replay = await mockReplay(page, { longUrl: true });
 	await expect(replay.getByRole("img")).toBeVisible();
 	await expect(page.getByRole("heading", { name: "Live steps", exact: true })).toBeVisible();
+	await expandTrace(page); // #1668: the trace is collapsed by default
 	await expect(page.getByRole("list", { name: "Application trace" })).toContainText("Allowed click “Apply”");
 	await replay.scrollIntoViewIfNeeded();
 	const box = await replay.boundingBox();
@@ -139,6 +145,7 @@ test("mobile — replay and descriptive trace wrap long URLs within 375px", asyn
 test("standalone detail refreshes live steps and screenshots without a state-version change", async ({ page }) => {
 	const replay = await mockReplay(page, { liveUpdates: true });
 	await expect(replay.getByRole("slider", { name: "Frame" })).toHaveAttribute("aria-valuetext", "Frame 1 of 2");
+	await expandTrace(page); // #1668: the trace is collapsed by default
 	await expect(page.getByRole("list", { name: "Application trace" })).not.toContainText("Filled field “Email”");
 	await page.evaluate(() => { (window as unknown as { applicationPageSentinel: string }).applicationPageSentinel = "same-page"; });
 	await expect(page.getByRole("list", { name: "Application trace" })).toContainText("Filled field “Email”", { timeout: 12000 });
@@ -157,6 +164,7 @@ test("standalone replay shows the run's recorded screenshots-off setting", async
 	await expect(page.getByTestId("replay-empty")).toContainText("Screenshots were off for this run");
 	await expect(page.getByTestId("replay-empty")).toContainText("Turn it on in Settings");
 	await expect(page.getByRole("slider", { name: "Frame" })).toHaveAttribute("aria-valuetext", "Live browser");
+	await expandTrace(page); // #1668: the trace is collapsed by default
 	await expect(page.getByRole("list", { name: "Application trace" })).toContainText("Allowed click “Apply”");
 	expect(imageRequests).toBe(0);
 });
@@ -223,4 +231,72 @@ test("an unsettled or unsupported pause never enables live input", async ({ page
 	await expect(replay.getByRole("alert")).toContainText("still settling");
 	await expect(page.getByRole("dialog")).toHaveCount(0);
 	await expect(replay.getByRole("button", { name: "Pause and take control", exact: true })).toBeEnabled();
+});
+
+// ── #1668: readable, zoomable previews and an honest takeover entry on a phone ───────────────────────
+for (const width of [320, 390, 430]) {
+	test(`mobile — a stored frame opens full-screen with zoom controls and no sideways scroll at ${width}px`, async ({ page }) => {
+		await page.setViewportSize({ width, height: 800 });
+		const replay = await mockReplay(page);
+		await expect(replay.getByRole("slider")).toHaveAttribute("max", "3");
+		await expect(replay.getByTestId("preview-zoom-open")).toBeVisible();
+		for (const name of ["Play", "Previous", "Next"]) {
+			const box = await replay.getByRole("button", { name, exact: true }).boundingBox();
+			expect(box!.width).toBeGreaterThanOrEqual(43);
+			expect(box!.height).toBeGreaterThanOrEqual(43);
+		}
+		const thumb = await replay.getByTestId("preview-zoom-open").boundingBox();
+		expect(thumb!.width).toBeGreaterThan(width - 80); // uses the available width
+		await replay.getByTestId("preview-zoom-open").click();
+		const dialog = page.getByRole("dialog", { name: "Zoomed preview" });
+		await expect(dialog).toBeVisible();
+		const close = dialog.getByRole("button", { name: "Close preview" });
+		const closeBox = await close.boundingBox();
+		expect(closeBox!.width).toBeGreaterThanOrEqual(43);
+		expect(closeBox!.height).toBeGreaterThanOrEqual(43);
+		await expect(dialog.getByTestId("preview-zoom-level")).toHaveText("100%");
+		await dialog.getByRole("button", { name: "Zoom in" }).click();
+		await dialog.getByRole("button", { name: "Zoom in" }).click();
+		await expect(dialog.getByTestId("preview-zoom-level")).toHaveText("200%");
+		const scroller = dialog.getByTestId("preview-zoom-scroller");
+		expect(await scroller.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true); // zoomed content pans inside the dialog
+		await dialog.getByRole("button", { name: "Zoom out" }).click();
+		await expect(dialog.getByTestId("preview-zoom-level")).toHaveText("150%");
+		expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
+		await page.keyboard.press("Escape");
+		await expect(dialog).toHaveCount(0);
+		expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
+	});
+}
+
+test("mobile — the live preview zooms and keeps Take over reachable inside the zoom view", async ({ page }) => {
+	await page.setViewportSize({ width: 390, height: 800 });
+	const replay = await mockReplay(page, { handoff: "active" });
+	await replay.getByRole("slider").fill("3");
+	await replay.getByTestId("preview-zoom-open").click();
+	const dialog = page.getByRole("dialog", { name: "Zoomed preview" });
+	const take = dialog.getByRole("button", { name: "Take over live browser" });
+	await expect(take).toBeVisible();
+	await expect(take).toBeInViewport();
+	await take.click();
+	await expect(page.getByRole("dialog", { name: "Live Application Runner browser control" })).toBeVisible();
+});
+
+test("mobile — a handoff link leads with Take over when live, and with the reason when it ended", async ({ page }) => {
+	await page.setViewportSize({ width: 375, height: 800 });
+	await mockReplay(page, { handoff: "active" });
+	const next = page.getByTestId("handoff-next-action");
+	await expect(next.getByRole("button", { name: "Take over live browser" })).toBeVisible();
+	const card = page.getByTestId("application-handoff");
+	const [btnY, copyY] = await Promise.all([next.boundingBox(), card.getByText(/Use the existing Runner browser|The agent is paused|Use this separate/).boundingBox()]);
+	expect(btnY!.y).toBeLessThan(copyY!.y);
+	expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
+});
+
+test("mobile — an ended handoff says why and offers no control", async ({ page }) => {
+	await page.setViewportSize({ width: 375, height: 800 });
+	await mockReplay(page, { handoff: "ended" });
+	const reason = page.getByTestId("handoff-unavailable-reason");
+	await expect(reason).toContainText("Takeover unavailable");
+	await expect(page.getByTestId("application-handoff").getByRole("button", { name: /Take over/ })).toHaveCount(0);
 });

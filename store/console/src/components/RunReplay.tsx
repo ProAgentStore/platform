@@ -10,6 +10,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { API, api, getToken } from "@proagentstore/sdk/client";
 import { ChevronLeft, ChevronRight, Pause, Play } from "lucide-react";
 import Card from "./Card";
+import ZoomableImage from "./ZoomableImage";
 import { type ReplayFrame, type ReplaySubjectKind } from "../lib/runReplay";
 import { emptyReplayHistory, loadReplayHistory, replayHistorySummary, type BrowserArtifactPageResponse, type ReplayHistoryState } from "../lib/replayHistory";
 
@@ -120,9 +121,9 @@ export default function RunReplay({ frames, emptyText, history, historyLoading =
 		}), 1200);
 		return () => clearInterval(timer);
 	}, [playing, frames]);
-	const historyNotice = history && <div className="text-xs text-muted-soft mb-3 break-words [overflow-wrap:anywhere]" data-testid="replay-history-status">
+	const historyNotice = history && <div className="text-sm text-muted-soft mb-3 break-words [overflow-wrap:anywhere]" data-testid="replay-history-status">
 		<p>{replayHistorySummary(history)}</p>
-		{history.status !== "complete" && history.status !== "loading" && onLoadMore && <button type="button" disabled={historyLoading} onClick={onLoadMore} className="mt-2 underline text-accent disabled:opacity-50">{history.error ? "Retry screenshot history" : history.hasMore ? "Load more history" : "Refresh screenshot history"}</button>}
+		{history.status !== "complete" && history.status !== "loading" && onLoadMore && <button type="button" disabled={historyLoading} onClick={onLoadMore} className="mt-2 underline text-accent disabled:opacity-50 min-h-11">{history.error ? "Retry screenshot history" : history.hasMore ? "Load more history" : "Refresh screenshot history"}</button>}
 	</div>;
 
 	const noFramesText = history?.status === "loading" ? "Loading stored screenshots…" : history?.error ? "Stored screenshots could not be loaded. Retry the history request." : emptyText;
@@ -132,26 +133,26 @@ export default function RunReplay({ frames, emptyText, history, historyLoading =
 		<Card className="mb-5" data-testid="run-replay">
 			{historyNotice}
 			<div className="flex items-center gap-2 sm:gap-3 mb-3">
-				<button type="button" disabled={!cur} onClick={() => setPlaying((p) => !p)} className="w-9 h-9 flex items-center justify-center rounded-lg bg-accent text-white shrink-0" aria-label={playing ? "Pause" : "Play"}>
+				<button type="button" disabled={!cur} onClick={() => setPlaying((p) => !p)} className="min-w-11 min-h-11 flex items-center justify-center rounded-lg bg-accent text-white shrink-0" aria-label={playing ? "Pause" : "Play"}>
 					{playing ? <Pause size={16} /> : <Play size={16} />}
 				</button>
-				<button type="button" onClick={() => { setPlaying(false); select(idx - 1); }} disabled={idx <= 0} className="w-8 h-8 flex items-center justify-center rounded-lg border border-line text-muted disabled:opacity-30" aria-label="Previous"><ChevronLeft size={16} /></button>
-				<button type="button" onClick={() => { setPlaying(false); select(idx + 1); }} disabled={idx >= lastIndex} className="w-8 h-8 flex items-center justify-center rounded-lg border border-line text-muted disabled:opacity-30" aria-label="Next"><ChevronRight size={16} /></button>
+				<button type="button" onClick={() => { setPlaying(false); select(idx - 1); }} disabled={idx <= 0} className="min-w-11 min-h-11 flex items-center justify-center rounded-lg border border-line text-muted disabled:opacity-30" aria-label="Previous"><ChevronLeft size={16} /></button>
+				<button type="button" onClick={() => { setPlaying(false); select(idx + 1); }} disabled={idx >= lastIndex} className="min-w-11 min-h-11 flex items-center justify-center rounded-lg border border-line text-muted disabled:opacity-30" aria-label="Next"><ChevronRight size={16} /></button>
 				<input type="range" min={0} max={lastIndex} value={idx} onChange={(e) => { setPlaying(false); select(Number(e.target.value)); }} className="flex-1 min-w-0 accent-accent" aria-label="Frame" aria-valuetext={liveSelected || !cur ? "Live browser" : `Frame ${idx + 1} of ${frames.length}`} />
-				<span className="text-xs text-muted-soft font-mono shrink-0">{liveSelected || !cur ? "Live" : `${idx + 1}/${frames.length}`}</span>
+				<span className="text-sm text-muted-soft font-mono shrink-0">{liveSelected || !cur ? "Live" : `${idx + 1}/${frames.length}`}</span>
 			</div>
-			{liveView && <button type="button" className="text-xs text-accent underline mb-3" onClick={() => { setPlaying(false); select(frames.length); }}>Live browser →</button>}
+			{liveView && <button type="button" className="text-sm text-accent underline mb-3 min-h-11" onClick={() => { setPlaying(false); select(frames.length); }}>Live browser →</button>}
 			{!cur ? <div data-testid="replay-live">{!frames.length && <p data-testid="replay-empty" className="text-sm text-muted-soft mb-3">{noFramesText}</p>}{liveView}</div> : <>
 			<div className="rounded-lg overflow-hidden border border-line bg-paper flex items-center justify-center min-h-[240px]">
-				{failed[cur.key] ? <span className="text-sm text-muted-soft py-16">Screenshot unavailable for this frame.</span> : urls[cur.key] ? <img key={cur.key} src={urls[cur.key]} alt={`Frame ${cur.seq}: ${cur.caption}`} onError={() => setFailed((old) => ({ ...old, [cur.key]: true }))} width={1280} height={720} className="w-full max-h-[520px] object-contain" /> : <span className="text-sm text-muted-soft py-16">Loading screenshot…</span>}
+				{failed[cur.key] ? <span className="text-sm text-muted-soft py-16">Screenshot unavailable for this frame.</span> : urls[cur.key] ? <ZoomableImage key={cur.key} src={urls[cur.key]} alt={`Frame ${cur.seq}: ${cur.caption}`} width={1280} height={720} /> : <span className="text-sm text-muted-soft py-16">Loading screenshot…</span>}
 			</div>
 			<div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-1 sm:gap-3 mt-2.5">
 				<div className="min-w-0 flex-1 break-words text-sm text-ink" data-testid="replay-caption">
 					<span className="font-semibold">Frame {cur.seq}:</span> {cur.caption}
 				</div>
-				<span className="text-xs text-muted-soft font-mono shrink-0">{cur.timeKind === "stored" ? "Stored " : "Captured "}{fmtStamp(cur.at)}</span>
+				<span className="text-sm text-muted-soft font-mono shrink-0 break-words">{cur.timeKind === "stored" ? "Stored " : "Captured "}{fmtStamp(cur.at)}</span>
 			</div>
-			<p className="text-xs text-muted-soft mt-1">Screenshots can show the same page between actions. History is read-only.</p>
+			<p className="text-sm text-muted-soft mt-1">Screenshots can show the same page between actions. History is read-only.</p>
 			</>}
 		</Card>
 	);

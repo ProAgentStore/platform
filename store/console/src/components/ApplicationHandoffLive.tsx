@@ -100,7 +100,7 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 		} catch (e) { setEndError(`Couldn't end the handoff — the Runner may still have the browser. ${e instanceof Error ? e.message : String(e)}`); }
 	};
 
-	return <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Live Application Runner browser control" className="fixed inset-0 z-[100] bg-black flex flex-col">
+	return <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Live Application Runner browser control" className="fixed inset-0 z-[100] bg-black flex flex-col w-full overflow-x-hidden text-sm sm:text-base">
 		<div className="flex items-center gap-3 px-3 sm:px-4 py-2 bg-panel border-b border-line shrink-0">
 			<span className="font-bold text-ink text-sm">🖥 {reconciliation ? "Application reconciliation — read-only browser" : "Application Runner — live browser control"}</span>
 			<span className="text-xs text-muted-soft hidden md:inline">{reconciliation ? "Sign in or complete the site challenge only. This browser cannot fill, upload, submit, or clear the original uncertainty." : awaitingApproval ? "Review this application, then return control. Submission still requires its separate approval." : ownerRequested ? "The agent is paused while you control this browser. Resume returns control to the agent. Submission permission is unchanged." : "Sign in or complete the site step in this existing browser, then resume. A sign-in alone never changes submission status."}</span>
@@ -121,11 +121,11 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 			onTapped={reconciliation ? () => mobileEntryRef.current?.focus() : undefined}
 			defaultImmersive={deviceKind() === "mobile"}
 			notices={<>
-				{endError && <div data-testid="application-handoff-end-error" className="shrink-0 px-3 sm:px-4 py-2 bg-danger-soft border-b border-danger-line text-danger text-xs font-semibold break-words">{endError}</div>}
-				{resumeNotice && <div data-testid="application-handoff-resume-notice" className="shrink-0 px-3 sm:px-4 py-2 bg-danger-soft border-b border-danger-line text-danger text-xs font-semibold break-words">{resumeNotice}</div>}
-				{inputNotice && <div data-testid="application-handoff-input-error" className="shrink-0 px-3 sm:px-4 py-2 bg-danger-soft border-b border-danger-line text-danger text-xs font-semibold break-words">{inputNotice}</div>}
+				{endError && <div data-testid="application-handoff-end-error" className="shrink-0 px-3 sm:px-4 py-2 bg-danger-soft border-b border-danger-line text-danger text-sm font-semibold break-words">{endError}</div>}
+				{resumeNotice && <div data-testid="application-handoff-resume-notice" className="shrink-0 px-3 sm:px-4 py-2 bg-danger-soft border-b border-danger-line text-danger text-sm font-semibold break-words">{resumeNotice}</div>}
+				{inputNotice && <div data-testid="application-handoff-input-error" className="shrink-0 px-3 sm:px-4 py-2 bg-danger-soft border-b border-danger-line text-danger text-sm font-semibold break-words">{inputNotice}</div>}
 			</>}
-			placeholder={frameError ? <><div className="font-semibold text-danger mb-1">Live handoff unavailable</div><div className="text-xs text-white/60 break-words font-mono">{frameError}</div></> : "Connecting to the existing Runner browser…"}
+			placeholder={frameError ? <><div className="font-semibold text-danger mb-1">Live handoff unavailable</div><div className="text-sm text-white/60 break-words font-mono">{frameError}</div></> : "Connecting to the existing Runner browser…"}
 		/>
 	</div>;
 }
