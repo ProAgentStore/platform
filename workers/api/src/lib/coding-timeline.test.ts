@@ -405,6 +405,14 @@ describe("sweepTerminalSnapshots — visits only the marked sessions and prunes 
 describe("the terminal worklist on the real schema (#1642)", () => {
 	let db: RealSchemaD1;
 	const insert = () => db.sqlite.prepare("INSERT INTO coding_timeline (session_id, instance_id, user_id, type, content) VALUES (?, 'i1', 'u1', ?, ?)");
+	/** Thousands of rows in ONE transaction: autocommitted inserts are what made these tests blow the 30s budget on a slow disk. */
+	const bulk = (rows: Array<[string, string, string]>) => {
+		const ins = insert();
+		db.sqlite.exec("BEGIN");
+		for (const r of rows) ins.run(...r);
+		db.sqlite.exec("COMMIT");
+	};
+	const panes = (id: string, n: number): Array<[string, string, string]> => Array.from({ length: n }, (_, i) => [id, "terminal", `pane ${i}`]);
 	const marked = () => (db.sqlite.prepare("SELECT session_id FROM coding_terminal_dirty ORDER BY session_id").all() as Array<{ session_id: string }>).map((r) => r.session_id);
 	const terminalRows = (id: string) => (db.sqlite.prepare("SELECT COUNT(*) AS n FROM coding_timeline WHERE session_id = ? AND type = 'terminal'").get(id) as { n: number }).n;
 	const env = () => ({ DB: db.DB }) as unknown as Env;
@@ -436,10 +444,7 @@ describe("the terminal worklist on the real schema (#1642)", () => {
 	});
 
 	it("drains only the marked over-cap session, leaves the calm one untouched, and empties the worklist", async () => {
-		const ins = insert();
-		const over = TERMINAL_KEEP_PER_SESSION + 450;
-		for (let i = 0; i < over; i++) ins.run("a", "terminal", `pane ${i}`);
-		for (let i = 0; i < 10; i++) ins.run("calm", "terminal", `pane ${i}`);
+		bulk([...panes("a", TERMINAL_KEEP_PER_SESSION + 450), ...panes("calm", 10)]);
 		db.exec("INSERT INTO coding_terminal_dirty (session_id, marked_at) VALUES ('a', 1), ('calm', 2)");
 		expect(await sweepTerminalSnapshots(env())).toBe(450);
 		expect(terminalRows("a")).toBe(TERMINAL_KEEP_PER_SESSION);
@@ -448,8 +453,7 @@ describe("the terminal worklist on the real schema (#1642)", () => {
 	});
 
 	it("a session the passes could not finish stays on the worklist for the next sweep", async () => {
-		const ins = insert();
-		for (let i = 0; i < TERMINAL_KEEP_PER_SESSION + 3_500; i++) ins.run("a", "terminal", `pane ${i}`); // more than 15 batches of 200 past the cap
+		bulk(panes("a", TERMINAL_KEEP_PER_SESSION + 3_500)); // more than 15 batches of 200 past the cap
 		db.exec("INSERT INTO coding_terminal_dirty (session_id, marked_at) VALUES ('a', 1)");
 		await sweepTerminalSnapshots(env());
 		expect(terminalRows("a")).toBeGreaterThan(TERMINAL_KEEP_PER_SESSION);
