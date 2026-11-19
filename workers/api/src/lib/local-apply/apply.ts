@@ -76,7 +76,7 @@ import {
 	moveApplication,
 	updateApplyRun,
 } from "./store.js";
-import { claimQueuedDispatch, instancesWithQueuedRuns, nextDueQueuedRun, noteQueued, queueFieldsFor } from "../applications/work-queue-store.js";
+import { claimQueuedDispatch, instancesWithQueuedRuns, nextDueQueuedRun, noteQueued, noteQueuedIfUnset, queueFieldsFor, slotHolderFor } from "../applications/work-queue-store.js";
 import { QUEUE_MAX_ATTEMPTS, refusalVerdict } from "../applications/work-queue.js";
 import { clipMarked } from "../clip-marked.js";
 import { cliAtLeast } from "../runner-upgrade.js";
@@ -653,6 +653,13 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 		// The queue owns its retry/expiry budget; creation age cannot turn it into runner_lost.
 		const queue = await queueFieldsFor(env, "local_apply_runs", run.id);
 		if (queue?.reason || (queue?.attempts ?? 0) > 0) return run;
+		// #1411: a run waiting behind the instance's active or paused run was never offered to the runner,
+		// so it has no attempts and no reason. That is a capacity wait bounded by the holder's own limits,
+		// not an abandoned start: its age must not turn it into runner_lost, and it says what it waits on.
+		if (await slotHolderFor(env, "local_apply_runs", run.instanceId, uid, run.id).catch(() => null)) {
+			await noteQueuedIfUnset(env, "local_apply_runs", run.id, "Waiting for the browser run ahead of it to finish.", now).catch(() => undefined);
+			return run;
+		}
 		return now - run.createdAt > LOST_RUNNER_GRACE_MS ? endLost(env, uid, run, "The run was never handed to the runner.", now) : run;
 	}
 	if (run.status !== "running" && run.status !== "paused") {

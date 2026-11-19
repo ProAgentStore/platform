@@ -59,6 +59,27 @@ export async function nextDueQueuedRun(env: DB, table: QueueTable, instanceId: s
 		: null;
 }
 
+/**
+ * The run that holds this instance's one machine slot right now, if any (#1411).
+ *
+ * A queued run behind a holder has, by design, never been claimed: {@link nextDueQueuedRun} offers
+ * nothing while the slot is taken, so its `attempts` stay 0 and it has no reason. That is a
+ * legitimate capacity wait, and the holder's own lifecycle (its time limit, its pause grace) is what
+ * bounds it — the waiter's creation age says nothing about whether it was abandoned.
+ */
+export async function slotHolderFor(env: DB, table: QueueTable, instanceId: string, userId: string, exceptRunId: string): Promise<{ id: string; status: string } | null> {
+	const busy = BUSY_STATUSES[table];
+	const placeholders = busy.map((_, i) => `?${i + 4}`).join(", ");
+	return env.DB.prepare(`SELECT id, status FROM ${table} WHERE instance_id = ?1 AND user_id = ?2 AND id != ?3 AND status IN (${placeholders}) ORDER BY created_at, id LIMIT 1`)
+		.bind(instanceId, userId, exceptRunId, ...busy)
+		.first<{ id: string; status: string }>();
+}
+
+/** Record the wait reason only when none is recorded, so a status read never overwrites a dispatch's own reason. */
+export async function noteQueuedIfUnset(env: DB, table: QueueTable, runId: string, reason: string, now: number): Promise<void> {
+	await env.DB.prepare(`UPDATE ${table} SET queued_reason = ?1, updated_at = ?2 WHERE id = ?3 AND status = 'queued' AND queued_reason IS NULL`).bind(reason.slice(0, 300), now, runId).run();
+}
+
 /** Every instance holding at least one queued run — what a sweep iterates. */
 export async function instancesWithQueuedRuns(env: DB, table: QueueTable, limit: number): Promise<Array<{ instanceId: string; userId: string }>> {
 	const { results } = await env.DB.prepare(
