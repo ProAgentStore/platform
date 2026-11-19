@@ -38,6 +38,7 @@ import { audit, dryRun, requireConfirmation, requirePermission, type SafetyConte
 import { runStateSentence } from "./state-vocabulary.js";
 import { registerAliasTarget, registerDeprecatedAlias } from "./deprecated-alias.js";
 import { findInstanceForAgent } from "./instance-tools/shared.js";
+import { type EndReply, reusedSessionReply, unconfirmedStopReply } from "./coding-fresh.js";
 
 type TokenResolver = (provided?: string) => string | null;
 type SafetyResolver = (provided?: string) => SafetyContext;
@@ -702,13 +703,21 @@ export function registerCodingSessionTools(
 			if (denied) return denied;
 			const r = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, {}, env)) as { sessions?: Array<{ id: string; status: string; repoId: string }>; error?: string };
 			if (r.error) return jsonText(r);
-			const active = (r.sessions || []).find((s) => s.status === "active");
-			const repoId = repo_id || active?.repoId;
+			const repoId = repo_id || (r.sessions || []).find((s) => s.status === "active")?.repoId;
 			if (!repoId) return text("No repo specified and no active session to infer from.");
+			// #1528: THIS repo's active session, not whichever is listed first (coding-fresh.ts).
+			const active = (r.sessions || []).find((s) => s.status === "active" && s.repoId === repoId);
+			let oldSession: { id: string; engineStopped: boolean | null } | null = null;
 			if (active) {
-				const ended = (await authedAsyncCall(`/v1/instances/${instance_id}/coding/sessions/${active.id}/end`, sessionToken, { method: "POST" }, env, { tool: "coding_session_fresh", possibleOutcomes: ["not-started", "stopping-old-session", "old-session-ended"], poll: { tool: "coding_sessions_list", input: { instance_id } } })) as { error?: string; outcome?: string };
+				const ended = (await authedAsyncCall(`/v1/instances/${instance_id}/coding/sessions/${active.id}/end`, sessionToken, { method: "POST" }, env, { tool: "coding_session_fresh", possibleOutcomes: ["not-started", "stopping-old-session", "old-session-ended"], poll: { tool: "coding_sessions_list", input: { instance_id } } })) as { error?: string; outcome?: string } & EndReply;
 				if (ended.outcome === "unknown") return jsonText(ended);
 				if (ended.error) return jsonText(ended);
+				const unconfirmed = unconfirmedStopReply(instance_id, active.id, ended);
+				if (unconfirmed) {
+					await audit(safetyFor(token), { tool: "coding_session_fresh", action: "unknown", input: { instance_id, repoId, oldSessionId: active.id } });
+					return jsonText(unconfirmed);
+				}
+				oldSession = { id: active.id, engineStopped: ended.engineStopped ?? null };
 			}
 			// `fresh: true` (#408): a new session now CONTINUES the repo's recent conversation by
 			// default, and the one this tool just ended is the most recent there is — so without the
@@ -720,8 +729,13 @@ export function registerCodingSessionTools(
 			const d = (await authedAsyncCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, { method: "POST", body: JSON.stringify(engine_id ? { repoId, engineId: engine_id, fresh: true } : { repoId, fresh: true }) }, env, { tool: "coding_session_fresh", possibleOutcomes: ["old-session-ended", "new-session-provisioning", "new-session-started"], poll: { tool: "coding_sessions_list", input: { instance_id } } })) as { error?: string; outcome?: string };
 			if (d.outcome === "unknown") return jsonText(d);
 			if (d.error) return jsonText(d);
+			const reused = reusedSessionReply(d as { reused?: boolean; session?: { id?: string } });
+			if (reused) {
+				await audit(safetyFor(token), { tool: "coding_session_fresh", action: "failed", input: { instance_id, repoId, reusedSessionId: (reused.session as { id?: string } | undefined)?.id } });
+				return jsonText(reused);
+			}
 			await audit(safetyFor(token), { tool: "coding_session_fresh", action: "completed", input: { instance_id, repoId } });
-			return jsonText(d);
+			return jsonText(oldSession ? { ...(d as object), oldSession } : d);
 		},
 	);
 

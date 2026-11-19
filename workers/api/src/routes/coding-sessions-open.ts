@@ -126,6 +126,13 @@ export function registerSessionOpenRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		// One active session per repo — a second would share the repo's single working
 		// directory and conflict (concurrent edits, git index races). Reuse the live one.
 		const existing = await getActiveSessionForRepo(c.env, instanceId, uid, repoId);
+		// #1528: `fresh: true` means "a NEW conversation, not this one". Reusing the live session answers `reused: true` with the very
+		// history the caller is trying to clear (a timed-out turn leaves an idle-but-ACTIVE session, which looked exactly like a healthy
+		// one here). So a fresh open refuses to reuse: the session must be ended first — which also confirms its engine stopped — and
+		// the caller is told which one is in the way.
+		if (existing && body.fresh === true) {
+			return c.json({ error: `A fresh conversation was requested, but session ${existing.id} is still active on this repo and holds the old one. End it first (coding_session_end, confirm engineStopped), then open fresh.`, code: "fresh_requires_end", activeSessionId: existing.id, reused: false }, 409);
+		}
 		if (existing) {
 			// The launch's FULL answer, not just whether a machine answered (#738): a re-attach can
 			// relocate the session to whichever machine is live now, and the engine that comes up there

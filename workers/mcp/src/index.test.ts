@@ -1028,6 +1028,85 @@ describe("coding_session_fresh", () => {
 		expect(h.auditEvents().filter((e) => e.tool === "coding_session_fresh").map((e) => e.action)).toEqual(["unknown"]);
 	});
 
+	describe("an explicit fresh clears THIS repo's conversation, or says it could not (#1528)", () => {
+		const sessionsGet = (h: Awaited<ReturnType<typeof setup>>, sessions: Array<{ id: string; status: string; repoId: string }>) =>
+			h.fetchStub.respond((u, m) => u.endsWith("/coding/sessions") && m === "GET", { body: { sessions } });
+		const endsCalled = (h: Awaited<ReturnType<typeof setup>>) => h.fetchStub.calls.filter((c) => /\/coding\/sessions\/[^/]+\/end$/.test(c.url) && c.method === "POST").map((c) => c.url.split("/").at(-2));
+		const posted = (h: Awaited<ReturnType<typeof setup>>) => h.fetchStub.calls.some((c) => c.url.endsWith("/coding/sessions") && c.method === "POST");
+
+		it("ends the session of the REQUESTED repo, not whichever active session is listed first", async () => {
+			// The reported failure's shape: two repos live. Ending the first one left repo-1's own session active, and the open
+			// that followed REUSED it — the corrupt conversation survived the call.
+			const h = await setup({ groups: ["coding"] });
+			sessionsGet(h, [{ id: "sess-other", status: "active", repoId: "repo-2" }, { id: "sess-1", status: "active", repoId: "repo-1" }]);
+			h.fetchStub.respond((u, m) => u.endsWith("/end") && m === "POST", { body: { ok: true, engineStopped: true } });
+			h.fetchStub.respond((u, m) => u.endsWith("/coding/sessions") && m === "POST", { body: { session: { id: "sess-new" }, continuity: { mode: "fresh" } } });
+			await h.tools.get("coding_session_fresh")!.handler({ instance_id: "i1", repo_id: "repo-1" });
+			expect(endsCalled(h)).toEqual(["sess-1"]); // never sess-other
+			expect(JSON.parse(h.fetchStub.calls.find((c) => c.url.endsWith("/coding/sessions") && c.method === "POST")!.body!)).toMatchObject({ repoId: "repo-1", fresh: true });
+		});
+
+		it("with no repo named, infers it from the first active session and ends only that repo's session", async () => {
+			const h = await setup({ groups: ["coding"] });
+			sessionsGet(h, [{ id: "sess-a", status: "active", repoId: "repo-1" }, { id: "sess-b", status: "active", repoId: "repo-2" }]);
+			h.fetchStub.respond((u, m) => u.endsWith("/end") && m === "POST", { body: { ok: true, engineStopped: true } });
+			h.fetchStub.respond((u, m) => u.endsWith("/coding/sessions") && m === "POST", { body: { session: { id: "sess-new" } } });
+			await h.tools.get("coding_session_fresh")!.handler({ instance_id: "i1" });
+			expect(endsCalled(h)).toEqual(["sess-a"]);
+		});
+
+		it("a stop the engine did NOT confirm starts nothing and is reported as unknown — never as fresh", async () => {
+			const h = await setup({ groups: ["coding"] });
+			sessionsGet(h, [{ id: "sess-1", status: "active", repoId: "repo-1" }]);
+			h.fetchStub.respond((u, m) => u.endsWith("/sess-1/end") && m === "POST", { body: { ok: true, session: "ended", engineStopped: false, warning: "the engine did not confirm it stopped" } });
+			const res = await h.tools.get("coding_session_fresh")!.handler({ instance_id: "i1", repo_id: "repo-1" });
+			expect(JSON.parse(res.content[0].text)).toMatchObject({ outcome: "unknown", oldSessionId: "sess-1", engineStopped: false, poll: { tool: "coding_sessions_list" } });
+			expect(JSON.parse(res.content[0].text).error).toMatch(/did not confirm it stopped/);
+			expect(posted(h)).toBe(false);
+			expect(h.auditEvents().filter((e) => e.tool === "coding_session_fresh").map((e) => e.action)).toEqual(["unknown"]);
+		});
+
+		it("no reachable runner (engineStopped null) still opens the fresh session, and says the old stop is unconfirmed", async () => {
+			const h = await setup({ groups: ["coding"] });
+			sessionsGet(h, [{ id: "sess-1", status: "active", repoId: "repo-1" }]);
+			h.fetchStub.respond((u, m) => u.endsWith("/sess-1/end") && m === "POST", { body: { ok: true, session: "ended", engineStopped: null } });
+			h.fetchStub.respond((u, m) => u.endsWith("/coding/sessions") && m === "POST", { body: { session: { id: "sess-new" }, continuity: { mode: "fresh" } } });
+			const res = await h.tools.get("coding_session_fresh")!.handler({ instance_id: "i1", repo_id: "repo-1" });
+			expect(JSON.parse(res.content[0].text)).toMatchObject({ session: { id: "sess-new" }, oldSession: { id: "sess-1", engineStopped: null } });
+		});
+
+		it("a confirmed stop reports the old session ended with engineStopped true beside the new one", async () => {
+			const h = await setup({ groups: ["coding"] });
+			sessionsGet(h, [{ id: "sess-1", status: "active", repoId: "repo-1" }]);
+			h.fetchStub.respond((u, m) => u.endsWith("/sess-1/end") && m === "POST", { body: { ok: true, engineStopped: true } });
+			h.fetchStub.respond((u, m) => u.endsWith("/coding/sessions") && m === "POST", { body: { session: { id: "sess-new" }, continuity: { mode: "fresh" } } });
+			const res = await h.tools.get("coding_session_fresh")!.handler({ instance_id: "i1", repo_id: "repo-1" });
+			expect(JSON.parse(res.content[0].text)).toMatchObject({ session: { id: "sess-new" }, continuity: { mode: "fresh" }, oldSession: { id: "sess-1", engineStopped: true } });
+			expect(h.auditEvents().filter((e) => e.tool === "coding_session_fresh").map((e) => e.action)).toEqual(["completed"]);
+		});
+
+		it("a reply that REUSED a session is a failure: never `completed`, and it names the session that still holds the old history", async () => {
+			const h = await setup({ groups: ["coding"] });
+			sessionsGet(h, []);
+			h.fetchStub.respond((u, m) => u.endsWith("/coding/sessions") && m === "POST", { body: { session: { id: "sess-old" }, reused: true, resumed: true, seeded: false } });
+			const res = await h.tools.get("coding_session_fresh")!.handler({ instance_id: "i1", repo_id: "repo-1" });
+			const out = JSON.parse(res.content[0].text);
+			expect(out).toMatchObject({ reused: true, session: { id: "sess-old" } });
+			expect(out.error).toMatch(/did NOT start a fresh conversation/);
+			expect(out.error).toMatch(/sess-old/);
+			expect(h.auditEvents().filter((e) => e.tool === "coding_session_fresh").map((e) => e.action)).toEqual(["failed"]);
+		});
+
+		it("the server's own refusal (an active session still in the way) is passed through, not smoothed over", async () => {
+			const h = await setup({ groups: ["coding"] });
+			sessionsGet(h, []);
+			h.fetchStub.respond((u, m) => u.endsWith("/coding/sessions") && m === "POST", { status: 409, body: { error: "A fresh conversation was requested, but session sess-old is still active", code: "fresh_requires_end", activeSessionId: "sess-old" } });
+			const res = await h.tools.get("coding_session_fresh")!.handler({ instance_id: "i1", repo_id: "repo-1" });
+			expect(JSON.parse(res.content[0].text)).toMatchObject({ code: "fresh_requires_end", activeSessionId: "sess-old" });
+			expect(h.auditEvents().filter((e) => e.tool === "coding_session_fresh").map((e) => e.action)).toEqual(["failed"]);
+		});
+	});
+
 	it("does not audit a fresh session when creation fails (#831)", async () => {
 		const h = await setup({ groups: ["coding"] });
 		h.fetchStub.respond((u, m) => u.endsWith("/coding/sessions") && m === "GET", { body: { sessions: [] } });
