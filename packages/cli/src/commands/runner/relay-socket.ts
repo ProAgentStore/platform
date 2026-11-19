@@ -76,6 +76,11 @@ export function openRelaySocket(
 	 */
 	routeRefusal: (method: string, path: string, body?: unknown) => string | null = () => null,
 	liveness: RelayLiveness = DEFAULT_RELAY_LIVENESS,
+	/**
+	 * Why a request that would START new work must wait for a pending deferred update, or null (#1483). Asked after the
+	 * route policy and before the drain gate; only work-starting routes are ever held (update-hold.ts).
+	 */
+	newWorkHold: (method: string, path: string, body?: unknown) => Promise<string | null> = async () => null,
 ): RelaySocketHandle {
 	let backoffMs = 1000;
 	let reconnecting = false;
@@ -250,6 +255,12 @@ export function openRelaySocket(
 			const refused = routeRefusal(method, cmd.path, cmd.body);
 			if (refused) {
 				try { ws.send(JSON.stringify({ id: cmd.id, status: 403, result: { error: refused } })); } catch { /* WS closed */ }
+				return;
+			}
+			const held = method !== "GET" && method !== "HEAD" ? await newWorkHold(method, cmd.path, cmd.body).catch(() => null) : null;
+			if (held) {
+				// Explicit, bounded and retryable (#1483): a pending update waits for running work, so new work waits for it.
+				try { ws.send(JSON.stringify({ id: cmd.id, status: 503, result: { error: held, updatePending: true } })); } catch { /* WS closed */ }
 				return;
 			}
 			const releaseMutation = method !== "GET" && method !== "HEAD" ? beginMutation() : null;

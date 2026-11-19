@@ -54,6 +54,17 @@ the drain closed until the process exits. These changes do not authorize interru
 Background repository clones also count as local work until they succeed or fail (#1458); a clone-start
 HTTP reply does not make the machine idle. Ordinary updates and safe restarts wait for those clones.
 
+**New work is held while a deferred update waits (#1483).** A deferred manual update only reaches
+its idle window if the machine stops taking on work, so while its lease is active the runner refuses
+to START new work: a new coding session (`/coding/start`), a local browser, application or artifact
+run. The refusal is a retryable 503 that says an update is waiting on running work and for how many
+more seconds; it carries `updatePending: true`. Nothing already running is touched — messages,
+captures, ends, directives, cancels and reads all pass, and a start for a session that is already alive
+re-attaches it. The hold is the lease itself (at most five minutes), so it lifts on its own when the
+lease lapses; it is not a standing admission freeze, and no session is stopped or re-routed. If the
+look at running sessions fails, a coding start is held rather than admitted. The hold does not renew
+the lease: a lapsed lease still ends as `expired`, and the next `runner_update` has to be requested.
+
 A historical `scheduled` receipt can remain visible after its `deferredUntil` deadline (#1456).
 Check that deadline and the machine's actual version; an expired receipt is not a live update request
 or proof that the machine restarted. This reporting limitation remains tracked separately.

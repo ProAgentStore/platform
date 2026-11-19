@@ -17,6 +17,7 @@ import { diffMembership, eligibleIds, relayStatusPath, instanceLabel, pendingReg
 import { formatStatusLine } from "./status-line.js";
 import type { PagsRequestOptions } from "./types.js";
 import { autoUpdatePolicyKey, autoUpdateStatusWire, loadAutoUpdatePolicy, saveAutoUpdatePolicy } from "./auto-update.js";
+import { holdForPendingUpdate } from "./update-hold.js";
 import { type AutoUpdateDiagnostics, AutomaticUpdateController, boundedWork, RelayMutationAdmission } from "./auto-update-controller.js";
 import { readWorkLook } from "./runner-work-observation.js";
 import { createInstallBridge, createPolicyChannel, PolicyCell } from "./update-bridge.js";
@@ -165,6 +166,11 @@ export async function connectViaRelay(
 		// The guard's reading and each half's outcome, read ONCE (#1020): a local browser/apply run is destroyed by a restart
 		// as surely as a coding turn, so an unavailable or unreadable look fails closed.
 		return readWorkLook(sessionsResult, healthResult, Date.now());
+	};
+	/** Ids of the coding sessions alive right now, for the new-work hold (#1483); null when the look fails. */
+	const liveCodingSessions = async (): Promise<ReadonlySet<string> | null> => {
+		const r = await requestRunner<{ sessions?: Array<{ sessionId: string; alive?: boolean }> }>("GET", "/coding/sessions", { url: localUrl, token: runnerToken, instanceId: instanceIds[0] }).catch(() => null);
+		return r && Array.isArray(r.sessions) ? new Set(r.sessions.filter((x) => x.alive !== false).map((x) => x.sessionId)) : null;
 	};
 	const updateFacts = async (signal?: AbortSignal) => {
 		const { busy, observations } = await workLook(signal);
@@ -394,6 +400,9 @@ export async function connectViaRelay(
 				// command work starts only when the old runner is still permitted to serve it.
 				() => relayMutationAdmission.begin(),
 				routes.refusalFor(id),
+				undefined,
+				// #1483: while a deferred update waits for an idle window, no NEW work is started — running work is untouched.
+				(method, path, body) => holdForPendingUpdate({ lease: deferredManualLease, method, path, body, liveSessions: liveCodingSessions }),
 			),
 		);
 		if (label) writeLine(`Attached agent: ${label}`);
