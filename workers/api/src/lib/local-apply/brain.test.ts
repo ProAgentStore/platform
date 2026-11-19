@@ -119,7 +119,19 @@ describe("Application Runner cloud brain", () => {
 			directive: "request_review",
 			source: "policy",
 			reason: "brain_unavailable",
+			brainCause: "call_failed",
 		});
+	});
+
+	it("names each way the model gave no answer on the policy.decision event (#1620)", async () => {
+		const base = run("auto_submit");
+		const gated = { ...base, policy: { ...base.policy, gate: { allowed: true, gateId: "gate-1", checks: [] } } };
+		runUserWorkersAi.mockResolvedValueOnce({ response: "cut off" });
+		const noDirective = await decideApplicationCheckpoint(env(), "u1", gated, checkpoint("before_submit"));
+		expect(noDirective.brainCause).toBe("no_valid_directive");
+		expect(checkpointDecisionEvent(checkpoint("before_submit"), noDirective, "t").detail).toMatchObject({ reason: "brain_unavailable", brainCause: "no_valid_directive" });
+		// A decision the model made carries no cause.
+		expect(checkpointDecisionEvent(checkpoint("before_submit"), { directive: "continue", escalationLevel: "autonomous", source: "brain", reason: "brain_decision", overrodeBrain: false }, "t").detail).not.toHaveProperty("brainCause");
 	});
 
 	it("tells the model that a passed submit gate decides pay and fit, leaving only concrete problems (#1620)", async () => {
@@ -167,7 +179,7 @@ describe("Application Runner cloud brain", () => {
 		runUserWorkersAi.mockResolvedValueOnce({ response: "The facts show", stopReason: "max_tokens" });
 		const db = { DB: { prepare: vi.fn(() => { throw new Error("unavailable"); }) } };
 		const logged = { ...(env() as object), ...db } as never;
-		await expect(decideApplicationCheckpoint(logged, "u1", run("auto_submit"), checkpoint("before_submit"))).resolves.toMatchObject({ directive: "request_review", reason: "brain_unavailable" });
+		await expect(decideApplicationCheckpoint(logged, "u1", run("auto_submit"), checkpoint("before_submit"))).resolves.toMatchObject({ directive: "request_review", reason: "brain_unavailable", brainCause: "no_valid_directive" });
 		expect(db.DB.prepare).toHaveBeenCalled();
 	});
 

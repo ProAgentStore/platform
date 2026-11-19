@@ -78,7 +78,12 @@ export interface CheckpointDecision {
 	reason: DirectiveReason;
 	/** True when policy overrode what the model asked for — the #982 failure, made visible. */
 	overrodeBrain: boolean;
+	/** Why the model gave no usable answer, when that is what the decision rests on (#1620). */
+	brainCause?: BrainCause;
 }
+
+/** The three ways a model fails to propose a directive — distinct, so a stalled run says which. */
+export type BrainCause = "not_configured" | "no_valid_directive" | "call_failed";
 
 /**
  * The checkpoint decision. PURE, and policy-first (#982).
@@ -101,7 +106,7 @@ export interface CheckpointDecision {
  *   4. only then does the routine auto-continue apply;
  *   5. assessed uncertainty follows the frozen owner threshold; unassessed uncertainty asks for a person.
  */
-export function decideCheckpoint(run: ApplyRun, checkpoint: SupervisorCheckpoint, proposed: SupervisorDirectiveKind | null): CheckpointDecision {
+export function decideCheckpoint(run: ApplyRun, checkpoint: SupervisorCheckpoint, proposed: SupervisorDirectiveKind | null, cause?: BrainCause): CheckpointDecision {
 	const phase = checkpoint.facts.phase;
 	const escalationLevel = run.policy.escalationLevel ?? "conservative";
 	const policy = (directive: SupervisorDirectiveKind, reason: DirectiveReason): CheckpointDecision => ({
@@ -110,6 +115,7 @@ export function decideCheckpoint(run: ApplyRun, checkpoint: SupervisorCheckpoint
 		source: "policy",
 		reason,
 		overrodeBrain: proposed !== null && proposed !== directive,
+		...(!proposed && cause ? { brainCause: cause } : {}),
 	});
 	if (checkpoint.facts.blockers.length) return policy("stop", "blocker");
 	// The local bridge independently refuses the click; this turns it into the correct outcome.
@@ -175,7 +181,7 @@ export async function decideApplicationCheckpoint(env: Env, uid: string, run: Ap
 	// No brain configured, or it could not be read: the POLICY still decides. Before #982 this fell
 	// straight to `request_review`, which is how a safe initial checkpoint became a terminal review
 	// state with nothing filled — the model being absent is not a reason to stop safe work.
-	if (!brain) return decideCheckpoint(run, checkpoint, null);
+	if (!brain) return decideCheckpoint(run, checkpoint, null, "not_configured");
 	try {
 		const res = (await runUserWorkersAi(
 			env,
@@ -213,11 +219,11 @@ export async function decideApplicationCheckpoint(env: Env, uid: string, run: Ap
 		const args = call?.arguments && typeof call.arguments === "object" && !Array.isArray(call.arguments) ? call.arguments as Record<string, unknown> : null;
 		const proposed = parsedDirective(args?.directive);
 		if (!proposed) await logError(env, { source: "job-apply", level: "warn", userId: uid, message: "Application checkpoint brain returned no valid directive", context: { instanceId: run.instanceId, runId: run.id, checkpointId: checkpoint.checkpointId, phase: checkpoint.facts.phase, stopReason: typeof res.stopReason === "string" ? res.stopReason : null, toolCalls: res.tool_calls?.length ?? 0 } }).catch(() => undefined);
-		return decideCheckpoint(run, checkpoint, proposed);
+		return decideCheckpoint(run, checkpoint, proposed, "no_valid_directive");
 	} catch (error) {
 		// A model that errored is a model that did not answer — recorded, so the next one is diagnosable (#1575).
 		await logError(env, { source: "job-apply", level: "warn", userId: uid, message: `Application checkpoint brain did not answer: ${error instanceof Error ? error.message : String(error)}`, context: { instanceId: run.instanceId, runId: run.id, checkpointId: checkpoint.checkpointId, phase: checkpoint.facts.phase } }).catch(() => undefined);
-		return decideCheckpoint(run, checkpoint, null);
+		return decideCheckpoint(run, checkpoint, null, "call_failed");
 	}
 }
 
@@ -249,6 +255,7 @@ export function checkpointDecisionEvent(checkpoint: SupervisorCheckpoint, decisi
 			// Joined rather than an array: a trace detail holds scalars, and these are closed ids.
 			...(f.blockers.length ? { blockers: f.blockers.join(",") } : {}),
 			...(decision.overrodeBrain ? { overrodeBrain: true } : {}),
+			...(decision.brainCause ? { brainCause: decision.brainCause } : {}),
 		},
 	};
 }
