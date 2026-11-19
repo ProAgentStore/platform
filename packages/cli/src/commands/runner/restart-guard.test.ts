@@ -20,21 +20,31 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-const FAST: Omit<GuardConfig, "command" | "oldPid" | "lockDir" | "log"> = { attempts: 3, windowMs: 700, exitWaitMs: 2_000, pollMs: 50 };
+type Timing = Omit<GuardConfig, "command" | "oldPid" | "lockDir" | "log">;
+/**
+ * A window has to cover a COLD NODE START of the "runner" the guard launches (#1482). 700 ms did on a quiet machine and not
+ * on a busy one: the 2nd re-run's lock landed after the 3rd window closed and the guard gave up (exit 1) with the invariant
+ * intact and the fixture wrong. A window that sees a live runner returns at once, so a generous one costs nothing on those
+ * paths; only a window that must EXPIRE (nothing came up) pays it in full, so only those tests keep it short.
+ */
+const WAIT_FOR_LIVE: Timing = { attempts: 3, windowMs: 8_000, exitWaitMs: 2_000, pollMs: 50 };
+/** The windows that must run out are the cost; the command there never starts a runner, so its startup time cannot matter. */
+const EXPIRES: Timing = { attempts: 3, windowMs: 700, exitWaitMs: 2_000, pollMs: 50 };
 
 /** A "runner": a script that counts its starts and, from the `upOn`-th, writes a lock naming its own live pid and stays alive a few seconds. */
-const runnerCommand = (counter: string, upOn: number) => {
+const runnerCommand = (counter: string, upOn: number, startDelayMs = 0) => {
 	const file = join(dir, `runner-${upOn}.cjs`);
 	writeFileSync(
 		file,
 		`const fs=require("fs");const c=${JSON.stringify(counter)};const n=(fs.existsSync(c)?+fs.readFileSync(c,"utf8"):0)+1;fs.writeFileSync(c,String(n));
-if(n>=${upOn}){fs.writeFileSync(${JSON.stringify(join(locks, "up-abc.lock"))},JSON.stringify({pid:process.pid}));setTimeout(()=>{},6000)}`,
+const up=()=>{fs.writeFileSync(${JSON.stringify(join(locks, "up-abc.lock"))},JSON.stringify({pid:process.pid}));setTimeout(()=>{},6000)};
+if(n>=${upOn}){${startDelayMs}?setTimeout(up,${startDelayMs}):up()}`,
 	);
 	return `"${process.execPath}" "${file}"`;
 };
 
-function runGuard(command: string, oldPid: number) {
-	const config: GuardConfig = { command, oldPid, lockDir: locks, log, ...FAST };
+function runGuard(command: string, oldPid: number, timing: Timing = WAIT_FOR_LIVE) {
+	const config: GuardConfig = { command, oldPid, lockDir: locks, log, ...timing };
 	return new Promise<number | null>((ok) => {
 		const child = spawn(process.execPath, [script, JSON.stringify(config)], { stdio: "ignore" });
 		child.on("close", ok);
@@ -48,7 +58,7 @@ describe("the restart guard", () => {
 		// the command was already started by the leaving runner (simulated: run it once here)
 		spawn(runnerCommand(counter, 1), { shell: true, stdio: "ignore", detached: true }).unref();
 		const code = await runGuard(runnerCommand(counter, 1), 999_999_999);
-		expect(code).toBe(0);
+		expect(code, logText()).toBe(0);
 		expect(logText()).toMatch(/guard: the restarted runner is up/);
 		expect(readFileSync(counter, "utf8")).toBe("1");
 	});
@@ -56,17 +66,30 @@ describe("the restart guard", () => {
 	it("starts the command again when nothing comes up, until it does", async () => {
 		const counter = join(dir, "starts");
 		// the first start (by the caller, not simulated here) never came up; the guard's 1st re-run does not either; its 2nd does
-		const code = await runGuard(runnerCommand(counter, 2), 999_999_999);
-		expect(code).toBe(0);
+		// Two windows must run out (starts 1 and 2 of the guard's re-runs) before the 2nd re-run's runner is seen.
+		const code = await runGuard(runnerCommand(counter, 2), 999_999_999, { ...WAIT_FOR_LIVE, windowMs: 3_000 });
+		expect(code, logText()).toBe(0);
 		expect(logText()).toMatch(/starting it again \(2\/3\)/);
 		expect(logText()).toMatch(/starting it again \(3\/3\)/);
 		expect(logText()).toMatch(/the runner is up after 2 more start/);
 		expect(Number(readFileSync(counter, "utf8"))).toBe(2);
 	});
 
+	it("a runner slower to start than one old window is still seen and not restarted again (#1482)", async () => {
+		// The fixture's own flake, made deterministic: the runner takes 1.2 s to write its lock — longer than the 700 ms the
+		// windows used to be. A live replacement must be detected, never replaced; the retry invariant is unchanged.
+		const counter = join(dir, "starts");
+		spawn(runnerCommand(counter, 1, 1_200), { shell: true, stdio: "ignore", detached: true }).unref();
+		const code = await runGuard(runnerCommand(counter, 1, 1_200), 999_999_999, { ...WAIT_FOR_LIVE, windowMs: 4_000 });
+		expect(code, logText()).toBe(0);
+		expect(logText()).toMatch(/guard: the restarted runner is up/);
+		expect(logText()).not.toMatch(/starting it again/);
+		expect(readFileSync(counter, "utf8")).toBe("1");
+	});
+
 	it("gives up after its attempts, says so in the update log, and exits non-zero", async () => {
-		const code = await runGuard(`"${process.execPath}" -e "process.exit(1)"`, 999_999_999);
-		expect(code).toBe(1);
+		const code = await runGuard(`"${process.execPath}" -e "process.exit(1)"`, 999_999_999, EXPIRES);
+		expect(code, logText()).toBe(1);
 		const text = logText();
 		expect(text).toMatch(/starting it again \(2\/3\)/);
 		expect(text).toMatch(/starting it again \(3\/3\)/);
@@ -77,8 +100,8 @@ describe("the restart guard", () => {
 		writeFileSync(join(locks, "up-old.lock"), JSON.stringify({ pid: process.pid })); // alive, but it is the old one
 		writeFileSync(join(locks, "up-dead.lock"), JSON.stringify({ pid: 2_147_483_000 })); // not alive
 		writeFileSync(join(locks, "up-junk.lock"), "{not json");
-		const code = await runGuard(`"${process.execPath}" -e "process.exit(1)"`, process.pid);
-		expect(code).toBe(1);
+		const code = await runGuard(`"${process.execPath}" -e "process.exit(1)"`, process.pid, EXPIRES);
+		expect(code, logText()).toBe(1);
 		expect(logText()).toMatch(/GAVE UP/);
 	});
 
@@ -88,7 +111,7 @@ describe("the restart guard", () => {
 		const counter = join(dir, "starts");
 		spawn(runnerCommand(counter, 1), { shell: true, stdio: "ignore", detached: true }).unref();
 		const code = await runGuard(runnerCommand(counter, 1), old.pid as number);
-		expect(code).toBe(0);
+		expect(code, logText()).toBe(0);
 		expect(Date.now() - started).toBeGreaterThanOrEqual(800);
 	});
 });
