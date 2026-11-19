@@ -274,12 +274,28 @@ function shellTokens(text: string): string[] {
 	return [...text.matchAll(/"[^"]*"|'[^']*'|\S+/g)].map((m) => m[0]);
 }
 
+/**
+ * The runner's own arguments, without the closing quote of the shell wrapper it was typed inside (#1517).
+ *
+ * Engines run commands as `/bin/zsh -lc 'pnpm test'`, `bash -c "vitest run a.test.ts"` or `sh -c '…'`. The runner
+ * pattern reads to the end of the line, so the wrapper's CLOSING quote came back as the command's first argument — a
+ * lone `'` that counted as a positional selector, and an unfiltered `pnpm test` was filed as a focused subset. When the
+ * text before the match has an open `-c '`/`-c "` that this tail would close, the tail stops there; the offsets of
+ * everything else in the command are untouched. A tail that never closes (a CUT command) is left alone.
+ */
+function withoutWrapperQuote(before: string, tail: string): string {
+	const open = /(?:^|\s)-[a-zA-Z]*c\s+(["'])(?:(?!\1)[\s\S])*$/.exec(before);
+	if (!open) return tail;
+	const close = tail.indexOf(open[1]);
+	return close < 0 ? tail : tail.slice(0, close);
+}
+
 /** Every test invocation in a piece of shell or instruction text. */
 export function testInvocations(text: string): TestInvocation[] {
 	const out: TestInvocation[] = [];
 	for (const m of text.matchAll(TEST_RUNNER)) {
 		const head = m[0].slice(0, m[0].length - (m[1]?.length ?? 0)).trim();
-		const all = shellTokens((m[1] ?? "").trim());
+		const all = shellTokens(withoutWrapperQuote(text.slice(0, m.index), m[1] ?? "").trim());
 		const stop = all.findIndex((t) => !/^["']/.test(t) && PROSE_WORD.test(t.replace(/[,.:)]+$/, "")));
 		const words = (stop < 0 ? all : all.slice(0, stop)).map((t) => (/^["']/.test(t) ? t : t.replace(/[,.)]+$/, "")));
 		// Redirections go to the shell, not the runner: `pnpm test > /tmp/out.log` runs the whole suite and

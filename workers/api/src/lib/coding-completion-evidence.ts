@@ -351,7 +351,16 @@ const CLAIM_FULL = /\b(?:full|whole|entire|complete)\s+(?:test\s+)?suite\b|\ball
  * the files clause between the count and "passed" is skipped, not read as the count. Either orientation reads:
  * "376 tests passed", "passed 376 tests", "Tests passed: 376".
  */
-const COUNT = String.raw`(?<!\bfiles?\s+)(\d[\d,]*)(?!\s+(?:test\s+)?files?\b)`;
+/**
+ * Numbers that are IDENTIFIERS, not counts (#1517): a GitHub workflow run, job or check id ("workflow 41836264555 passed",
+ * "CI run 41850914402 passed", "job #123 passed", "id: 98765 passed"). A count may not directly follow the word that
+ * introduces an id; and since no suite has ten million tests ({@link MAX_TEST_COUNT}), a long id is refused by its size
+ * whatever precedes it — short ids by context, long ones by magnitude, so neither reaches the claim as a test count.
+ */
+const NOT_AN_ID = String.raw`(?<!(?:\b(?:workflows?|actions?(?:\s+run)?|runs?\s+id|jobs?|checks?(?:\s+run)?|pipelines?|builds?|attempts?|ids?)\s*[#:=]?\s*|#))`;
+const COUNT = String.raw`(?<!\bfiles?\s+)${NOT_AN_ID}(\d[\d,]*)(?!\s+(?:test\s+)?files?\b)`;
+/** The largest number a test count can plausibly be. */
+const MAX_TEST_COUNT = 9_999_999;
 const CLAIM_COUNT = new RegExp(
 	[
 		String.raw`\b${COUNT}\s+(?:tests?\s+)?pass(?:ed|ing)\b`,
@@ -454,7 +463,7 @@ export function judgeCompletion(detail: string, ev: CompletionEvidence): Complet
 		);
 	}
 
-	const counts = [...detail.matchAll(CLAIM_COUNT)].map((m) => Number((m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5]).replace(/,/g, ""))).filter((n) => n > 0);
+	const counts = [...detail.matchAll(CLAIM_COUNT)].map((m) => Number((m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5]).replace(/,/g, ""))).filter((n) => n > 0 && n <= MAX_TEST_COUNT);
 	if (counts.length) {
 		const seen = lastTest && lastTest.invocations > 1 ? null : (reading?.passed ?? null);
 		const claimed = Math.max(...counts);
