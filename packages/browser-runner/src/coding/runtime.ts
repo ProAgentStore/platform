@@ -402,7 +402,7 @@ export class CodingRuntime {
 		throw new InspectError("no workDir or repoId for the parked checkout");
 	}
 
-	/** Set a parked run's work aside on its own ref (#1077); a verified `owned` list limits it to those paths (#1547). */
+	/** Set a parked run's work aside on its own ref (#1077); only a verified `owned` list is read from the wire — unknown ownership leaves a dirty checkout untouched (#1547). */
 	parkSnapshot(input: { workDir?: string; repoId?: string; runId: string; owned?: string[] }) {
 		return parkSnapshot(this.parkWorkDir(input), input.runId, Array.isArray(input.owned) && input.owned.every((p) => typeof p === "string") ? { owned: input.owned } : {});
 	}

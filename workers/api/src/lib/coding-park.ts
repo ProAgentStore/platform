@@ -29,7 +29,7 @@ import { describeOwner, describeRepoHolder, releaseStaleActiveSessions, repoFree
 import { machineDisplayNames } from "./machine-names.js";
 import { callRunner, getRunnerConnIgnoringLiveness, relayConnected, type RunnerConn } from "./runner-client.js";
 import { normalizeMachineId, normalizeRunnerNode } from "./runtime-nodes.js";
-import { resyncBeforeAnswer } from "./coding-resume-sync.js";
+import { nameFiles, resyncBeforeAnswer } from "./coding-resume-sync.js";
 import { awayCutoffSeconds, CHECKOUT_WAKE_GRACE_MS, ownsCheckoutSql } from "./checkout-hold.js";
 
 /**
@@ -251,11 +251,16 @@ export async function wakeRunsParkedOnMachine(env: Pick<Env, "DB" | "CODING_SESS
  */
 export async function releaseCheckout(env: Env, conn: RunnerConn, scope: ParkScope, now = Date.now()): Promise<{ released: boolean; line: string; onStop?: string }> {
 	const repo = await getRepo(env, scope.instanceId, scope.userId, scope.repoId).catch(() => null);
-	let saved: { snapshot: string | null; files: number; clean: boolean; ref: string | null; pushed?: boolean | null; pushError?: string };
+	let saved: { snapshot: string | null; files: number; clean: boolean; ref: string | null; pushed?: boolean | null; pushError?: string; unowned?: string[]; conflict?: string };
 	try {
 		saved = await callRunner(conn, "/coding/park-snapshot", { workDir: repo?.workdir || undefined, repoId: scope.repoId, runId: scope.runId });
 	} catch (e) {
 		return { released: false, line: `The checkout stays held while it waits: its work could not be set aside on the machine (${e instanceof Error ? e.message : String(e)}; set-aside needs CLI 0.4.140 or later).` };
+	}
+	// #1547: dirty paths nobody could show are this run's are never swept up. The runner touched nothing; say so, and name them.
+	if (saved?.conflict === "ownership_unknown" || (!saved?.clean && saved?.unowned?.length)) {
+		const paths = nameFiles(saved.unowned ?? []); // "a.ts, b.ts and 3 more": a cut is always said out loud
+		return { released: false, line: `The checkout stays held while it waits: ${saved.unowned?.length ?? "some"} uncommitted path${saved.unowned?.length === 1 ? "" : "s"} in it (${paths}) could not be shown to be this run's, so NOTHING was set aside, stashed or cleaned — they are exactly as they were. Commit or move them, or run on an isolated checkout, and the checkout can be released.` };
 	}
 	if (!saved?.clean) return { released: false, line: "The checkout stays held while it waits: it was not clean after setting the work aside." };
 	const pushed = typeof saved.pushed === "boolean" ? (saved.pushed ? 1 : 0) : null;

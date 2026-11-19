@@ -40,7 +40,7 @@ describe("parkSnapshot / parkRestore", () => {
 
 	it("saves tracked and untracked work, pins it on its own ref, leaves the tree clean and ignored files alone", () => {
 		dirty();
-		const r = parkSnapshot(dir, RUN);
+		const r = parkSnapshot(dir, RUN, { exclusive: true });
 		expect(r).toMatchObject({ files: 2, clean: true, ref: parkRef(RUN) });
 		expect(git(dir, "rev-parse", parkRef(RUN)).trim()).toBe(r.snapshot);
 		expect(git(dir, "status", "--porcelain")).toBe("");
@@ -52,7 +52,7 @@ describe("parkSnapshot / parkRestore", () => {
 
 	it("puts the work back by its exact id, then drops only its own ref", () => {
 		dirty();
-		const { snapshot } = parkSnapshot(dir, RUN);
+		const { snapshot } = parkSnapshot(dir, RUN, { exclusive: true });
 		expect(parkRestore(dir, RUN, snapshot as string)).toEqual({ restored: true });
 		expect(read(dir, "a.txt")).toBe("one\ntwo\n");
 		expect(read(dir, "new.ts")).toBe("export const x = 1;\n");
@@ -61,16 +61,16 @@ describe("parkSnapshot / parkRestore", () => {
 	});
 
 	it("a clean tree has nothing to save; a replayed park reports the save it already made", () => {
-		expect(parkSnapshot(dir, RUN)).toEqual({ snapshot: null, files: 0, clean: true, ref: null, pushed: null });
+		expect(parkSnapshot(dir, RUN, { exclusive: true })).toEqual({ snapshot: null, files: 0, clean: true, ref: null, pushed: null });
 		dirty();
-		const first = parkSnapshot(dir, RUN);
-		expect(parkSnapshot(dir, RUN).snapshot).toBe(first.snapshot);
+		const first = parkSnapshot(dir, RUN, { exclusive: true });
+		expect(parkSnapshot(dir, RUN, { exclusive: true }).snapshot).toBe(first.snapshot);
 		expect(git(dir, "stash", "list").split("\n").filter(Boolean)).toHaveLength(1);
 	});
 
 	it("never identifies its entry by position: another stash pushed on top does not confuse it", () => {
 		dirty();
-		const { snapshot } = parkSnapshot(dir, RUN);
+		const { snapshot } = parkSnapshot(dir, RUN, { exclusive: true });
 		writeFileSync(join(dir, "a.txt"), "someone else\n");
 		git(dir, "stash", "push", "-m", "the owner's own");
 		expect(parkRestore(dir, RUN, snapshot as string)).toEqual({ restored: true });
@@ -80,7 +80,7 @@ describe("parkSnapshot / parkRestore", () => {
 
 	it("refuses — changing nothing — onto a dirty tree, onto a conflicting checkout, or over a file that now exists", () => {
 		dirty();
-		const { snapshot } = parkSnapshot(dir, RUN);
+		const { snapshot } = parkSnapshot(dir, RUN, { exclusive: true });
 		const id = snapshot as string;
 
 		writeFileSync(join(dir, "other.txt"), "run 2 left this\n");
@@ -137,7 +137,7 @@ describe("parked work across machines (#1242)", () => {
 	function parkOnX() {
 		writeFileSync(join(x, "a.txt"), "one\ntwo\n");
 		writeFileSync(join(x, "spec.ts"), "test('analytics', () => {});\n");
-		return parkSnapshot(x, RUN);
+		return parkSnapshot(x, RUN, { exclusive: true });
 	}
 
 	it("pushes the parked ref to origin, so the work outlives the machine", () => {
@@ -164,7 +164,7 @@ describe("parked work across machines (#1242)", () => {
 	it("a move whose origin never got the ref says so, and changes nothing", () => {
 		writeFileSync(join(x, "a.txt"), "one\ntwo\n");
 		git(x, "remote", "set-url", "origin", join(root, "nowhere.git")); // the push cannot land
-		const saved = parkSnapshot(x, RUN);
+		const saved = parkSnapshot(x, RUN, { exclusive: true });
 		expect(saved).toMatchObject({ clean: true, pushed: false });
 		expect(saved.pushError).not.toMatch(/\//); // no path or URL — a credential could ride on one
 		const r = parkRestore(y, RUN, saved.snapshot as string, { fetch: true });
@@ -251,10 +251,10 @@ describe("parkSnapshot with verified ownership (#1547)", () => {
 		expect(read(dir, "mine.txt")).toBe("m\n");
 	});
 
-	it("legacy callers (exclusive use asserted by the isolated worktree mode) keep the whole-tree behaviour", () => {
+	it("an explicit exclusive assertion (the isolated worktree mode) keeps the whole-tree behaviour", () => {
 		writeFileSync(join(dir, "mine.txt"), "m\nrun\n");
 		writeFileSync(join(dir, "new.ts"), "x\n");
-		expect(parkSnapshot(dir, RUN)).toMatchObject({ files: 2, clean: true });
+		expect(parkSnapshot(dir, RUN, { exclusive: true })).toMatchObject({ files: 2, clean: true });
 	});
 
 	it("admitSharedCheckout names every blocking path and modifies nothing", () => {
@@ -266,5 +266,125 @@ describe("parkSnapshot with verified ownership (#1547)", () => {
 		expect([...a.blocking].sort()).toEqual(["scratch dir with space.txt", "theirs.txt"]);
 		expect(read(dir, "theirs.txt")).toBe("t\nedit\n");
 		expect(git(dir, "stash", "list")).toBe("");
+	});
+});
+
+/**
+ * #1547 — the incident, on a real temporary repository. Another active editor's tracked, staged and untracked application
+ * fixes sit in a SHARED checkout; a run parks. Before: `stash push --include-untracked` over the whole tree captured them and
+ * the checkout was cleaned (reflog "reset: moving to HEAD"). Now ownership is unknown, so nothing is captured or cleaned.
+ */
+describe("parking a shared checkout whose ownership is unknown (#1547)", () => {
+	let dir: string;
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "pags-shared-"));
+		git(dir, "init", "-q", "-b", "main");
+		git(dir, "config", "user.email", "t@example.com");
+		git(dir, "config", "user.name", "T");
+		writeFileSync(join(dir, ".gitignore"), "secret.env\n");
+		writeFileSync(join(dir, "application.ts"), "export const apply = 0;\n");
+		writeFileSync(join(dir, "staged.ts"), "export const staged = 0;\n");
+		git(dir, "add", "-A");
+		git(dir, "commit", "-qm", "base");
+		// Somebody else's work: a tracked edit, a staged edit edited again, an untracked file, and an ignored secret.
+		writeFileSync(join(dir, "application.ts"), "export const apply = 1; // another editor's fix\n");
+		writeFileSync(join(dir, "staged.ts"), "export const staged = 1;\n");
+		git(dir, "add", "staged.ts");
+		writeFileSync(join(dir, "staged.ts"), "export const staged = 2; // unstaged on top\n");
+		writeFileSync(join(dir, "new-fix.ts"), "export const fix = true;\n");
+		writeFileSync(join(dir, "secret.env"), "KEY=1\n");
+	});
+	afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+	/** Everything that must not move: bytes, the index, the status, every ref and the stash. */
+	const state = () => ({
+		files: Object.fromEntries(["application.ts", "staged.ts", "new-fix.ts", "secret.env"].map((f) => [f, read(dir, f)])),
+		index: git(dir, "ls-files", "-s"),
+		status: git(dir, "status", "--porcelain=v1", "--untracked-files=all"),
+		refs: git(dir, "for-each-ref"),
+		stash: git(dir, "stash", "list"),
+		head: git(dir, "rev-parse", "HEAD"),
+		reflog: git(dir, "reflog", "-n", "20"),
+	});
+
+	it("FAIL-BEFORE: asserting the whole tree captures the other editor's work and cleans it away — the reported loss", () => {
+		const r = parkSnapshot(dir, RUN, { exclusive: true });
+		expect(r).toMatchObject({ clean: true, files: 3 });
+		expect(read(dir, "application.ts")).toBe("export const apply = 0;\n");
+		expect(existsSync(join(dir, "new-fix.ts"))).toBe(false);
+	});
+
+	it("PASS-AFTER: with ownership unknown, every unrelated edit stays in place, byte for byte, and nothing in git moves", () => {
+		const before = state();
+		const r = parkSnapshot(dir, RUN);
+		expect(state()).toEqual(before);
+		expect(r).toMatchObject({ snapshot: null, files: 0, clean: false, ref: null, pushed: null, conflict: "ownership_unknown" });
+		expect([...(r.unowned ?? [])].sort()).toEqual(["application.ts", "new-fix.ts", "staged.ts"]);
+		// No stash entry, no ref under refs/pags, no reset in the reflog.
+		expect(git(dir, "stash", "list")).toBe("");
+		expect(git(dir, "for-each-ref", "refs/pags")).toBe("");
+		expect(git(dir, "reflog", "-n", "20")).not.toMatch(/reset/);
+	});
+
+	it("never pushes a ref to origin for work it did not take: nothing was captured, so nothing is sent", () => {
+		const origin = mkdtempSync(join(tmpdir(), "pags-origin-"));
+		try {
+			git(origin, "init", "-q", "--bare");
+			git(dir, "remote", "add", "origin", origin);
+			git(dir, "push", "-q", "origin", "main");
+			const r = parkSnapshot(dir, RUN);
+			expect(r.pushed).toBeNull();
+			expect(git(origin, "for-each-ref", "refs/pags")).toBe("");
+		} finally {
+			rmSync(origin, { recursive: true, force: true });
+		}
+	});
+
+	it("is idempotent: a second park of the same run changes nothing either, and still reports the conflict", () => {
+		const first = parkSnapshot(dir, RUN);
+		const before = state();
+		expect(parkSnapshot(dir, RUN)).toEqual(first);
+		expect(state()).toEqual(before);
+	});
+
+	it("a write that lands while the run is parking is just as untouched", () => {
+		const r1 = parkSnapshot(dir, RUN);
+		writeFileSync(join(dir, "late.ts"), "written by another process, mid-park\n");
+		writeFileSync(join(dir, "application.ts"), "export const apply = 3; // edited again\n");
+		const r2 = parkSnapshot(dir, RUN);
+		expect(read(dir, "late.ts")).toBe("written by another process, mid-park\n");
+		expect(read(dir, "application.ts")).toBe("export const apply = 3; // edited again\n");
+		expect(r1.unowned).not.toContain("late.ts");
+		expect(r2.unowned).toContain("late.ts");
+		expect(r2.conflict).toBe("ownership_unknown");
+	});
+
+	it("a clean checkout is still released: only dirt of unknown ownership blocks", () => {
+		git(dir, "add", "-A");
+		git(dir, "commit", "-qm", "the editor committed their work");
+		expect(parkSnapshot(dir, RUN)).toEqual({ snapshot: null, files: 0, clean: true, ref: null, pushed: null });
+	});
+
+	it("a run's OWN verified paths are still set aside, while the other editor's stay: the owned route is unchanged", () => {
+		const r = parkSnapshot(dir, RUN, { owned: ["new-fix.ts"] });
+		expect(r).toMatchObject({ files: 1, clean: false });
+		expect(existsSync(join(dir, "new-fix.ts"))).toBe(false);
+		expect(read(dir, "application.ts")).toBe("export const apply = 1; // another editor's fix\n");
+		expect([...(r.unowned ?? [])].sort()).toEqual(["application.ts", "staged.ts"]);
+	});
+
+	it("the unknown-ownership park never restores or applies anything either: a later restore onto this tree still refuses and names the paths", () => {
+		const r = parkSnapshot(dir, RUN);
+		expect(r.snapshot).toBeNull();
+		const before = state();
+		expect(parkRestore(dir, RUN, "0".repeat(40))).toMatchObject({ restored: false });
+		expect(state()).toEqual(before);
+	});
+
+	it("the runner's HTTP verb reads only `owned` from a request: a caller cannot assert exclusive use", () => {
+		const src = readFileSync(new URL("./runtime.ts", import.meta.url), "utf-8");
+		const verb = src.slice(src.indexOf("parkSnapshot(input:"));
+		expect(verb.slice(0, 600)).toContain("owned");
+		expect(verb.slice(0, 600)).not.toMatch(/exclusive/);
 	});
 });

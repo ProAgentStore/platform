@@ -90,19 +90,33 @@ export interface ParkSnapshotResult {
 	 * `owned` list was given and something else is dirty; `clean` is then false and the cloud must not hand the checkout on.
 	 */
 	unowned?: string[];
+	/**
+	 * Set when the checkout was left exactly as it was because nobody could show the dirty paths are this run's (#1547):
+	 * `ownership_unknown`. Nothing was set aside and nothing was touched, `clean` is false, and the cloud keeps the checkout held.
+	 */
+	conflict?: "ownership_unknown";
 }
 
 /**
  * Save the parked run's uncommitted work and leave the checkout clean. Idempotent per run.
  *
- * `opts.owned` (#1547): the paths the cloud has verified belong to THIS run. With it, only those paths are captured and
- * cleared; any other dirty path — another editor's tracked or untracked work in a shared checkout — stays in place and is
- * reported in `unowned`. Without it the caller asserts exclusive use of the whole checkout (the isolated worktree mode,
- * where nobody else can be writing), which is the behaviour every existing caller has.
+ * Whose work is it? (#1547) A run-scoped ref says which RUN asked, not which PATHS are the run's: on 2026-11-05 a park
+ * captured another active editor's tracked and untracked application fixes from a shared checkout, and the reflog recorded
+ * `reset: moving to HEAD` three seconds later. So ownership is established, never assumed:
+ *
+ *   * `opts.owned` — the paths the cloud has verified belong to THIS run. Only those are captured and cleared; any other
+ *     dirty path stays in place and is reported in `unowned`.
+ *   * `opts.exclusive` — the CALLER asserts nobody else can be writing the whole checkout (a managed per-run worktree). The
+ *     whole tree is captured, as it always was. In-process only: the runner's HTTP verb never reads it from a request, so a
+ *     request cannot talk its way back to the whole-tree save.
+ *   * neither — ownership is UNKNOWN. A clean checkout is still released; a dirty one is left exactly as it is, nothing is
+ *     stashed, ref'd, pushed or cleaned, and the result names every dirty path as `unowned` with
+ *     `conflict: "ownership_unknown"`. The cloud keeps the checkout held and says what is in the way.
  */
-export function parkSnapshot(workDir: string, runId: string, opts: { owned?: readonly string[] } = {}): ParkSnapshotResult {
+export function parkSnapshot(workDir: string, runId: string, opts: { owned?: readonly string[]; exclusive?: boolean } = {}): ParkSnapshotResult {
 	checkout(workDir, runId);
 	if (opts.owned) return parkOwned(workDir, runId, opts.owned);
+	if (!opts.exclusive) return parkUnverified(workDir, runId);
 	const ref = parkRef(runId);
 	const existing = (() => {
 		try {
@@ -123,6 +137,23 @@ export function parkSnapshot(workDir: string, runId: string, opts: { owned?: rea
 	const snapshot = mine.split(" ")[0];
 	git(workDir, ["update-ref", ref, snapshot]);
 	return { snapshot, files: before.length, clean: changes(workDir).length === 0, ref, ...pushRef(workDir, ref) };
+}
+
+/** Unknown ownership (#1547): release only what is already clean; otherwise change NOTHING and name what is in the way. */
+function parkUnverified(workDir: string, runId: string): ParkSnapshotResult {
+	const ref = parkRef(runId);
+	const dirty = dirtyPaths(workDir);
+	if (dirty.length === 0) {
+		// A clean tree has nothing of anyone's to lose. A replay of an earlier park reports the save it already made.
+		try {
+			const existing = git(workDir, ["rev-parse", "--verify", "--quiet", ref]).trim();
+			if (existing) return { snapshot: existing, files: 0, clean: true, ref, ...pushRef(workDir, ref) };
+		} catch {
+			/* no earlier park */
+		}
+		return { snapshot: null, files: 0, clean: true, ref: null, pushed: null };
+	}
+	return { snapshot: null, files: 0, clean: false, ref: null, pushed: null, unowned: dirty, conflict: "ownership_unknown" };
 }
 
 function parkOwned(workDir: string, runId: string, owned: readonly string[]): ParkSnapshotResult {
