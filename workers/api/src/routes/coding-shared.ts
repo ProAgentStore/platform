@@ -12,7 +12,7 @@
 import type { Context } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { parseRepoRef } from "../lib/git-providers.js";
-import { getRunnerConn } from "../lib/runner-client.js";
+import { getRunnerConn, getRunnerConnForStampedNode } from "../lib/runner-client.js";
 import { getRuntime } from "./instances-runtime.js";
 import type { CodingSessionRecord } from "../lib/coding-types.js";
 import type { Env } from "../types.js";
@@ -59,21 +59,27 @@ export async function readSpecialInstructions(env: Env, instanceId: string, user
  * relocating a session whose machine has gone away is `startSessionOnRunner`'s job, on the paths
  * that open or drive one.
  *
- * `/end` alone resolves through `getRunnerConnForStampedNode` instead (`coding-session-end.ts`,
- * #1541), which additionally falls back to a PROVEN alias of the stamped machine when a rename has
- * moved it off the exact name it was stamped with — ending a renamed machine's session is what the
- * live incident was about. Extending that fallback to this shared resolver too is a wider change
- * than #1541 asked for: every route here already has its own test suite built around mocking
- * `getRunnerConn` directly, and swapping the resolver under them silently stops every one of those
- * mocks from taking effect. Left as its own follow-up if `/message` or `/restart` turn up the same
- * renamed-machine failure.
+ * Since #1543 this resolves exactly as `/end` does (`coding-session-end.ts`, #1541): through
+ * `getRunnerConnForStampedNode`, which additionally falls back to a PROVEN alias of the stamped machine when a
+ * rename has moved it off the exact name it was stamped with. Owner-scoped, from the registry's immutable machine
+ * id — never from the current pin — and a name that two machines have answered to is refused outright. `/message`
+ * lost a renamed Mac mini this way ("No coding runner connected" while that very machine was up as `macmini`).
+ * It is the same stamp-authoritative address either way: a different machine is never a fallback, and a session
+ * whose machine is genuinely off is still null. Two seams keep this safe to change under the route tests: the
+ * connection function is passed IN (`connect: getRunnerConn`, this module's own import — a call made from inside
+ * runner-client is not the export a test replaces), and an unreadable registry falls back to the exact stamp
+ * rather than throwing, where `/end` fails closed because it releases a lock on the answer.
  *
  * Measured before the #532 fix: session `csess_c960d431…` stamped to `runner-host.local`, resolved
  * here for ten hours across the machine being off, and `/capture` answered `runnerConnected: true`
  * off the row every time.
  */
 export async function getSessionRunnerConn(env: Env, instanceId: string, uid: string, session: CodingSessionRecord) {
-	return getRunnerConn(env, instanceId, uid, session.runnerNode ?? null);
+	// #1543: through the verified, owner-scoped identity of the stamped machine (`getRunnerConnForStampedNode`), so a renamed
+	// machine that is up under another of its own names is reached — and a name two machines have answered to, or one that
+	// resolves only to a DIFFERENT machine, is not. `connect` is THIS module's imported `getRunnerConn`, which keeps every
+	// route test's mock of it in effect; an unreadable registry falls back to the exact stamp, as before, never to an alias.
+	return getRunnerConnForStampedNode(env, instanceId, uid, session.runnerNode ?? null, { connect: getRunnerConn, registryUnavailable: "exact" });
 }
 
 /**

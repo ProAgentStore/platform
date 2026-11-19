@@ -75,7 +75,13 @@ export function registerDriveRoutes(codingRoutes: Hono<{ Bindings: Env }>): void
 		// so persist it as a chat turn (survives reload) — not just the raw command log.
 		const fromChat = body.chat === true;
 		const conn = await getSessionRunnerConn(c.env, instanceId, uid, session);
-		if (!conn) throw new HttpError(409, "No coding runner connected. Start it with: pags up");
+		if (!conn) {
+			// #1543: say what is actually true of THIS session's machine, as `/restart` does — a generic "start it with pags up" sent an
+			// owner to start a runner that was already running on another of its own names. Best-effort: never a 500 from a diagnosis.
+			const attachment = await sessionAttachment(c.env, instanceId, uid, session.runnerNode).catch(() => null);
+			const why = attachment ? `${attachment.message}${attachment.remedy ? ` Run \`${attachment.remedy}\`.` : ""}` : "Start it with: pags up";
+			throw new HttpError(409, `No coding runner connected for this session. ${why} Nothing was sent.`);
+		}
 		// ONE WRITER PER CHECKOUT (#1015), through the one dispatch contract every engine-writing door
 		// shares (lib/coding-dispatch.ts): admitted and RESERVED in one write, fenced again immediately
 		// before the send, and a failed send classified rather than re-sent. On this session's own run

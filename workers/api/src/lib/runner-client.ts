@@ -258,19 +258,47 @@ async function ownerNodeRegistrations(env: Env, userId: string): Promise<NodeReg
  * guess is the mistake this function exists to never make. The stamp stays authoritative — never a
  * fallback to a genuinely different machine.
  */
-export async function getRunnerConnForStampedNode(env: Env, instanceId: string, userId: string, stampedNode: string | null | undefined): Promise<RunnerConn | null> {
+export async function getRunnerConnForStampedNode(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	stampedNode: string | null | undefined,
+	opts: StampedNodeOptions = {},
+): Promise<RunnerConn | null> {
+	const connect = opts.connect ?? getRunnerConn;
 	const node = normalizeRunnerNode(stampedNode);
-	if (!node) return getRunnerConn(env, instanceId, userId, stampedNode);
-	const resolved = machineNamesFor(node, await ownerNodeRegistrations(env, userId));
-	if (!resolved.ok && resolved.reason === "ambiguous") return null;
-	const direct = await getRunnerConn(env, instanceId, userId, node);
+	if (!node) return connect(env, instanceId, userId, stampedNode);
+	let registrations: NodeRegistration[] | null;
+	try {
+		registrations = await ownerNodeRegistrations(env, userId);
+	} catch (e) {
+		// `throw` (the default, and what `/end` relies on): identity evidence that could not be read is never read as "nothing
+		// contradicts the name". `exact` is for a SEND to the machine a session is stamped to (#1543): with no proof of any alias,
+		// the stamped name alone is tried exactly as it was before — the only thing lost is the rename fallback, never a safety.
+		if (opts.registryUnavailable !== "exact") throw e;
+		registrations = null;
+	}
+	const resolved = registrations ? machineNamesFor(node, registrations) : null;
+	if (resolved && !resolved.ok && resolved.reason === "ambiguous") return null;
+	const direct = await connect(env, instanceId, userId, node);
 	if (direct) return direct;
-	const aliases = resolved.ok ? resolved.names.filter((n) => n !== node) : [];
+	const aliases = resolved?.ok ? resolved.names.filter((n) => n !== node) : [];
 	for (const alias of aliases) {
-		const conn = await getRunnerConn(env, instanceId, userId, alias);
+		const conn = await connect(env, instanceId, userId, alias);
 		if (conn) return conn;
 	}
 	return null;
+}
+
+export interface StampedNodeOptions {
+	/**
+	 * How a name becomes a live connection. Defaults to this module's {@link getRunnerConn}; a caller in another module passes
+	 * ITS imported binding instead, because a call made from inside this module is not the export a test replaces — the
+	 * reason `routes/coding-shared.ts` could not simply swap resolvers under its route tests (#1543).
+	 */
+	connect?: (env: Env, instanceId: string, userId: string, runnerNode?: string | null) => Promise<RunnerConn | null>;
+	/** What to do when the fleet's registrations cannot be read: `throw` (default) or try the stamped name exactly, no aliases. */
+	registryUnavailable?: "throw" | "exact";
 }
 
 /**
