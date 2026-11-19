@@ -84,7 +84,7 @@ describe("the needs-detail comment (#1027)", () => {
 });
 
 describe("the digest (#1027)", () => {
-	const counts = (over: Partial<PoCounts> = {}): PoCounts => ({ queued: 0, wouldQueue: 0, alreadyQueued: 0, ready: 0, waiting: 0, blocked: 0, needsDetail: 0, commented: 0, ...over });
+	const counts = (over: Partial<PoCounts> = {}): PoCounts => ({ queued: 0, wouldQueue: 0, alreadyQueued: 0, ready: 0, waiting: 0, blocked: 0, needsDetail: 0, commented: 0, excluded: 0, ...over });
 
 	it("reads like the issue's example", () => {
 		expect(digestLine("Tennis Clubs", counts({ queued: 2, waiting: 1, needsDetail: 1 }), false)).toBe("Tennis Clubs: queued 2, 1 waiting on you, 1 needs detail");
