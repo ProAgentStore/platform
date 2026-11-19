@@ -173,7 +173,7 @@ describe.skipIf(process.platform === "win32")("post-run cleanup against real pro
 			s.input("first");
 			await until(() => leaked(`ab-${mode}`).length === 1, 8000, "the first turn to leak its child");
 			const [first] = leaked(`ab-${mode}`);
-			s.input("second"); // aborts the first turn while it is still running
+			s.input("second", { whenBusy: "interrupt" }); // aborts the first turn while it is still running
 			await until(() => leaked(`ab-${mode}`).length === 2, 8000, "the second turn to start");
 			await until(() => !alive(first), 8000, `${mode}: the aborted turn's child to be ended`);
 			const second = leaked(`ab-${mode}`).find((p) => p !== first) as number;

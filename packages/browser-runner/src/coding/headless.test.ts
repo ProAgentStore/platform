@@ -1373,7 +1373,7 @@ describe("HeadlessSession — a completed turn reports which inputs it consumed 
 		s.start();
 		s.input("slow one", { inputId: "dir-killed" });
 		await until(() => s.snapshot().includes("part 1: slow one"), 6000, "the first turn to start");
-		s.input("second", { inputId: "dir-second" });
+		s.input("second", { inputId: "dir-second", whenBusy: "interrupt" });
 		await until(() => s.lastTurn !== null, 12_000, "the second turn to finish");
 		expect(s.consumedInputs).toEqual(["dir-second"]);
 		s.stop();
