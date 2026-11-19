@@ -20,13 +20,14 @@ function tools(scopes: SafetyContext["scopes"] = ["read", "write", "runtime"], r
 	});
 	const handlers = new Map<string, Handler>();
 	const schemas = new Map<string, z.ZodRawShape>();
+	const descriptions = new Map<string, string>();
 	const env: McpEnv = { API_BASE: "https://api.test" };
-	registerApplicationTools({ tool: (name: string, _d: string, schema: z.ZodRawShape, h: Handler) => { handlers.set(name, h); schemas.set(name, schema); } } as never, {
+	registerApplicationTools({ tool: (name: string, d: string, schema: z.ZodRawShape, h: Handler) => { handlers.set(name, h); schemas.set(name, schema); descriptions.set(name, d); } } as never, {
 		env,
 		tokenFor: (p?: string) => p || "session-token",
 		safetyFor: (): SafetyContext => ({ env, subject: "user-1", scopes }),
 	});
-	return { seen, schemas, names: [...handlers.keys()], call: (name: string, args: Record<string, unknown>) => (handlers.get(name) as Handler)(args).then((r) => r.content[0].text) };
+	return { seen, schemas, descriptions, names: [...handlers.keys()], call: (name: string, args: Record<string, unknown>) => (handlers.get(name) as Handler)(args).then((r) => r.content[0].text) };
 }
 
 afterEach(() => vi.unstubAllGlobals());
@@ -122,6 +123,40 @@ describe("the Applications tools (#958, #953)", () => {
 	// or the Tailor's `/applications/:id`, so a run's policy, pause, submit-gate verdicts, event
 	// trace and supervisor checkpoints were HTTP-only: the apply pipeline had no answer to the
 	// question `coding_session_capture` answers for a coding agent.
+	// #1548 — the schema said "any instance of the pipeline" while the description said "the TAILOR's", and the route agreed with
+	// neither: a connected Runner got "Application not found". The server now resolves a pipeline member to its Tailor; these pin that
+	// the tool, its schema and its description all say the same thing and that the tool adds no routing of its own.
+	describe("tailoring_run names its instance honestly (#1548)", () => {
+		it("accepts the Tailor, a connected Runner or a connected Scout, and forwards that id UNCHANGED — the owner-scoped resolution is the API's", async () => {
+			const { seen, call } = tools();
+			for (const instance of ["t1", "runner-1", "scout-1"]) await call("tailoring_run", { instance_id: instance, application_id: "a1" });
+			expect(seen.map((s) => s.url)).toEqual([
+				"https://api.test/v1/instances/t1/applications/a1",
+				"https://api.test/v1/instances/runner-1/applications/a1",
+				"https://api.test/v1/instances/scout-1/applications/a1",
+			]);
+			expect(seen.every((s) => s.method === "GET")).toBe(true);
+		});
+
+		it("hands the API's answer through whole, including which Tailor served a pipeline member", async () => {
+			const { call } = tools(["read"], { application: { id: "a1" }, run: { status: "running" }, resolvedTailorInstanceId: "t1" });
+			expect(JSON.parse(await call("tailoring_run", { instance_id: "runner-1", application_id: "a1" }))).toMatchObject({ resolvedTailorInstanceId: "t1", application: { id: "a1" } });
+		});
+
+		it("its description no longer contradicts its schema: it says a Scout or Runner is resolved to its Tailor, and who served it", () => {
+			const { descriptions, schemas } = tools();
+			const d = descriptions.get("tailoring_run") ?? "";
+			expect(d).toMatch(/Tailor's instance_id/);
+			expect(d).toMatch(/connected Scout's or Runner's instance_id, which is resolved to its Tailor/);
+			expect(d).toMatch(/resolvedTailorInstanceId/);
+			expect(d).not.toMatch(/Pass the TAILOR's instance_id and the application_id./);
+			// And the schema still accepts a pipeline member — exactly what the description now promises.
+			const shape = schemas.get("tailoring_run") ?? {};
+			expect(Object.keys(shape).sort()).toEqual(["application_id", "instance_id", "token"]);
+			expect((shape.instance_id as z.ZodString).description).toMatch(/Any instance of the pipeline/);
+		});
+	});
+
 	it("reads the Runner's and Tailor's own run routes, which nothing reached before", async () => {
 		const { seen, call } = tools();
 		await call("application_runs", { instance_id: "r1" });

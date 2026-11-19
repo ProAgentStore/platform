@@ -609,3 +609,102 @@ describe("settings and access", () => {
 		expect((await call("GET", "/t1/applications?status=cancelled")).body.applications).toHaveLength(1);
 	});
 });
+
+/**
+ * #1548 — `tailoring_run` said "any instance of the pipeline" and the route scoped the lookup to the exact instance given, so the
+ * connected Runner got "Application not found" for an application the canonical Tailor served for the same request. Now a connected
+ * Scout or Runner resolves to ITS Tailor through the owner's own connections; everything else keeps its boundary.
+ */
+describe("reading a tailoring run from any instance of the pipeline (#1548)", () => {
+	async function tailored() {
+		const started = await call("POST", "/t1/applications", { event: leadEvent() });
+		expect(started.status).toBeLessThan(300);
+		return started.body.application as { id: string; tailoringRunId: string };
+	}
+	const read = (instance: string, id: string) => call("GET", `/${instance}/applications/${id}`);
+
+	beforeEach(() => {
+		d1.exec(`INSERT INTO agents (id, owner_id, slug, name, config) VALUES ('plain-a', 'u1', 't1548-plain', 'Plain', '{}')`);
+		d1.exec(`INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES
+		  ('lone', 'tailor-a', 'u1', 'active', '{}'), ('plain', 'plain-a', 'u1', 'active', '{}'), ('orphan-runner', 'runner-a', 'u1', 'active', '{}')`);
+	});
+
+	it("the canonical Tailor answers, as ever, and does not claim to have resolved anything", async () => {
+		const app = await tailored();
+		const r = await read("t1", app.id);
+		expect(r.status).toBe(200);
+		expect(r.body.application).toMatchObject({ id: app.id, tailoringRunId: app.tailoringRunId });
+		expect(r.body).not.toHaveProperty("resolvedTailorInstanceId");
+	});
+
+	it("THE REPORTED FAILURE: the verified connected Runner gets the same application and run, and is told which Tailor served it", async () => {
+		const app = await tailored();
+		const canonical = await read("t1", app.id);
+		const viaRunner = await read("next", app.id);
+		expect(viaRunner.status, JSON.stringify(viaRunner.body)).toBe(200);
+		expect(viaRunner.body.application).toEqual(canonical.body.application);
+		expect(viaRunner.body.run).toEqual(canonical.body.run);
+		expect(viaRunner.body.resolvedTailorInstanceId).toBe("t1");
+	});
+
+	it("the connected Scout resolves to the same Tailor", async () => {
+		const app = await tailored();
+		const viaScout = await read("scout", app.id);
+		expect(viaScout.status).toBe(200);
+		expect(viaScout.body).toMatchObject({ application: { id: app.id }, resolvedTailorInstanceId: "t1" });
+	});
+
+	it("a Tailor that is NOT connected to the application's pipeline does not get it: ownership and membership both hold", async () => {
+		const app = await tailored();
+		const r = await read("lone", app.id);
+		expect(r.status).toBe(404);
+		expect(r.body.error).toBe("Application not found");
+		expect(r.body).not.toHaveProperty("application");
+	});
+
+	it("another owner's instance cannot read it, however it is named", async () => {
+		const app = await tailored();
+		const r = await read("other", app.id);
+		expect(r.status).toBeGreaterThanOrEqual(400);
+		expect(r.body).not.toHaveProperty("application");
+		expect(JSON.stringify(r.body)).not.toContain(app.id);
+	});
+
+	it("a Runner with no Tailor in its pipeline is told that, not that the application is missing", async () => {
+		const app = await tailored();
+		const r = await read("orphan-runner", app.id);
+		expect(r.status).toBe(404);
+		expect(r.body.error).toMatch(/No Application Tailor is connected/);
+		expect(r.body.error).not.toBe("Application not found");
+	});
+
+	it("an instance in no application pipeline at all answers 409, the same as get_application does", async () => {
+		const app = await tailored();
+		const r = await read("plain", app.id);
+		expect(r.status).toBe(409);
+		expect(r.body.error).toMatch(/not part of an application pipeline/);
+	});
+
+	it("a disabled connection is not membership: the Runner no longer resolves once its link is off", async () => {
+		const app = await tailored();
+		d1.exec(`UPDATE agent_connections SET enabled = 0 WHERE id = 'c-ready'`);
+		const r = await read("next", app.id);
+		expect(r.status).toBe(404);
+		expect(r.body).not.toHaveProperty("application");
+	});
+
+	it("an application id that exists nowhere is still a plain 404 from every member", async () => {
+		await tailored();
+		for (const instance of ["t1", "next", "scout"]) expect((await read(instance, "no-such-application")).status).toBe(404);
+	});
+
+	it("resolving reads only: the run is the Tailor's own and a Runner read starts, cancels and sends nothing", async () => {
+		const app = await tailored();
+		const sentBefore = sent.length;
+		await read("next", app.id);
+		await read("scout", app.id);
+		expect(sent.slice(sentBefore).filter((s) => s.path === "/local-artifact/run" || s.path === "/local-artifact/cancel")).toEqual([]);
+		expect(await appCount()).toBe(1);
+		expect(await runCount()).toBe(1);
+	});
+});

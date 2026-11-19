@@ -14,6 +14,7 @@ import { cloudDocumentsRunnerProblem } from "../lib/local-artifact/cloud-documen
 import type { Context, Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { readInstanceConfigPair, patchInstanceConfig } from "../lib/instance-config.js";
+import { noTailorExplanation, resolveTailorHolding } from "../lib/applications/tailor-for.js";
 import { cancelTailoring, startTailoring, syncTailorRun } from "../lib/local-artifact/tailor.js";
 import { LOCAL_ARTIFACT_CAPS } from "../lib/local-artifact/contract.js";
 import {
@@ -214,14 +215,23 @@ export function registerApplicationTailorRoutes(router: Hono<{ Bindings: Env }>)
 
 	router.get("/:instanceId/applications/:applicationId", async (c) => {
 		const { uid, instanceId } = await owned(c);
-		let application = await getApplication(c.env, instanceId, uid, c.req.param("applicationId"));
-		if (!application) throw new HttpError(404, "Application not found");
-		let run = application.tailoringRunId ? await getTailorRun(c.env, instanceId, uid, application.tailoringRunId) : null;
+		const applicationId = c.req.param("applicationId");
+		let tailorId = instanceId;
+		let application = await getApplication(c.env, instanceId, uid, applicationId);
+		if (!application) {
+			// #1548: the tool says any instance of the pipeline, so a connected Runner or Scout is resolved to ITS Tailor through the
+			// owner's own connections (`resolveTailorHolding`) — and a pipeline with no Tailor says so instead of "not found".
+			const holding = await resolveTailorHolding(c.env, uid, instanceId, applicationId);
+			if (!holding) throw new HttpError(404, (await noTailorExplanation(c.env, uid, instanceId)) ?? "Application not found");
+			tailorId = holding.tailorInstanceId;
+			application = holding.application;
+		}
+		let run = application.tailoringRunId ? await getTailorRun(c.env, tailorId, uid, application.tailoringRunId) : null;
 		if (run?.status === "running") {
 			run = await syncTailorRun(c.env, uid, run);
-			application = (await getApplication(c.env, instanceId, uid, application.id)) ?? application;
+			application = (await getApplication(c.env, tailorId, uid, application.id)) ?? application;
 		}
-		return c.json({ application, run });
+		return c.json({ application, run, ...(tailorId !== instanceId ? { resolvedTailorInstanceId: tailorId } : {}) });
 	});
 
 	/** Stop tailoring. Touches PAGS records and the local CLI only — nothing external. */
