@@ -201,6 +201,18 @@ own exit status rather than a later `echo`, `grep` or pipeline's.
   before and after. Gaps: an absolute `/usr/bin/git`, a rewritten `PATH`, or a git alias bypasses it;
   it does not install on Windows. It ships with the runner, so it reaches a machine with the CLI
   release that carries it.
+- **Shared-checkout discards and the audit (#1489):** the same shim also refuses what wipes EVERY actor's
+  uncommitted work in a checkout several actors share: `reset --hard`, `clean` (only `-n`/`--dry-run` passes),
+  `checkout`/`switch` with `-f`/`--force`/`--discard-changes`, and `checkout`/`restore` of the WHOLE tree
+  (`.`, `:/`). A targeted `git checkout HEAD -- <file>`, `reset`, `restore --staged`, a branch switch, rebase,
+  merge and commit are untouched. For bulk compare or discard use an isolated `git worktree add --detach`
+  checkout. Every mutating subcommand through the shim, allowed or refused, appends one tab-separated line
+  (time, decision, subcommand, `session=` from `PAGS_SESSION_ID`, pid, ppid, cwd, argv) to
+  `~/.config/proagentstore/git-guard/audit.log` (or `PAGS_GIT_AUDIT_LOG`; rotated at 1 MB, best-effort, never
+  blocks git; the shell text is `git-guard-shell.ts`). The line names whose shim ran the command, not an intent:
+  the bypasses above leave no line, and bulk discards spelled another way (`checkout HEAD -- <every file>`,
+  `rm`, `update-ref`) are not refused. Tested in `git-guard.test.ts` by running the generated shim against real
+  temporary repositories that hold a second actor's tracked, staged and untracked work.
 
 Never do this with `git stash` (#1021). The stash is repo-global, so `pop` restores the top of everyone's stack,
 not what you saved. A save that fails or saves nothing still lets a chained `pop` consume someone else's recovery
