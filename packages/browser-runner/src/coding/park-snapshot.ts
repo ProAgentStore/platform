@@ -51,6 +51,28 @@ function changes(workDir: string): string[] {
 	return git(workDir, ["status", "--porcelain=v1", "--untracked-files=all"]).split("\n").filter(Boolean);
 }
 
+/** The changed PATHS (no status letters), rename targets included — what ownership is judged on (#1547). */
+export function dirtyPaths(workDir: string): string[] {
+	const out: string[] = [];
+	const parts = git(workDir, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]).split("\0").filter(Boolean);
+	for (let i = 0; i < parts.length; i++) {
+		const entry = parts[i];
+		out.push(entry.slice(3));
+		if (entry[0] === "R" || entry[0] === "C") i++; // the next field is the rename's source path
+	}
+	return out;
+}
+
+/**
+ * Admission to, or resume in, a SHARED checkout (#1670): it must be clean. Reads only — it never stashes, resets or
+ * cleans — and names every blocking path so the owner can see what is in the way and nothing unrelated is touched.
+ */
+export function admitSharedCheckout(workDir: string): { ok: boolean; blocking: string[] } {
+	if (!existsSync(join(workDir, ".git"))) throw new InspectError(`not a git checkout: ${workDir}`);
+	const blocking = dirtyPaths(workDir);
+	return { ok: blocking.length === 0, blocking };
+}
+
 export interface ParkSnapshotResult {
 	/** The exact commit id the work was saved as; null when the tree was already clean. */
 	snapshot: string | null;
@@ -63,11 +85,24 @@ export interface ParkSnapshotResult {
 	/** The checkout is clean now — the only state in which the cloud may hand it to another run. */
 	clean: boolean;
 	ref: string | null;
+	/**
+	 * Dirty paths that were NOT this run's and were therefore left exactly where they were (#1547). Present only when an
+	 * `owned` list was given and something else is dirty; `clean` is then false and the cloud must not hand the checkout on.
+	 */
+	unowned?: string[];
 }
 
-/** Save the parked run's uncommitted work and leave the checkout clean. Idempotent per run. */
-export function parkSnapshot(workDir: string, runId: string): ParkSnapshotResult {
+/**
+ * Save the parked run's uncommitted work and leave the checkout clean. Idempotent per run.
+ *
+ * `opts.owned` (#1547): the paths the cloud has verified belong to THIS run. With it, only those paths are captured and
+ * cleared; any other dirty path — another editor's tracked or untracked work in a shared checkout — stays in place and is
+ * reported in `unowned`. Without it the caller asserts exclusive use of the whole checkout (the isolated worktree mode,
+ * where nobody else can be writing), which is the behaviour every existing caller has.
+ */
+export function parkSnapshot(workDir: string, runId: string, opts: { owned?: readonly string[] } = {}): ParkSnapshotResult {
 	checkout(workDir, runId);
+	if (opts.owned) return parkOwned(workDir, runId, opts.owned);
 	const ref = parkRef(runId);
 	const existing = (() => {
 		try {
@@ -88,6 +123,22 @@ export function parkSnapshot(workDir: string, runId: string): ParkSnapshotResult
 	const snapshot = mine.split(" ")[0];
 	git(workDir, ["update-ref", ref, snapshot]);
 	return { snapshot, files: before.length, clean: changes(workDir).length === 0, ref, ...pushRef(workDir, ref) };
+}
+
+function parkOwned(workDir: string, runId: string, owned: readonly string[]): ParkSnapshotResult {
+	const ref = parkRef(runId);
+	const want = new Set(owned.map((p) => p.replaceAll("\\", "/")));
+	const dirty = dirtyPaths(workDir);
+	const mine = dirty.filter((p) => want.has(p));
+	const unowned = dirty.filter((p) => !want.has(p));
+	const extra = unowned.length ? { unowned } : {};
+	if (mine.length === 0) return { snapshot: null, files: 0, clean: unowned.length === 0, ref: null, pushed: null, ...extra };
+	git(workDir, ["stash", "push", "--include-untracked", "-m", parkMessage(runId), "--", ...mine]);
+	const mineEntry = git(workDir, ["stash", "list", "--format=%H %s"]).split("\n").filter(Boolean).find((l) => l.endsWith(parkMessage(runId)));
+	if (!mineEntry) throw new InspectError("the stash entry for this park was not found after saving it; nothing was released");
+	const snapshot = mineEntry.split(" ")[0];
+	git(workDir, ["update-ref", ref, snapshot]);
+	return { snapshot, files: mine.length, clean: dirtyPaths(workDir).length === 0, ref, ...pushRef(workDir, ref), ...extra };
 }
 
 /** A git error, said without anything that could carry a credential: no URL, first line only. */
@@ -127,6 +178,8 @@ export interface ParkRestoreResult {
 	refused?: string;
 	/** The files the saved work collides with on the current checkout (#1078), as git named them. */
 	conflicts?: string[];
+	/** The dirty paths that blocked the restore (#1670): named, never cleaned. */
+	blocking?: string[];
 }
 
 /** The paths `git apply --check` names when it refuses — "patch failed: <path>:<line>", "<path>: does not match index", … */
@@ -157,7 +210,7 @@ export function parkRestore(workDir: string, runId: string, snapshot: string, op
 		fetched = true;
 	}
 	const dirty = changes(workDir);
-	if (dirty.length) return { restored: false, refused: `the checkout is not clean (${dirty.length} changed file${dirty.length === 1 ? "" : "s"}), so the saved work was not put back on top of it` };
+	if (dirty.length) return { restored: false, blocking: dirtyPaths(workDir), refused: `the checkout is not clean (${dirty.length} changed file${dirty.length === 1 ? "" : "s"}), so the saved work was not put back on top of it` };
 	// Tracked changes: the stash's own diff against its base, checked against the current tree.
 	const patch = git(workDir, ["diff", "--binary", `${snapshot}^1`, snapshot]);
 	if (patch.trim()) {

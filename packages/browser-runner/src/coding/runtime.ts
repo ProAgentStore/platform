@@ -401,9 +401,9 @@ export class CodingRuntime {
 		throw new InspectError("no workDir or repoId for the parked checkout");
 	}
 
-	/** Set a parked run's uncommitted work aside on its own ref and leave the checkout clean (#1077, `park-snapshot.ts`). */
-	parkSnapshot(input: { workDir?: string; repoId?: string; runId: string }) {
-		return parkSnapshot(this.parkWorkDir(input), input.runId);
+	/** Set a parked run's work aside on its own ref (#1077); a verified `owned` list limits it to those paths (#1547). */
+	parkSnapshot(input: { workDir?: string; repoId?: string; runId: string; owned?: string[] }) {
+		return parkSnapshot(this.parkWorkDir(input), input.runId, Array.isArray(input.owned) && input.owned.every((p) => typeof p === "string") ? { owned: input.owned } : {});
 	}
 
 	/** Stash or discard a checkout's local changes with a backup, then optionally fast-forward it (#1324, `checkout-clean.ts`). */

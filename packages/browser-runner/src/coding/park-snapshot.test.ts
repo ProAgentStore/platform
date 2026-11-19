@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parkRef, parkRestore, parkSnapshot } from "./park-snapshot.js";
+import { admitSharedCheckout, parkRef, parkRestore, parkSnapshot } from "./park-snapshot.js";
 
 /**
  * #1077 — a parked run's work set aside and put back, on REAL temporary repositories. The property
@@ -183,5 +183,88 @@ describe("parked work across machines (#1242)", () => {
 		const saved = parkOnX();
 		git(x, "update-ref", "-d", parkRef(RUN));
 		expect(parkRestore(x, RUN, saved.snapshot as string)).toEqual({ restored: true });
+	});
+});
+
+/**
+ * #1547 / #1670 — a shared checkout can hold SOMEBODY ELSE'S work. With a verified `owned` list parking captures only the
+ * run's own paths; everything else stays exactly where it was and is reported. Real temporary repositories only.
+ */
+describe("parkSnapshot with verified ownership (#1547)", () => {
+	let dir: string;
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "pags-own-"));
+		git(dir, "init", "-q", "-b", "main");
+		git(dir, "config", "user.email", "t@example.com");
+		git(dir, "config", "user.name", "T");
+		writeFileSync(join(dir, "mine.txt"), "m\n");
+		writeFileSync(join(dir, "theirs.txt"), "t\n");
+		git(dir, "add", "-A");
+		git(dir, "commit", "-qm", "first");
+	});
+	afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+	it("captures only the run's own tracked and untracked paths and leaves another editor's work in place", () => {
+		writeFileSync(join(dir, "mine.txt"), "m\nrun edit\n");
+		writeFileSync(join(dir, "mine-new.ts"), "export const r = 1;\n");
+		writeFileSync(join(dir, "theirs.txt"), "t\nsomeone else\n");
+		writeFileSync(join(dir, "theirs-new.ts"), "export const o = 1;\n");
+		const r = parkSnapshot(dir, RUN, { owned: ["mine.txt", "mine-new.ts"] });
+		expect(r).toMatchObject({ files: 2, clean: false });
+		expect([...(r.unowned ?? [])].sort()).toEqual(["theirs-new.ts", "theirs.txt"]);
+		// Unrelated edits are untouched, byte for byte; the run's own are on the ref.
+		expect(read(dir, "theirs.txt")).toBe("t\nsomeone else\n");
+		expect(read(dir, "theirs-new.ts")).toBe("export const o = 1;\n");
+		expect(existsSync(join(dir, "mine-new.ts"))).toBe(false);
+		expect(read(dir, "mine.txt")).toBe("m\n");
+		expect(git(dir, "rev-parse", parkRef(RUN)).trim()).toBe(r.snapshot);
+		// The saved commit holds the run's work and NOT the other editor's.
+		expect(git(dir, "show", "--name-only", "--format=", r.snapshot as string).split("\n").filter(Boolean)).toContain("mine.txt");
+		expect(git(dir, "show", "--name-only", "--format=", r.snapshot as string)).not.toContain("theirs.txt");
+	});
+
+	it("with nothing of the run's own dirty it changes nothing at all and reports the conflict", () => {
+		writeFileSync(join(dir, "theirs.txt"), "t\nsomeone else\n");
+		const r = parkSnapshot(dir, RUN, { owned: ["mine.txt"] });
+		expect(r).toMatchObject({ snapshot: null, files: 0, clean: false, unowned: ["theirs.txt"] });
+		expect(read(dir, "theirs.txt")).toBe("t\nsomeone else\n");
+		expect(git(dir, "stash", "list")).toBe("");
+		expect(() => git(dir, "rev-parse", "--verify", "--quiet", parkRef(RUN))).toThrow();
+	});
+
+	it("a write that lands between the ownership check and the park, on a path that is not the run's, stays untouched", () => {
+		writeFileSync(join(dir, "mine.txt"), "m\nrun\n");
+		const owned = ["mine.txt"];
+		writeFileSync(join(dir, "late-concurrent.ts"), "written by another process\n"); // arrives after `owned` was decided
+		const r = parkSnapshot(dir, RUN, { owned });
+		expect(r.unowned).toEqual(["late-concurrent.ts"]);
+		expect(read(dir, "late-concurrent.ts")).toBe("written by another process\n");
+	});
+
+	it("restoring onto a checkout with someone else's edits refuses, names the blocking paths and cleans nothing", () => {
+		writeFileSync(join(dir, "mine.txt"), "m\nrun\n");
+		writeFileSync(join(dir, "theirs.txt"), "t\nother\n");
+		const r = parkSnapshot(dir, RUN, { owned: ["mine.txt"] });
+		const back = parkRestore(dir, RUN, r.snapshot as string);
+		expect(back).toMatchObject({ restored: false, blocking: ["theirs.txt"] });
+		expect(read(dir, "theirs.txt")).toBe("t\nother\n");
+		expect(read(dir, "mine.txt")).toBe("m\n");
+	});
+
+	it("legacy callers (exclusive use asserted by the isolated worktree mode) keep the whole-tree behaviour", () => {
+		writeFileSync(join(dir, "mine.txt"), "m\nrun\n");
+		writeFileSync(join(dir, "new.ts"), "x\n");
+		expect(parkSnapshot(dir, RUN)).toMatchObject({ files: 2, clean: true });
+	});
+
+	it("admitSharedCheckout names every blocking path and modifies nothing", () => {
+		expect(admitSharedCheckout(dir)).toEqual({ ok: true, blocking: [] });
+		writeFileSync(join(dir, "theirs.txt"), "t\nedit\n");
+		writeFileSync(join(dir, "scratch dir with space.txt"), "u\n");
+		const a = admitSharedCheckout(dir);
+		expect(a.ok).toBe(false);
+		expect([...a.blocking].sort()).toEqual(["scratch dir with space.txt", "theirs.txt"]);
+		expect(read(dir, "theirs.txt")).toBe("t\nedit\n");
+		expect(git(dir, "stash", "list")).toBe("");
 	});
 });
