@@ -31,6 +31,8 @@ const logError = vi.fn();
 const notifyUser = vi.fn();
 
 vi.mock("./provider-account-hold.js", () => ({ automaticProviderHold: async () => null }));
+// The repo blocker (#1515) has its own real-schema test; this file's DB stub answers every SELECT with a row, which would read as one.
+vi.mock("./repo-admission-blocker.js", () => ({ readRepoBlocker: async () => null, describeRepoBlocker: () => "" }));
 vi.mock("../routes/push.js", () => ({ notifyUser: (...a: unknown[]) => notifyUser(...a) }));
 
 vi.mock("./objective-queue.js", () => ({

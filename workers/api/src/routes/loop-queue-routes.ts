@@ -18,6 +18,7 @@ import { cancelQueueEntry, getQueueEntry, listQueue, listQueueHistory } from "..
 import { clientClaimFrom, listLifecycle, recordLifecycle } from "../lib/objective-lifecycle.js";
 import { cursorParam } from "../lib/keyset-cursor.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
+import { listRepoBlockers } from "../lib/repo-admission-blocker.js";
 import type { Env } from "../types.js";
 
 /**
@@ -74,6 +75,8 @@ export function registerLoopQueueRoutes(router: Hono<{ Bindings: Env }>): void {
 			activeRun,
 			inFlightStarts,
 			blockedOnAnswer,
+			// #1515: a repo whose pre-flight stopped a run holds its whole queue, in order, behind this one condition — not an objective's failure.
+			repoBlockers: await listRepoBlockers(c.env, instanceId, session.uid),
 			handoff: handoff ?? (repoParam ? { state: activeRun ? "working" : "safe_to_start_next", detail: "" } : null),
 		});
 	});

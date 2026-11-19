@@ -38,6 +38,10 @@ vi.mock("../lib/loop-busy.js", () => ({ describeBusyHolder: (...a: unknown[]) =>
 const storedHandoff = vi.fn();
 vi.mock("../lib/coding-handoff-store.js", () => ({ storedHandoff: (...a: unknown[]) => storedHandoff(...a) }));
 
+// A repo whose pre-flight stopped a run holds its queue (#1515) — real behaviour in repo-admission-blocker.test.ts.
+const listRepoBlockers = vi.fn();
+vi.mock("../lib/repo-admission-blocker.js", () => ({ listRepoBlockers: (...a: unknown[]) => listRepoBlockers(...a) }));
+
 const { registerLoopQueueRoutes } = await import("./loop-queue-routes.js");
 
 function app() {
@@ -56,6 +60,7 @@ beforeEach(() => {
 	listQueue.mockResolvedValue([]);
 	describeBusyHolder.mockResolvedValue({ activeRun: null, inFlightStarts: [] });
 	storedHandoff.mockResolvedValue(null);
+	listRepoBlockers.mockResolvedValue([]);
 });
 
 describe("GET /:id/loop/queue", () => {
@@ -66,7 +71,7 @@ describe("GET /:id/loop/queue", () => {
 		// `handoff` is null without a repo_id: the state is per-REPO, and an instance-wide read has no
 		// one checkout to report on.
 		// Each entry carries its card key and whether it starts next (#1097: board order is run order).
-		expect(await res.json()).toEqual({ scope: "pending", entries: [{ id: "objq-1", jobKey: "objective:objq-1", next: true }], activeRun: null, inFlightStarts: [], blockedOnAnswer: [], handoff: null });
+		expect(await res.json()).toEqual({ scope: "pending", entries: [{ id: "objq-1", jobKey: "objective:objq-1", next: true }], activeRun: null, inFlightStarts: [], blockedOnAnswer: [], repoBlockers: [], handoff: null });
 	});
 
 	it("reports the per-repo handover state, so a stuck queue says WHY (#984)", async () => {
@@ -81,6 +86,16 @@ describe("GET /:id/loop/queue", () => {
 		expect(await (await app().request("/i1/loop/queue?repo_id=r1", {}, {} as Env)).json()).toMatchObject({ handoff: { state: "working" } });
 		describeBusyHolder.mockResolvedValue({ activeRun: null, inFlightStarts: [] });
 		expect(await (await app().request("/i1/loop/queue?repo_id=r1", {}, {} as Env)).json()).toMatchObject({ handoff: { state: "safe_to_start_next" } });
+	});
+
+	it("exposes a repo-level admission blocker beside the queue, apart from any objective's own failure (#1515)", async () => {
+		listQueue.mockResolvedValue([{ id: "objq-1" }, { id: "objq-2" }]);
+		const blocker = { repoId: "r1", message: "The checkout is dirty and behind origin/main (#801).", since: 5, runId: "run-0" };
+		listRepoBlockers.mockResolvedValue([blocker]);
+		const body = (await (await app().request("/i1/loop/queue?repo_id=r1", {}, {} as Env)).json()) as { entries: unknown[]; repoBlockers: unknown[] };
+		expect(body.repoBlockers).toEqual([blocker]);
+		expect(body.entries).toHaveLength(2); // every entry is still listed, pending and in order
+		expect(listRepoBlockers.mock.calls[0].slice(1)).toEqual(["i1", "u1"]);
 	});
 
 	it("returns everything pending when no repo is named", async () => {

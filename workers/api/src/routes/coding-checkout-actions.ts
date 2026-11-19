@@ -12,6 +12,8 @@ import type { Hono } from "hono";
 import { HttpError } from "../lib/auth.js";
 import { autoStashApproved, readAutoStashPolicy, runCheckoutAction, uniqueCheckoutLabel, type CheckoutActionFailure } from "../lib/checkout-actions.js";
 import { patchInstanceConfig } from "../lib/instance-config.js";
+import { tryDequeueAndStart } from "../lib/objective-queue-start.js";
+import { clearRepoBlocker } from "../lib/repo-admission-blocker.js";
 import { requireOwned } from "./coding-shared.js";
 import type { Env } from "../types.js";
 
@@ -37,7 +39,15 @@ export function registerCheckoutActionRoutes(codingRoutes: Hono<{ Bindings: Env 
 			pull: body.pull !== false,
 			node: typeof body.runner_node === "string" && body.runner_node.trim() ? body.runner_node.trim() : null,
 		});
-		if (out.ok) return c.json(out);
+		if (out.ok) {
+			// #1515: the checkout is clean and current — the blocker that held this repo's queue is gone, so the queue resumes (one entry,
+			// the same rate as any drain). `tryDequeueAndStart` never throws; a failed drain is the queue's own next attempt, not this answer's.
+			if (out.result.clean && !out.result.pulled?.error && !out.result.pulled?.refused) {
+				const key = { instanceId, userId: uid, repoId: c.req.param("repoId") ?? "" };
+				if (await clearRepoBlocker(c.env, key)) await tryDequeueAndStart(c.env, instanceId, key.repoId, uid);
+			}
+			return c.json(out);
+		}
 		return c.json(out, STATUS[out.reason]);
 	});
 

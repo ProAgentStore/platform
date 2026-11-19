@@ -34,6 +34,7 @@ import { pausedStartRefusal } from "./instance-pause.js";
 import { automaticProviderHold } from "./provider-account-hold.js";
 import { recordLifecycle } from "./objective-lifecycle.js";
 import { recordDrainRefusal } from "./issue-attempt-hooks.js";
+import { describeRepoBlocker, readRepoBlocker } from "./repo-admission-blocker.js";
 import { markWokenForCheckout, releasedRunAwaitingCheckout, wakeParkedRun } from "./coding-park.js";
 import type { ObjectiveQueueEntry } from "./objective-queue.js";
 import type { Env } from "../types.js";
@@ -69,6 +70,10 @@ export async function tryDequeueAndStart(env: Env, instanceId: string, repoId: s
 		if (await instancePaused(env, instanceId, userId)) return { drained: false };
 		const hold = await automaticProviderHold(env, instanceId, userId);
 		if (hold) return { drained: false, held: hold.reason };
+		// #1515: a repo whose pre-flight (the dirty/behind sync gate) just stopped a run holds EVERY entry behind it. Starting the next
+		// one only fails it on the same blocker and consumes it — so nothing is claimed; the queue keeps every entry and its order.
+		const blocker = repoId ? await readRepoBlocker(env, instanceId, repoId) : null;
+		if (blocker) return { drained: false, held: describeRepoBlocker(blocker) };
 		// A run that parked on a question, released this checkout and now has its answer goes FIRST
 		// (#1077): it was there before anything queued. Woken, it takes the checkout back; its own end drains next.
 		const parked = repoId ? await releasedRunAwaitingCheckout(env, instanceId, repoId).catch(() => null) : null;

@@ -61,6 +61,7 @@ import { actsInWindow } from "../../lib/instance-work.js";
 import { annotateOwnerAttribution } from "../../lib/run-attribution.js";
 import { finishLoopRun, settledRunStatus, grantRunIterations, recordIteration, type RunWaitReason, } from "../../lib/agent-loop-store.js";
 import { tryDequeueAndStart } from "../../lib/objective-queue-start.js";
+import { clearRepoBlocker, setRepoBlocker } from "../../lib/repo-admission-blocker.js";
 import { wakeIdleCoder } from "../../lib/auto-pickup.js";
 import { type PilotDecideOutcome, pilotDecide, unwrapPilotDecide } from "../../lib/pilot-decide.js";
 import { type CodingRunEvent, traceCodingRun } from "../../lib/coding-run-trace.js";
@@ -774,6 +775,9 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			gateRunOnSync(env, { instanceId, userId, sessionId, node: conn.runnerNode ?? null, repo: goal.repo, heal, repair }, syncAtStart),
 		)) as SyncGateOutcome;
 		if (syncGate.blocked) result = { outcome: "failed", detail: syncGate.message, steps: 0 };
+		// #1515: remember it ON THE REPO, so the queue holds behind this one condition instead of starting — and failing — each entry in turn.
+		// A pass clears it: whoever fixed the checkout by hand has just proved it.
+		if (repoId && !repair) await step.do("repo-admission-blocker", async () => (syncGate.blocked ? setRepoBlocker(env, { instanceId, userId, repoId, message: syncGate.message, runId: event.payload.loopRunId ?? null }) : void (await clearRepoBlocker(env, { instanceId, userId, repoId }))));
 		// A run the PLATFORM cut off leaves its work on the record and its PLAN nowhere (#523):
 		// `runCodingLoop`'s action log is a function-local array, so it dies with the invocation
 		// and the next run starts from the objective — re-implementing ten issues that are
@@ -1131,6 +1135,8 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		//
 		// `tryDequeueAndStart` never throws, so no `.catch` here: a queue that cannot be drained
 		// is recorded in `error_log` and must not turn a finished run into a failed step.
+		// A repair run that finished has put the checkout right (#1515): clear the blocker BEFORE the drain, so the queue resumes in order.
+		if (goal.repairCheckout === true && repoId && runSucceeded(result.outcome)) await step.do("repo-admission-blocker-clear", async () => void (await clearRepoBlocker(env, { instanceId, userId, repoId })));
 		const drained = (await step.do("objective-queue-drain", () => tryDequeueAndStart(env, instanceId, repoId, userId))) as { drained?: boolean } | null;
 		// #1232/#1233: nothing queued behind it → wake the coder's picker now (triage, else auto-pickup), not at the next hourly window.
 		if (drained?.drained !== true) await step.do("idle-coder-wake", () => wakeIdleCoder(env, instanceId, userId));

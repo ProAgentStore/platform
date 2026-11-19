@@ -59,6 +59,22 @@ describe("POST …/checkout/:action", () => {
 		}
 	});
 
+	// #1515: putting the checkout right is what releases a queue the repo's pre-flight blocker was holding.
+	it("a stash or discard that leaves the checkout clean clears the repo's admission blocker; one that does not, leaves it", async () => {
+		const { call, d1 } = build();
+		d1.exec("INSERT INTO coding_repos (id, instance_id, user_id, name, workdir, branch, admission_blocker, admission_blocker_at) VALUES ('r1', 'i1', 'u1', 'o/r', '/w', 'main', 'dirty and behind', 1)");
+		const blocked = () => d1.DB.prepare("SELECT admission_blocker AS b FROM coding_repos WHERE id = 'r1'").first<{ b: string | null }>().then((r) => r?.b ?? null);
+		runCheckoutAction.mockResolvedValueOnce({ ok: true, action: "stash", machine: "m", summary: "x", result: { clean: false, pulled: null } });
+		expect((await call("POST", "/repos/r1/checkout/stash", {})).status).toBe(200);
+		expect(await blocked()).toBe("dirty and behind"); // not clean: still blocked
+		runCheckoutAction.mockResolvedValueOnce({ ok: true, action: "stash", machine: "m", summary: "x", result: { clean: true, pulled: { changed: false, error: "ff refused" } } });
+		await call("POST", "/repos/r1/checkout/stash", {});
+		expect(await blocked()).toBe("dirty and behind"); // clean but not current: still blocked
+		runCheckoutAction.mockResolvedValueOnce({ ok: true, action: "stash", machine: "m", summary: "x", result: { clean: true, pulled: { changed: true } } });
+		await call("POST", "/repos/r1/checkout/stash", {});
+		expect(await blocked()).toBeNull();
+	});
+
 	it("an unknown action is a 404, and another owner's instance is not reachable", async () => {
 		const { call } = build();
 		expect((await call("POST", "/repos/r1/checkout/wipe", {})).status).toBe(404);
