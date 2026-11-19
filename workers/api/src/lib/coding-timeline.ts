@@ -72,6 +72,12 @@ export async function appendTimeline(
 		// one does not, and the platform does not rely on it.
 		.bind(args.sessionId, args.instanceId, args.userId, args.type, clipMarked(args.type === "terminal" || args.type === "command" ? maskPaneText(args.content) : args.content, 100_000), audioKey) // marked, not silent (#898)
 		.run();
+	// The retention sweep's worklist (#1642): a session that just got a terminal row may be over the cap, so the sweep must visit it. The row is
+	// written first, so a failed mark never loses a snapshot, and it self-heals: the session's next terminal write (the pane is captured every few
+	// seconds) marks it again. INSERT OR IGNORE, so an already-marked session costs one index read and no write.
+	if (args.type === "terminal") {
+		await env.DB.prepare("INSERT OR IGNORE INTO coding_terminal_dirty (session_id, marked_at) VALUES (?1, ?2)").bind(args.sessionId, Date.now()).run().catch(() => undefined);
+	}
 }
 
 /**
@@ -734,38 +740,43 @@ export async function pruneTerminalSnapshots(
 	return res.meta?.changes ?? 0;
 }
 
-/** Over-cap sessions one sweep prunes, worst first — sized for an hour's worth, since the sweep is hourly (#1642). */
+/** Marked sessions one sweep visits, oldest mark first — sized for an hour's worth, since the sweep is hourly (#1642). */
 const TERMINAL_SWEEP_SESSIONS = 100;
 /** Prune batches per session per sweep: 15 x 200 = 3,000 rows, above the 2,400 one session can write in an hour (one per 1.5s poll). */
 const TERMINAL_SWEEP_PASSES = 15;
 
+/** Does the session have more terminal rows than the cap? Reads at most cap + 1 of them, never a full count (#1642). */
+async function terminalOverCap(env: Env, sessionId: string): Promise<boolean> {
+	const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM (SELECT 1 FROM coding_timeline WHERE session_id = ?1 AND type = 'terminal' LIMIT ?2)")
+		.bind(sessionId, TERMINAL_KEEP_PER_SESSION + 1)
+		.first<{ n: number }>();
+	return (row?.n ?? 0) > TERMINAL_KEEP_PER_SESSION;
+}
+
 /**
- * Sweep sessions with more than {@link TERMINAL_KEEP_PER_SESSION} terminal rows, pruning each one
+ * Sweep the sessions that may have more than {@link TERMINAL_KEEP_PER_SESSION} terminal rows, pruning each one
  * back to the cap in bounded batches. Returns total rows deleted. Throws on failure, so the cron
  * records it (#1119) — a failed prune is a capacity nuisance, not data loss.
  *
- * The cron runs it once an HOUR (#1642): finding the over-cap sessions scans every `terminal` entry
- * of `idx_coding_timeline_session_type` whatever the LIMIT (~51K rows read per call in production,
- * 2026-11-12), and nothing prunes on the write path. So a visit drains a session to the cap.
+ * The worklist is `coding_terminal_dirty` (#1642), not a scan: finding over-cap sessions with `GROUP BY session_id HAVING COUNT(*)`
+ * read every `terminal` row (~51K per call in production) whatever the LIMIT, and grew with the table. A terminal write marks its
+ * session; this visits only marked ones, reads at most cap + 1 rows of each through `idx_coding_timeline_session_type`, prunes the
+ * over-cap ones to the cap, and unmarks a session once it is verified at or under the cap. A write that lands between the check and the
+ * unmark leaves a session at most a few rows over, and the session's next terminal write marks it again.
  */
 export async function sweepTerminalSnapshots(env: Env): Promise<number> {
-	const { results } = await env.DB.prepare(
-		`SELECT session_id FROM coding_timeline
-		  WHERE type = 'terminal'
-		  GROUP BY session_id
-		  HAVING COUNT(*) > ?1
-		  ORDER BY COUNT(*) DESC
-		  LIMIT ?2`,
-	)
-		.bind(TERMINAL_KEEP_PER_SESSION, TERMINAL_SWEEP_SESSIONS)
-		.all<{ session_id: string }>();
+	const { results } = await env.DB.prepare("SELECT session_id FROM coding_terminal_dirty ORDER BY marked_at LIMIT ?1").bind(TERMINAL_SWEEP_SESSIONS).all<{ session_id: string }>();
 	let deleted = 0;
 	for (const { session_id: sessionId } of results ?? []) {
-		for (let pass = 0; pass < TERMINAL_SWEEP_PASSES; pass++) {
-			const changes = await pruneTerminalSnapshots(env, sessionId);
-			deleted += changes;
-			if (changes < TERMINAL_PRUNE_BATCH) break;
+		if (await terminalOverCap(env, sessionId)) {
+			for (let pass = 0; pass < TERMINAL_SWEEP_PASSES; pass++) {
+				const changes = await pruneTerminalSnapshots(env, sessionId);
+				deleted += changes;
+				if (changes < TERMINAL_PRUNE_BATCH) break;
+			}
 		}
+		// Unmarked only when verified at or under the cap: a session the passes could not finish stays on the worklist for the next sweep.
+		if (!(await terminalOverCap(env, sessionId))) await env.DB.prepare("DELETE FROM coding_terminal_dirty WHERE session_id = ?1").bind(sessionId).run();
 	}
 	return deleted;
 }

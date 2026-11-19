@@ -1,5 +1,7 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { appendTimeline, appendEngineUsageTimeline, loadTimeline, loadChat, lastTerminal, contextForCopilot, loadRepoTimeline, loadTerminalSnapshots, pruneTerminalSnapshots, sweepTerminalSnapshots, TERMINAL_KEEP_PER_SESSION, loadTimelineFeed } from "./coding-timeline.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
 import type { Env } from "../types.js";
 
@@ -297,72 +299,72 @@ describe("pruneTerminalSnapshots — keep newest N terminal rows, delete older o
 	});
 });
 
-describe("sweepTerminalSnapshots — finds over-cap sessions and prunes each (#466)", () => {
-	/** Mock: .all() returns sessions, .run() records deletes. */
-	function sweepEnv(sessionRows: { session_id: string }[]): { env: Env; dels: string[] } {
+describe("sweepTerminalSnapshots — visits only the marked sessions and prunes the over-cap ones (#466, #1642)", () => {
+	/**
+	 * Mock: `.all()` answers the worklist, `.first()` answers the capped count (`over` says which sessions are over the cap, and a pruned
+	 * session stops being over), `.run()` records DELETEs. The statements are recorded so the SHAPE of what the sweep asks D1 is asserted.
+	 */
+	function sweepEnv(marked: { session_id: string }[], over: string[] = marked.map((m) => m.session_id)): { env: Env; dels: string[]; sqls: string[]; pruned: Set<string> } {
 		const dels: string[] = [];
+		const sqls: string[] = [];
+		const pruned = new Set<string>();
 		const DB = {
 			prepare(sql: string) {
+				sqls.push(sql);
 				return {
-					bind() {
+					bind(...args: unknown[]) {
 						return {
 							async all() {
-								// The GROUP BY / HAVING query — return the mocked session list
-								if (sql.includes("GROUP BY")) return { results: sessionRows };
-								return { results: [] };
+								return { results: sql.includes("coding_terminal_dirty") ? marked : [] };
 							},
 							async run() {
-								// Capture which session_id was passed to each DELETE
 								dels.push(sql);
+								if (sql.includes("DELETE FROM coding_timeline")) pruned.add(String(args[0]));
 								return { meta: { changes: 1 } };
 							},
-							async first() { return null; },
+							async first() {
+								if (!sql.includes("COUNT(*)")) return null;
+								const id = String(args[0]);
+								return { n: over.includes(id) && !pruned.has(id) ? TERMINAL_KEEP_PER_SESSION + 1 : 5 };
+							},
 						};
 					},
 				};
 			},
 		};
-		return { env: { DB } as unknown as Env, dels };
+		return { env: { DB } as unknown as Env, dels, sqls, pruned };
 	}
 
-	it("issues a DELETE for each session returned by the GROUP BY query", async () => {
-		const sessions = [{ session_id: "s1" }, { session_id: "s2" }];
-		const { env, dels } = sweepEnv(sessions);
+	it("prunes each marked session that is over the cap, then takes it off the worklist", async () => {
+		const { env, dels } = sweepEnv([{ session_id: "s1" }, { session_id: "s2" }]);
 		const deleted = await sweepTerminalSnapshots(env);
-		// One DELETE per session
-		expect(dels).toHaveLength(2);
-		// Returns total changes (1 per session from the mock)
-		expect(deleted).toBe(2);
+		expect(dels.filter((d) => d.includes("DELETE FROM coding_timeline"))).toHaveLength(2); // one prune batch per session
+		expect(dels.filter((d) => d.includes("DELETE FROM coding_terminal_dirty"))).toHaveLength(2);
+		expect(deleted).toBe(2); // 1 per session from the mock
 	});
 
-	it("returns 0 and does not throw when no sessions exceed the cap", async () => {
-		const { env } = sweepEnv([]);
+	it("a marked session that is NOT over the cap is left alone and just taken off the worklist", async () => {
+		const { env, dels } = sweepEnv([{ session_id: "calm" }], []);
 		expect(await sweepTerminalSnapshots(env)).toBe(0);
+		expect(dels.filter((d) => d.includes("DELETE FROM coding_timeline"))).toHaveLength(0);
+		expect(dels.filter((d) => d.includes("DELETE FROM coding_terminal_dirty"))).toHaveLength(1);
 	});
 
-	it("GROUP BY query filters by type = 'terminal' and uses HAVING COUNT(*) > cap", async () => {
-		const reads: string[] = [];
-		const DB = {
-			prepare(sql: string) {
-				return {
-					bind() {
-						return {
-							async all() {
-								reads.push(sql);
-								return { results: [] };
-							},
-							async run() { return { meta: { changes: 0 } }; },
-							async first() { return null; },
-						};
-					},
-				};
-			},
-		};
-		await sweepTerminalSnapshots({ DB } as unknown as Env);
-		expect(reads).toHaveLength(1);
-		expect(reads[0]).toContain("type = 'terminal'");
-		expect(reads[0]).toContain("GROUP BY session_id");
-		expect(reads[0]).toContain("HAVING COUNT(*)");
+	it("returns 0 and does not throw when nothing is marked", async () => {
+		const { env, sqls } = sweepEnv([]);
+		expect(await sweepTerminalSnapshots(env)).toBe(0);
+		expect(sqls).toHaveLength(1); // the worklist read, and nothing else
+	});
+
+	it("never scans the terminal rows to find its work: no GROUP BY, no HAVING, no uncapped COUNT over coding_timeline (#1642)", async () => {
+		const { env, sqls } = sweepEnv([{ session_id: "s1" }]);
+		await sweepTerminalSnapshots(env);
+		for (const sql of sqls) {
+			expect(sql).not.toMatch(/GROUP BY|HAVING/i);
+			// Every count is capped: it counts a LIMITed, single-session subselect, never the table.
+			if (/COUNT\(\*\)/.test(sql)) expect(sql).toMatch(/FROM \(SELECT 1 FROM coding_timeline WHERE session_id = \?1 AND type = 'terminal' LIMIT \?2\)/);
+		}
+		expect(sqls[0]).toMatch(/FROM coding_terminal_dirty .*LIMIT/s);
 	});
 
 	// #1119: the sweep used to swallow every error and return 0, so a broken sweep left no record and
@@ -389,39 +391,107 @@ describe("sweepTerminalSnapshots — finds over-cap sessions and prunes each (#4
 		const { env } = sweepEnv([{ session_id: "s1" }, { session_id: "s2" }]);
 		const prepare = env.DB.prepare.bind(env.DB);
 		(env.DB as unknown as { prepare: (sql: string) => unknown }).prepare = (sql: string) => {
-			if (sql.includes("DELETE")) throw new Error("D1_ERROR: database is locked");
+			if (sql.includes("DELETE FROM coding_timeline")) throw new Error("D1_ERROR: database is locked");
 			return prepare(sql);
 		};
 		await expect(sweepTerminalSnapshots(env)).rejects.toThrow("database is locked");
 	});
+});
 
-	// #1642: the sweep is hourly, so one visit has to bring a session all the way back to the cap —
-	// a single 200-row batch per visit could fall behind a session that writes more than that an hour.
-	it("drains an over-cap session to the cap in one sweep, keeping the newest rows and everything that is not a terminal row", async () => {
-		const db = realSchemaD1();
+/**
+ * #1642 on the real schema: the worklist, the capped reads, and the query plans. A production `EXPLAIN QUERY PLAN` is what the issue asks
+ * for; this is the same assertion against the real migrated schema, so a change that brings the table scan back fails here.
+ */
+describe("the terminal worklist on the real schema (#1642)", () => {
+	let db: RealSchemaD1;
+	const insert = () => db.sqlite.prepare("INSERT INTO coding_timeline (session_id, instance_id, user_id, type, content) VALUES (?, 'i1', 'u1', ?, ?)");
+	const marked = () => (db.sqlite.prepare("SELECT session_id FROM coding_terminal_dirty ORDER BY session_id").all() as Array<{ session_id: string }>).map((r) => r.session_id);
+	const terminalRows = (id: string) => (db.sqlite.prepare("SELECT COUNT(*) AS n FROM coding_timeline WHERE session_id = ? AND type = 'terminal'").get(id) as { n: number }).n;
+	const env = () => ({ DB: db.DB }) as unknown as Env;
+	beforeEach(() => {
+		db = realSchemaD1();
 		seedTenant(db, { userId: "u1", instanceIds: ["i1"] });
-		for (const id of ["over", "under"]) {
+		for (const id of ["a", "b", "calm"]) {
 			db.exec(`INSERT INTO coding_repos (id, instance_id, user_id, name) VALUES ('r-${id}', 'i1', 'u1', '${id}')`);
 			db.exec(`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, status, tmux_session) VALUES ('${id}', 'i1', 'r-${id}', 'u1', 'active', 'claude:${id}')`);
 		}
-		const insert = db.sqlite.prepare("INSERT INTO coding_timeline (session_id, instance_id, user_id, type, content) VALUES (?, 'i1', 'u1', ?, ?)");
-		const over = TERMINAL_KEEP_PER_SESSION + 450; // more than two prune batches past the cap
-		insert.run("over", "chat_user", "keep me");
-		for (let i = 0; i < over; i++) insert.run("over", "terminal", `pane ${i}`);
-		for (let i = 0; i < 10; i++) insert.run("under", "terminal", `pane ${i}`);
+	});
 
-		expect(await sweepTerminalSnapshots({ DB: db.DB } as unknown as Env)).toBe(450);
+	it("a terminal write marks its session; a conversation row does not; a repeat is one marker", async () => {
+		const base = { instanceId: "i1", userId: "u1" };
+		await appendTimeline(env(), { ...base, sessionId: "a", type: "chat_user", content: "hello" });
+		expect(marked()).toEqual([]);
+		await appendTimeline(env(), { ...base, sessionId: "a", type: "terminal", content: "pane 1" });
+		await appendTimeline(env(), { ...base, sessionId: "a", type: "terminal", content: "pane 2" });
+		await appendTimeline(env(), { ...base, sessionId: "b", type: "terminal", content: "pane 1" });
+		expect(marked()).toEqual(["a", "b"]);
+		expect(terminalRows("a")).toBe(2); // the snapshot is never lost to the marker
+	});
 
-		const left = db.sqlite.prepare("SELECT content FROM coding_timeline WHERE session_id = 'over' AND type = 'terminal' ORDER BY seq").all() as Array<{ content: string }>;
-		expect(left).toHaveLength(TERMINAL_KEEP_PER_SESSION);
-		expect(left[0].content).toBe("pane 450");
-		expect(left.at(-1)?.content).toBe(`pane ${over - 1}`);
-		const count = (where: string) => (db.sqlite.prepare(`SELECT COUNT(*) AS n FROM coding_timeline WHERE ${where}`).get() as { n: number }).n;
-		expect(count("session_id = 'over' AND type = 'chat_user'")).toBe(1);
-		expect(count("session_id = 'under'")).toBe(10);
-		db.close();
+	it("a marker that cannot be written never loses the snapshot or fails the write", async () => {
+		const real = db.DB;
+		const flaky = { prepare: (sql: string) => (sql.includes("coding_terminal_dirty") ? { bind: () => ({ run: async () => { throw new Error("D1 busy"); } }) } : real.prepare(sql)) };
+		await expect(appendTimeline({ DB: flaky } as unknown as Env, { instanceId: "i1", userId: "u1", sessionId: "a", type: "terminal", content: "pane" })).resolves.toBeUndefined();
+		expect(terminalRows("a")).toBe(1);
+	});
+
+	it("drains only the marked over-cap session, leaves the calm one untouched, and empties the worklist", async () => {
+		const ins = insert();
+		const over = TERMINAL_KEEP_PER_SESSION + 450;
+		for (let i = 0; i < over; i++) ins.run("a", "terminal", `pane ${i}`);
+		for (let i = 0; i < 10; i++) ins.run("calm", "terminal", `pane ${i}`);
+		db.exec("INSERT INTO coding_terminal_dirty (session_id, marked_at) VALUES ('a', 1), ('calm', 2)");
+		expect(await sweepTerminalSnapshots(env())).toBe(450);
+		expect(terminalRows("a")).toBe(TERMINAL_KEEP_PER_SESSION);
+		expect(terminalRows("calm")).toBe(10);
+		expect(marked()).toEqual([]); // both verified at or under the cap
+	});
+
+	it("a session the passes could not finish stays on the worklist for the next sweep", async () => {
+		const ins = insert();
+		for (let i = 0; i < TERMINAL_KEEP_PER_SESSION + 3_500; i++) ins.run("a", "terminal", `pane ${i}`); // more than 15 batches of 200 past the cap
+		db.exec("INSERT INTO coding_terminal_dirty (session_id, marked_at) VALUES ('a', 1)");
+		await sweepTerminalSnapshots(env());
+		expect(terminalRows("a")).toBeGreaterThan(TERMINAL_KEEP_PER_SESSION);
+		expect(marked()).toEqual(["a"]);
+		await sweepTerminalSnapshots(env());
+		expect(terminalRows("a")).toBe(TERMINAL_KEEP_PER_SESSION);
+		expect(marked()).toEqual([]);
+	});
+
+	it("the worklist is read oldest-mark-first and bounded, so a backlog drains over successive sweeps", async () => {
+		for (let i = 0; i < 130; i++) db.exec(`INSERT INTO coding_terminal_dirty (session_id, marked_at) VALUES ('ghost-${String(i).padStart(3, "0")}', ${i})`);
+		await sweepTerminalSnapshots(env()); // ghosts have no rows: each is simply taken off the list
+		expect(marked()).toHaveLength(30); // 100 visited, the 30 newest marks wait for the next sweep
+		expect(marked()[0]).toBe("ghost-100");
+	});
+
+	it("the query plans never scan coding_timeline: the worklist is its own tiny table and the capped count searches one session through the type index", () => {
+		const plan = (sql: string, ...args: Array<string | number>) => (db.sqlite.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...args) as Array<{ detail: string }>).map((r) => r.detail).join(" | ");
+		const discovery = plan("SELECT session_id FROM coding_terminal_dirty ORDER BY marked_at LIMIT ?", 100);
+		expect(discovery).toMatch(/coding_terminal_dirty/);
+		expect(discovery).not.toMatch(/coding_timeline/);
+		const count = plan("SELECT COUNT(*) AS n FROM (SELECT 1 FROM coding_timeline WHERE session_id = ? AND type = 'terminal' LIMIT ?)", "a", TERMINAL_KEEP_PER_SESSION + 1);
+		expect(count).toMatch(/SEARCH .*coding_timeline.* USING (?:COVERING )?INDEX idx_coding_timeline_session_type \(session_id=\? AND type=\?\)/);
+		expect(count).not.toMatch(/SCAN .*coding_timeline/);
+		// …and the query this replaced really was a scan of every terminal row, which is what the plan assertions above guard against.
+		expect(plan("SELECT session_id FROM coding_timeline WHERE type = 'terminal' GROUP BY session_id HAVING COUNT(*) > ?1 LIMIT ?2", 300, 100)).toMatch(/^SCAN coding_timeline USING COVERING INDEX idx_coding_timeline_session_type$/);
+	});
+
+	it("the migration's one-time seed marks every session that already has terminal rows, and only those", () => {
+		const ins = insert();
+		ins.run("a", "terminal", "x");
+		ins.run("a", "terminal", "y");
+		ins.run("b", "chat_user", "no terminal rows");
+		ins.run("calm", "terminal", "z");
+		const sql = readFileSync(fileURLToPath(new URL("../../migrations/0343_coding_terminal_dirty.sql", import.meta.url).href), "utf8");
+		const seed = sql.slice(sql.indexOf("INSERT OR IGNORE INTO coding_terminal_dirty"));
+		db.exec("DELETE FROM coding_terminal_dirty");
+		db.sqlite.exec(seed);
+		expect(marked()).toEqual(["a", "calm"]);
 	});
 });
+
 
 describe("loadTerminalSnapshots — `after` is the cursor that makes a reload a delta (#550)", () => {
 	/** A D1 that answers each terminal query from `rows`, applying the cursor itself, and records the SQL. */
