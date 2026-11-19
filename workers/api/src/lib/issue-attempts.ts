@@ -7,8 +7,11 @@
  * eligible work.
  *
  * ── What counts
- *   · an admission failure that never became a run (the drain's structural refusal of a queued objective);
  *   · a run that ended failed / escalated / out of iterations / no progress / constraint refused / over budget.
+ *   An admission failure (the drain's structural refusal of a queued objective that never became a run) is RECORDED, for the
+ *   audit and for {@link recentAdmissionRefusal}'s cooldown, but is NOT a coding attempt and never counts toward the threshold
+ *   (#1671): nothing was executed, so it says nothing about the issue's implementability, and counting it let a repeated refusal
+ *   quarantine — or, below the threshold, mislabel as "failed runs" — work that had never been tried.
  * What does not: a deferral, a poll, a duplicate receipt, a cancellation, a start-guard refusal (done, closed, duplicate,
  * quarantined), every provider-credit, credential, usage-window or owner-question stop (those have their own holds, #1314),
  * and every `INFRA_STOP_REASONS` stop — an engine crash, a runner that went away, a turn lost to a runner restart, or
@@ -57,6 +60,9 @@ const UNSUCCESSFUL_STOPS = new Set(["failed", "escalated", "max_iterations", "no
 /** Start refusals that are the guard doing its job, never an attempt. */
 const GUARD_REFUSALS = new Set(["duplicate", "issue_closed", "already_done", "quarantined"]);
 
+/** How long a recorded admission refusal keeps the same issue from being queued again (#1671). */
+export const ADMISSION_COOLDOWN_MS = 6 * 60 * 60_000;
+
 export const canonicalRepo = (githubRepo: string): string => githubRepo.trim().toLowerCase();
 
 export interface Quarantine {
@@ -87,7 +93,7 @@ interface QRow {
 }
 
 const SELECT_Q = `SELECT q.github_repo, q.issue_number, q.state, q.threshold, q.incident_id, q.opened_at, q.floor_attempt_id, q.released_at, q.released_by, q.release_reason,
-	 (SELECT COUNT(*) FROM issue_attempts a WHERE a.user_id = q.user_id AND a.github_repo = q.github_repo AND a.issue_number = q.issue_number AND a.id > q.floor_attempt_id) AS n
+	 (SELECT COUNT(*) FROM issue_attempts a WHERE a.user_id = q.user_id AND a.github_repo = q.github_repo AND a.issue_number = q.issue_number AND a.kind = 'run_unsuccessful' AND a.id > q.floor_attempt_id) AS n
 	 FROM issue_quarantine q`;
 
 const view = (r: QRow): Quarantine => ({ githubRepo: r.github_repo, issue: r.issue_number, state: r.state, threshold: r.threshold, attemptCount: r.n, incidentId: r.incident_id, openedAt: r.opened_at, releasedAt: r.released_at, releasedBy: r.released_by, releaseReason: r.release_reason });
@@ -170,7 +176,7 @@ export async function recordIssueAttempt(env: Env, a: AttemptInput): Promise<Att
 		const opened = await env.DB.prepare(
 			`INSERT INTO issue_quarantine (user_id, github_repo, issue_number, state, threshold, attempt_count, incident_id, opened_at, floor_attempt_id)
 			 SELECT ?1, ?2, ?3, 'quarantined', ?4, c, ?5, ?6, COALESCE((SELECT floor_attempt_id FROM issue_quarantine WHERE user_id = ?1 AND github_repo = ?2 AND issue_number = ?3), 0)
-			   FROM (SELECT COUNT(*) AS c FROM issue_attempts WHERE user_id = ?1 AND github_repo = ?2 AND issue_number = ?3
+			   FROM (SELECT COUNT(*) AS c FROM issue_attempts WHERE user_id = ?1 AND github_repo = ?2 AND issue_number = ?3 AND kind = 'run_unsuccessful'
 			           AND id > COALESCE((SELECT floor_attempt_id FROM issue_quarantine WHERE user_id = ?1 AND github_repo = ?2 AND issue_number = ?3), 0))
 			  WHERE c >= ?4
 			 ON CONFLICT (user_id, github_repo, issue_number) DO UPDATE SET state = 'quarantined', threshold = excluded.threshold, attempt_count = excluded.attempt_count,
@@ -179,7 +185,7 @@ export async function recordIssueAttempt(env: Env, a: AttemptInput): Promise<Att
 		)
 			.bind(a.userId, repo, a.issue, threshold, incidentId, now)
 			.run();
-		const count = (await env.DB.prepare("SELECT COUNT(*) AS n FROM issue_attempts WHERE user_id = ?1 AND github_repo = ?2 AND issue_number = ?3 AND id > COALESCE((SELECT floor_attempt_id FROM issue_quarantine WHERE user_id = ?1 AND github_repo = ?2 AND issue_number = ?3), 0)").bind(a.userId, repo, a.issue).first<{ n: number }>())?.n ?? 0;
+		const count = (await env.DB.prepare("SELECT COUNT(*) AS n FROM issue_attempts WHERE user_id = ?1 AND github_repo = ?2 AND issue_number = ?3 AND kind = 'run_unsuccessful' AND id > COALESCE((SELECT floor_attempt_id FROM issue_quarantine WHERE user_id = ?1 AND github_repo = ?2 AND issue_number = ?3), 0)").bind(a.userId, repo, a.issue).first<{ n: number }>())?.n ?? 0;
 		if ((opened.meta?.changes ?? 0) > 0) {
 			await logEvent(env, {
 				source: "issue-attempts", event: "issue_quarantine.opened", level: "warn", userId: a.userId, instanceId: a.instanceId,
@@ -239,3 +245,21 @@ export const isGuardRefusal = (reason: string | undefined): boolean => reason !=
 
 /** Does a run's stop reason make it an unsuccessful attempt? */
 export const isUnsuccessfulStop = (stopReason: string): boolean => UNSUCCESSFUL_STOPS.has(stopReason);
+
+/**
+ * The newest admission refusal (a queued objective the drain refused before any run existed) on this issue within
+ * {@link ADMISSION_COOLDOWN_MS}, or null (#1671). Pickers consult it so the same refusal is not queued again every wake: it is
+ * a cooldown, not a failure count — it never quarantines, and it lapses by itself.
+ */
+export async function recentAdmissionRefusal(env: Env, userId: string, githubRepo: string, issue: number, now = Date.now()): Promise<{ reason: string; at: number; queueEntryId: string | null } | null> {
+	try {
+		const row = await env.DB.prepare(
+			"SELECT reason, created_at, queue_entry_id FROM issue_attempts WHERE user_id = ?1 AND github_repo = ?2 AND issue_number = ?3 AND kind = 'admission_failed' AND created_at > ?4 ORDER BY id DESC LIMIT 1",
+		)
+			.bind(userId, canonicalRepo(githubRepo), issue, now - ADMISSION_COOLDOWN_MS)
+			.first<{ reason: string | null; created_at: number; queue_entry_id: string | null }>();
+		return row ? { reason: row.reason ?? "admission refused", at: row.created_at, queueEntryId: row.queue_entry_id } : null;
+	} catch {
+		return null; // unreadable is not a cooldown: the drain's own admission still decides
+	}
+}

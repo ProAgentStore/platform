@@ -40,10 +40,17 @@ const EPIC_RE = /\b(?:part\s+of|child\s+of|parent:?|epic:?)\s+#(\d+)/i;
 const BUG_LABEL_RE = /^(?:bug|incident|regression|outage|hotfix|p0|sev[- ]?[01])\b/i;
 const BUG_TITLE_RE = /^\s*(?:\[?(?:bug|incident|regression)\]?\b|fix\b)/i;
 
+/**
+ * An acceptance statement, by what it IS rather than one exact phrase (#1671): a heading or a leading label that names it
+ * ("## Acceptance", "**Acceptance:**", "Acceptance criteria", "Definition of done", "Done when", "Expected behavior"), or a task-list checkbox.
+ * A passing mention in the middle of a sentence is not one.
+ */
+const ACCEPTANCE_RE = /^\s*(?:#{1,6}\s*|[-*]\s+|\*{1,2}|_{1,2})?(?:acceptance(?:\s+(?:criteria|tests?))?|definition\s+of\s+done|done\s+when|expected(?:\s+behaviou?r)?)\b|\bdone when\b|^\s*[-*]\s+\[[ xX]\]/im;
+
 /** What a ready issue must state. Labels are what the "needs detail" comment says is missing. */
 export const DETAIL_CHECKS: ReadonlyArray<{ id: string; label: string; present: (body: string) => boolean }> = [
 	{ id: "problem", label: "a clear problem statement (what is wrong or needed, and why)", present: (b) => b.replace(/^#+.*$/gm, "").replace(/\s+/g, " ").trim().length >= 60 },
-	{ id: "acceptance", label: "acceptance criteria (how we know it is done)", present: (b) => /acceptance criteria|definition of done|\bdone when\b|^\s*[-*]\s+\[[ xX]\]/im.test(b) },
+	{ id: "acceptance", label: "acceptance criteria (how we know it is done)", present: (b) => ACCEPTANCE_RE.test(b) },
 	{ id: "scope", label: "the scope (what is in, and what is out)", present: (b) => /\bscope\b|\bnon-goals?\b|\bthis issue only\b/i.test(b) },
 	{
 		id: "area",
@@ -51,6 +58,14 @@ export const DETAIL_CHECKS: ReadonlyArray<{ id: string; label: string; present: 
 		present: (b) => /`[^`\n]+`|\b[\w.-]+\/[\w./-]+|\b[\w-]+\.(?:ts|tsx|js|mjs|cjs|py|go|rs|rb|java|kt|swift|md|sql|json|ya?ml|toml|css|html)\b/i.test(b),
 	},
 ];
+
+/**
+ * The comments that can supply detail: everything except this triage's own "needs detail" comments, which list the very items
+ * they say are missing and would otherwise satisfy their own check (#1671).
+ */
+export function clarifyingCommentsText(comments: readonly { body: string }[]): string {
+	return comments.filter((c) => !c.body.includes(DETAIL_MARKER)).map((c) => c.body).join("\n\n");
+}
 
 /** Issue numbers this text says it waits on. */
 export function dependenciesOf(body: string): number[] {
@@ -61,13 +76,15 @@ export function dependenciesOf(body: string): number[] {
  * Classify one issue. `openIssues` is the repo's open set as read; when that read was incomplete
  * (`openListComplete: false`) a dependency not in it is treated as open — unknown is not "landed".
  */
-export function classifyPoIssue(issue: PoIssue, ctx: { openIssues: ReadonlySet<number>; openListComplete: boolean; openQuestions?: ReadonlySet<number> }): PoClassification {
+export function classifyPoIssue(issue: PoIssue, ctx: { openIssues: ReadonlySet<number>; openListComplete: boolean; openQuestions?: ReadonlySet<number>; commentsText?: string }): PoClassification {
 	const human = issue.labels.find(isNeedsHumanLabel);
 	if (human) return { category: "waiting_on_human", reason: `Labelled "${human}" — waiting on a person.` };
 	if (ctx.openQuestions?.has(issue.number)) return { category: "waiting_on_human", reason: "The coder asked you a question on this issue that is still open (#1025)." };
 	const waitsOn = dependenciesOf(issue.body).filter((n) => n !== issue.number && (ctx.openIssues.has(n) || !ctx.openListComplete));
 	if (waitsOn.length) return { category: "blocked", reason: `Waits on ${waitsOn.map((n) => `#${n}`).join(", ")}, still open.`, blockedBy: waitsOn };
-	const missing = DETAIL_CHECKS.filter((c) => !c.present(issue.body ?? "")).map((c) => c.label);
+	// The issue's CURRENT context (#1671): its body plus the comments that clarify it, so criteria added in a comment count.
+	const context = ctx.commentsText ? `${issue.body ?? ""}\n\n${ctx.commentsText}` : (issue.body ?? "");
+	const missing = DETAIL_CHECKS.filter((c) => !c.present(context)).map((c) => c.label);
 	if (missing.length) return { category: "needs_detail", reason: `Missing ${missing.length} of ${DETAIL_CHECKS.length}: ${missing.join("; ")}.`, missing };
 	return { category: "ready", reason: "States the problem, acceptance criteria, scope and area." };
 }
@@ -134,6 +151,8 @@ export interface PoCounts {
 	blocked: number;
 	needsDetail: number;
 	commented: number;
+	/** Ready issues the start guard kept out of the queue (#1671): finished, closed, quarantined or just refused. */
+	excluded: number;
 }
 
 /** "Tennis Clubs: queued 2, 1 waiting on you, 1 needs detail". */

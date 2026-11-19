@@ -7,7 +7,7 @@ import { type AutoPickupDeps, autoPickupPatchProblem, runAutoPickup, setAutoPick
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
 import type { IssueSummary } from "./github-issues.js";
 import { recordDrainRefusal, recordRunForIssue } from "./issue-attempt-hooks.js";
-import { isGuardRefusal, issueQuarantine, listIssueQuarantines, recordIssueAttempt, recordIssueSuccess, releaseIssueQuarantine } from "./issue-attempts.js";
+import { ADMISSION_COOLDOWN_MS, isGuardRefusal, issueQuarantine, listIssueQuarantines, recordIssueAttempt, recordIssueSuccess, recentAdmissionRefusal, releaseIssueQuarantine } from "./issue-attempts.js";
 import { checkStartIdempotency, quarantineRefusal } from "./start-idempotency.js";
 import type { Env } from "../types.js";
 
@@ -110,9 +110,29 @@ describe("admission failures with no run (#1336)", () => {
 		expect(count()).toBe(1);
 	});
 
-	it("five of them stop the issue: the loop that burned 98 entries ends at 5", async () => {
+	it("admission refusals are recorded for the audit but are NOT coding attempts: five of them never quarantine the issue (#1671)", async () => {
 		for (let n = 1; n <= 5; n++) await recordDrainRefusal(env, entry(`q${n}`), null, undefined, "no coding CLI");
-		expect(await issueQuarantine(env, "u1", "acme/app", 7)).toMatchObject({ attemptCount: 5 });
+		expect(count()).toBe(5); // every refusal is still on the record — nothing is erased
+		expect(await issueQuarantine(env, "u1", "acme/app", 7)).toBeNull();
+		// ...and five REAL unsuccessful runs still do, whatever admission refusals sit beside them.
+		for (let n = 1; n <= 4; n++) await attempt(n);
+		expect(await issueQuarantine(env, "u1", "acme/app", 7)).toBeNull();
+		await attempt(5);
+		expect(await issueQuarantine(env, "u1", "acme/app", 7)).toMatchObject({ attemptCount: 5 }); // the five RUNS, not ten rows
+	});
+
+	it("a repeated refusal is held off by a cooldown instead of a failure count, and the cooldown lapses by itself (#1671)", async () => {
+		const now = Date.now();
+		expect(await recentAdmissionRefusal(env, "u1", "acme/app", 7, now)).toBeNull();
+		await recordDrainRefusal(env, entry("q1"), null, undefined, "no coding CLI", now);
+		const hold = await recentAdmissionRefusal(env, "u1", "ACME/app", 7, now + 60_000);
+		expect(hold).toMatchObject({ reason: "no coding CLI", queueEntryId: "q1" });
+		expect(await recentAdmissionRefusal(env, "u1", "acme/app", 8, now)).toBeNull(); // another issue is untouched
+		expect(await recentAdmissionRefusal(env, "u2", "acme/app", 7, now)).toBeNull(); // another owner's is separate
+		expect(await recentAdmissionRefusal(env, "u1", "acme/app", 7, now + ADMISSION_COOLDOWN_MS + 1)).toBeNull(); // lapses
+		// A start-guard refusal (already done) is not an admission failure at all, so it never starts a cooldown.
+		await recordDrainRefusal(env, entry("q9", "Implement GitHub issue #8 in acme/app: t"), null, "already_done", "finished recently", now);
+		expect(await recentAdmissionRefusal(env, "u1", "acme/app", 8, now)).toBeNull();
 	});
 });
 

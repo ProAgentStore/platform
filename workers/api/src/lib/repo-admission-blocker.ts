@@ -90,3 +90,15 @@ export async function listRepoBlockers(env: Env, instanceId: string, userId: str
 export function describeRepoBlocker(b: RepoBlocker): string {
 	return `repo_blocked: ${b.message} The queue is holding its entries, in order, until the checkout is put right — start a repair run (coding_loop_start with repair_checkout: true), or use stash_checkout / discard_checkout on that repo. Nothing queued behind it was started or failed.`;
 }
+
+/**
+ * Mark a run as stopped at the pre-flight (#1671): the run row and its history stay exactly as they were, but the per-issue failure
+ * tallies skip it, because the objective was never executed. Never throws.
+ */
+export async function markRunPreflightBlocked(env: Env, runId: string): Promise<void> {
+	try {
+		await env.DB.prepare("UPDATE agent_loop_runs SET preflight_blocked = 1 WHERE run_id = ?1").bind(runId).run();
+	} catch {
+		/* best effort: an unmarked run is counted as before, never lost */
+	}
+}

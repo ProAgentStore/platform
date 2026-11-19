@@ -32,10 +32,12 @@ import { deepLinkFor } from "./console-links.js";
 import { DAILY_CEILING_MICROS, DAILY_TOKEN_CEILING, isBudgetEnforced, resolveAccountCeilings } from "./delegation-budget-store.js";
 import { listIssueComments, listIssuesPage, postIssueComment, readIssue } from "./github-issues.js";
 import { loopDriverFor } from "./loop-drivers.js";
+import { ADMISSION_COOLDOWN_MS, recentAdmissionRefusal } from "./issue-attempts.js";
+import { checkStartIdempotency } from "./start-idempotency.js";
 import { findDuplicateObjective } from "./objective-dedupe.js";
 import { enqueueObjective } from "./objective-queue.js";
 import { tryDequeueAndStart } from "./objective-queue-start.js";
-import { type PoClassification, type PoCounts, type PoIssue, classifyPoIssue, detailComment, digestLine, digestWorthSending, hasDetailComment, issueVersion, orderReady, poObjective } from "./po-triage.js";
+import { type PoClassification, type PoCounts, type PoIssue, clarifyingCommentsText, classifyPoIssue, detailComment, digestLine, digestWorthSending, hasDetailComment, issueVersion, orderReady, poObjective } from "./po-triage.js";
 import { accountUsageSince, paidTokensSince } from "./usage.js";
 import { notifyUser } from "../routes/push.js";
 
@@ -43,7 +45,7 @@ export const MAX_QUEUE_PER_WAKE = 3;
 /** Issues read per repo per wake: a bound on GitHub reads, stated in the report when hit. */
 export const MAX_ISSUES_PER_REPO = 40;
 
-export type PoAction = "none" | "queued" | "would_queue" | "already_queued" | "already_running" | "held" | "deferred" | "commented" | "would_comment" | "already_commented" | "comment_failed";
+export type PoAction = "none" | "queued" | "would_queue" | "already_queued" | "already_running" | "held" | "excluded" | "deferred" | "commented" | "would_comment" | "already_commented" | "comment_failed";
 
 export interface PoReportItem {
 	repo: string;
@@ -71,6 +73,11 @@ export interface PoTriageDeps {
 	notify?: (title: string, body: string) => Promise<void>;
 	/** Kick a repo's queue (default `tryDequeueAndStart`). */
 	startQueued?: (repoId: string) => Promise<unknown>;
+	/**
+	 * Why this issue must NOT be queued, or null (#1671). Default: the start guard every start path passes (recently finished, closed,
+	 * already running, quarantined) plus a recent admission refusal. Consulted BEFORE enqueueing, so a refusal is never discovered at drain time.
+	 */
+	startGuard?: (repo: { id: string; githubRepo: string }, issue: PoIssue, objective: string) => Promise<string | null>;
 }
 
 export type PoTriageResult = { skipped: true; reason: string; slot: string } | { skipped: false; reportId: string; dryRun: boolean; counts: PoCounts; digest: string | null; gate: string | null };
@@ -140,12 +147,13 @@ async function openQuestionIssues(env: Env, iid: string, uid: string, repo: stri
 }
 
 async function triage(env: Env, iid: string, uid: string, dryRun: boolean, slot: string, deps: PoTriageDeps): Promise<PoReport> {
-	const counts: PoCounts = { queued: 0, wouldQueue: 0, alreadyQueued: 0, ready: 0, waiting: 0, blocked: 0, needsDetail: 0, commented: 0 };
+	const counts: PoCounts = { queued: 0, wouldQueue: 0, alreadyQueued: 0, ready: 0, waiting: 0, blocked: 0, needsDetail: 0, commented: 0, excluded: 0 };
 	const report: PoReport = { dryRun, slot, gate: await queueGate(env, iid, uid), repos: [], items: [], counts };
 	const listOpen = deps.listOpenIssues ?? ((repo) => defaultListOpenIssues(env, uid, repo));
 	const listComments = deps.listComments ?? ((repo, n) => listIssueComments(env, uid, repo, n));
 	const postComment = deps.postComment ?? ((repo, n, body) => postIssueComment(env, uid, repo, n, body));
 	const repos = (await listRepos(env, iid, uid)).filter((r) => r.githubRepo);
+	const startGuard = deps.startGuard ?? ((repo: { id: string; githubRepo: string }, issue: PoIssue, objective: string) => defaultStartGuard(env, uid, iid, repo, issue, objective, Date.parse(slot) || Date.now()));
 
 	for (const repo of repos) {
 		const name = repo.githubRepo as string;
@@ -156,7 +164,15 @@ async function triage(env: Env, iid: string, uid: string, dryRun: boolean, slot:
 		const openQuestions = await openQuestionIssues(env, iid, uid, name);
 		const ready: Array<{ issue: PoIssue }> = [];
 		for (const issue of issues) {
-			const c = classifyPoIssue(issue, { openIssues: open, openListComplete: page.complete, openQuestions });
+			const ctx = { openIssues: open, openListComplete: page.complete, openQuestions };
+			let c = classifyPoIssue(issue, ctx);
+			// Judge missing detail against the issue's CURRENT context (#1671): criteria stated in a comment, or under a differently-worded
+			// heading, count. Read only when the body alone looks short, so a complete issue costs no extra read.
+			let comments: { body: string }[] | null = null;
+			if (c.category === "needs_detail") {
+				comments = await listComments(name, issue.number).catch(() => []);
+				c = classifyPoIssue(issue, { ...ctx, commentsText: clarifyingCommentsText(comments) });
+			}
 			const item: PoReportItem = { repo: name, number: issue.number, title: clipMarked(issue.title, 200, { within: true }), category: c.category, reason: c.reason, action: "none" };
 			if (c.category === "waiting_on_human") counts.waiting++;
 			else if (c.category === "blocked") counts.blocked++;
@@ -164,7 +180,7 @@ async function triage(env: Env, iid: string, uid: string, dryRun: boolean, slot:
 				counts.needsDetail++;
 				const version = issueVersion(issue);
 				if (dryRun) item.action = "would_comment";
-				else if (hasDetailComment(await listComments(name, issue.number), version)) item.action = "already_commented";
+				else if (hasDetailComment(comments ?? (await listComments(name, issue.number)), version)) item.action = "already_commented";
 				else if (await postComment(name, issue.number, detailComment(c.missing ?? [], version))) {
 					item.action = "commented";
 					counts.commented++;
@@ -182,9 +198,16 @@ async function triage(env: Env, iid: string, uid: string, dryRun: boolean, slot:
 			const item = report.items.find((i) => i.repo === name && i.number === issue.number) as PoReportItem;
 			const objective = poObjective(name, issue);
 			const dup = await findDuplicateObjective(env, { userId: uid, instanceId: iid, repoId: repo.id, objective });
+			// The start guard BEFORE anything is queued (#1671): finished work awaiting acceptance, closed or quarantined issues, and an issue
+			// the drain just refused are not queued again only to be refused again. Nothing is forced, deleted or labelled.
+			const excluded = dup ? null : await startGuard({ id: repo.id, githubRepo: name }, issue, objective);
 			if (dup) {
 				item.action = dup.kind === "queued" ? "already_queued" : "already_running";
 				counts.alreadyQueued++;
+			} else if (excluded) {
+				item.action = "excluded";
+				item.reason = clipMarked(`${item.reason} Not queued: ${excluded}`, 400, { within: true });
+				counts.excluded++;
 			} else if (report.gate) item.action = "held";
 			else if (busy) {
 				item.action = "held";
@@ -206,6 +229,18 @@ async function triage(env: Env, iid: string, uid: string, dryRun: boolean, slot:
 		if (queuedHere) await (deps.startQueued ?? ((repoId) => tryDequeueAndStart(env, iid, repoId, uid)))(repo.id);
 	}
 	return report;
+}
+
+/**
+ * The start guard the wake consults before queueing (#1671): `checkStartIdempotency` is the one guard every start path passes (a run
+ * that finished the issue within the window, a closed issue, one already running, a quarantine), and a recent admission refusal holds the
+ * same issue off for a cooldown instead of counting as a failed run. Returns the sentence for the report, or null.
+ */
+async function defaultStartGuard(env: Env, uid: string, iid: string, repo: { id: string; githubRepo: string }, issue: PoIssue, objective: string, now: number): Promise<string | null> {
+	const refusal = await checkStartIdempotency(env, { userId: uid, instanceId: iid, repo, objective, issue: issue.number, now }).catch(() => null);
+	if (refusal) return `${refusal.reason.replace(/_/g, " ")} — ${refusal.error.replace(/ Pass force: true with force_reason to start it anyway\.$/, "")}`;
+	const cooled = await recentAdmissionRefusal(env, uid, repo.githubRepo, issue.number, now);
+	return cooled ? `the queue refused it before any run started (${cooled.reason}); it is not retried for ${ADMISSION_COOLDOWN_MS / 3_600_000} hours` : null;
 }
 
 /** A coder run in progress on this repo (or on an unbound session of this instance). */

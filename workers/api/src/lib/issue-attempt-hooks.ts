@@ -15,6 +15,7 @@ interface RunFacts {
 	ticket_issue: number | null;
 	github_repo: string | null;
 	queue_entry_id: string | null;
+	preflight_blocked: number | null;
 }
 
 /** A run settled: a verified success restarts the count; an unsuccessful end is one more attempt. */
@@ -23,7 +24,7 @@ export async function recordRunForIssue(env: Env, runId: string, stopReason: str
 		const countable = isUnsuccessfulStop(stopReason);
 		if (stopReason !== "done" && !countable) return;
 		const run = await env.DB.prepare(
-			`SELECT r.user_id, r.instance_id, r.objective, t.issue_number AS ticket_issue, cr.github_repo, r.queue_entry_id
+			`SELECT r.user_id, r.instance_id, r.objective, t.issue_number AS ticket_issue, cr.github_repo, r.queue_entry_id, r.preflight_blocked
 			   FROM agent_loop_runs r
 			   LEFT JOIN tickets t ON t.id = r.ticket_id
 			   LEFT JOIN coding_sessions s ON s.id = r.session_id
@@ -31,6 +32,8 @@ export async function recordRunForIssue(env: Env, runId: string, stopReason: str
 			  WHERE r.run_id = ?1`,
 		).bind(runId).first<RunFacts>();
 		if (!run?.github_repo) return;
+		// A run stopped at the pre-flight never executed its objective (#1671): an admission outcome, not a failed attempt.
+		if (stopReason !== "done" && run.preflight_blocked) return;
 		const { startIssueFor } = await import("./start-idempotency.js");
 		const issue = run.ticket_issue ?? startIssueFor({ objective: run.objective, githubRepo: run.github_repo });
 		if (issue == null) return;

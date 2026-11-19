@@ -35,7 +35,7 @@ import { BUILTIN_EXCLUDE_LABELS, DEFAULT_PRIORITY_LABELS, HIGH_SIGNAL_TYPE_LABEL
 import { handleAlreadyDoneOpenIssue } from "./auto-pickup-already-done.js";
 import { referencedIssue } from "./objective-dedupe.js";
 import { checkStartIdempotency } from "./start-idempotency.js";
-import { ISSUE_ATTEMPT_THRESHOLD_DEFAULT, ISSUE_ATTEMPT_THRESHOLD_MAX, ISSUE_ATTEMPT_THRESHOLD_MIN, sanitizeAttemptThreshold } from "./issue-attempts.js";
+import { ISSUE_ATTEMPT_THRESHOLD_DEFAULT, ISSUE_ATTEMPT_THRESHOLD_MAX, ISSUE_ATTEMPT_THRESHOLD_MIN, recentAdmissionRefusal, sanitizeAttemptThreshold } from "./issue-attempts.js";
 import { AUTO_PICKUP_ATTEMPT_FACTOR, admitAutoPickup, autoPickupAdmissionCursor, NOT_REJECTED_BEFORE_RUN, pendingAutoPickupAdmission } from "./auto-pickup-admission.js";
 
 export { AUTO_PICKUP_ATTEMPT_FACTOR, NOT_REJECTED_BEFORE_RUN };
@@ -326,6 +326,7 @@ async function failuresByIssue(env: Env, iid: string, repo: string, uid: string,
 	const { results } = await env.DB.prepare(
 		`SELECT json_extract(q.metadata, '$.autoPickup.issue') AS issue, COUNT(*) AS n FROM agent_loop_runs r JOIN instance_objective_queue q ON q.id = r.queue_entry_id
 		  WHERE q.instance_id = ?1 AND r.instance_id = ?1 AND json_extract(q.metadata, '$.autoPickup.repo') = ?2 AND r.status IN ('failed', 'needs_human')
+		    AND COALESCE(r.preflight_blocked, 0) = 0
 		    AND COALESCE(r.finished_at, ?4) > ?5
 		    AND COALESCE(r.stop_reason, '') NOT IN (${stopReasonsSql([...PROVIDER_ACCOUNT_STOP_REASONS, ...INFRA_STOP_REASONS])})
 		    AND r.run_id NOT IN (
@@ -438,6 +439,13 @@ export async function runAutoPickup(env: Env, iid: string, uid: string, deps: Au
 		for (const c of rankEligible(candidates, settings)) {
 			const refusal = await checkStartIdempotency(env, { userId: uid, instanceId: iid, repo: { id: c.repoId, githubRepo: c.repo }, objective: autoPickupObjective(c.repo, c.issue), issue: c.issue.number, now });
 			if (!refusal) {
+				// A queue refusal this issue just had (#1671) is an admission outcome, held off by a cooldown — not retried every sweep.
+				const cooled = await recentAdmissionRefusal(env, uid, c.repo, c.issue.number, now);
+				if (cooled) {
+					passedOver.push(`#${c.issue.number} (admission_cooldown)`);
+					await logPassedOver(env, iid, uid, c.repo, c.issue.number, `admission_cooldown: ${cooled.reason}`, now);
+					continue;
+				}
 				chosen = c;
 				break;
 			}
