@@ -108,7 +108,7 @@ const FACTS: Record<string, { submits: boolean; method: string; name: string }> 
 	e8: { submits: true, method: "post", name: "Submit application" },
 };
 
-function harness(o: { url?: string; onPause?: (p: LocalApplyPause) => "resumed" | "stopped"; afterClick?: string; loginAfterClick?: boolean } = {}) {
+function harness(o: { url?: string; onPause?: (p: LocalApplyPause) => "resumed" | "stopped"; afterClick?: string; loginAfterClick?: boolean; signedIn?: boolean } = {}) {
 	const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
 	const history = [o.url ?? JOB];
 	const tools: BrowserTools = {
@@ -117,7 +117,7 @@ function harness(o: { url?: string; onPause?: (p: LocalApplyPause) => "resumed" 
 			if (name === "browser_evaluate") {
 				if (typeof args.target === "string") return { content: [{ text: `### Result\n${JSON.stringify({ tag: "button", type: "", ...FACTS[args.target] })}` }] };
 				const url = history[history.length - 1];
-				return { content: [{ text: `### Result\n${JSON.stringify({ url, title: "Job", login: !!o.loginAfterClick && url !== history[0] })}` }] };
+				return { content: [{ text: `### Result\n${JSON.stringify({ url, title: "Job", login: !!o.loginAfterClick && url !== history[0], signedIn: !!o.signedIn })}` }] };
 			}
 			calls.push({ name, args });
 			if (name === "browser_click" && o.afterClick) history.push(o.afterClick);
@@ -166,6 +166,15 @@ describe("the session gate before a one-click press (#1094)", () => {
 		expect(res.isError).toBe(true);
 		expect(h.bridge.blocked?.reason).toBe("login_required");
 		expect(h.events).toContainEqual(expect.objectContaining({ type: "policy.decision", detail: expect.objectContaining({ class: "session", decision: "paused", reason: "session_never_signed_in", site: "seek.com" }) }));
+	});
+
+	it("an empty ledger but a page showing a live session (sign-out control, no wall): records seek.com and presses without pausing (#1623)", async () => {
+		const h = harness({ signedIn: true });
+		await h.press();
+		expect(h.pauses).toHaveLength(0);
+		expect(h.pressed()).toBe(1);
+		expect(h.events).toContainEqual(expect.objectContaining({ detail: expect.objectContaining({ class: "session", decision: "recorded", site: "seek.com" }) }));
+		expect((await ledger().check(JOB)).state).toBe("ok");
 	});
 
 	it("the owner signs in once during the pause; the run continues unpressed, and the NEXT run presses without asking", async () => {

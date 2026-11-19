@@ -187,6 +187,7 @@ export const INSPECT_PAGE = `() => {
 		captcha: has('iframe[src*="recaptcha"], .g-recaptcha, iframe[src*="hcaptcha.com"], .h-captcha, iframe[src*="challenges.cloudflare.com"], .cf-turnstile, iframe[src*="arkoselabs"], .geetest_holder')
 			|| /confirm (that )?you('?re| are) not a robot|i'?m not a robot|verify (that )?you('?re| are) (a )?human/.test(text),
 		login: (${SIGN_IN_PAGE_PROBE_FN})(),
+		signedIn: [...document.querySelectorAll('a, button, [role="menuitem"], [role="button"]')].some(n => /^(sign|log) ?out$/i.test((n.getAttribute?.('aria-label') || n.textContent || '').trim())),
 		duplicate: /you('ve| have) already applied|already applied (for|to) this|application (already exists|has already been (submitted|received))|duplicate application/.test(text),
 		antiBot: /unusual traffic|access (is )?denied|request (has been )?blocked|bot detected|checking (if the site connection is secure|your browser)/.test(text),
 		confirmed: new RegExp(CONFIRMATION_TEXT_SOURCE).test(text),
@@ -201,6 +202,8 @@ interface PageState {
 	title: string;
 	captcha: boolean;
 	login: boolean;
+	/** A sign-out control is on the page: the browser already holds a session for this site (#1623). */
+	signedIn: boolean;
 	duplicate: boolean;
 	antiBot: boolean;
 	confirmed: boolean;
@@ -386,7 +389,7 @@ export class ApplyBridge {
 		const unavailable = v.unavailable === "expired" || v.unavailable === "unavailable" ? v.unavailable : null;
 		// A sign-in page by its ADDRESS too (#1100): SEEK's `login.seek.com/login` has no password field, so an
 		// "Apply" that bounced there ran on to `awaiting_review` with nothing filled. Same rule as the submit path.
-		return { credentialWall: !!v.login, url: v.url, title: String(v.title ?? ""), captcha: !!v.captcha, login: looksLikeSignIn(v.url, !!v.login), duplicate: !!v.duplicate, antiBot: !!v.antiBot, confirmed: !!v.confirmed, unavailable };
+		return { credentialWall: !!v.login, url: v.url, title: String(v.title ?? ""), captcha: !!v.captcha, login: looksLikeSignIn(v.url, !!v.login), signedIn: !!v.signedIn, duplicate: !!v.duplicate, antiBot: !!v.antiBot, confirmed: !!v.confirmed, unavailable };
 	}
 
 	private blockerOf(s: PageState): LocalApplyPauseReason | null {
@@ -1075,7 +1078,7 @@ export class ApplyBridge {
 		}
 		const domain = hostOf(before.url) ?? "";
 		if (!this.host.isAllowed(domain)) return this.refuse("browser_click", "submit", `${domain} is not one of this application's sites; nothing was submitted.`, domain);
-		const gate = await this.sessionGate(before.url, domain);
+		const gate = await this.sessionGate(before.url, domain, before.signedIn);
 		if (gate) return gate;
 		// Stop can arrive while the fresh page / session checks above are awaiting the browser.
 		if (this.host.isStopped?.()) return this.refuse("browser_click", "submit", "The application was stopped; nothing was submitted.");
@@ -1139,12 +1142,18 @@ export class ApplyBridge {
 	 * signs in ONCE in this same browser (the existing handoff) — and nothing has been pressed, so
 	 * there is no submit to be uncertain about. Returns null when the press may go ahead.
 	 */
-	private async sessionGate(url: string, domain: string): Promise<ToolResult | null> {
+	private async sessionGate(url: string, domain: string, pageSignedIn = false): Promise<ToolResult | null> {
 		const ledger = this.host.sessions;
 		if (!ledger) return null;
 		const check = await ledger.check(url).catch(() => null);
 		if (!check || check.state === "ok") return null;
 		const site = check.site;
+		// #1623: the ledger only lacks an entry, but the page itself shows a live session (a sign-out control and no
+		// sign-in blocker, checked by the caller). Record it and press; a wrong record bounces and learnSignInWall corrects it.
+		if (check.reason === "never_signed_in" && pageSignedIn) {
+			await this.recordSignIn(site);
+			return null;
+		}
 		this.host.emit({ type: "policy.decision", domain, detail: { tool: "browser_click", class: "session", decision: "paused", reason: `session_${check.reason}`, site } });
 		await ledger.beginSignIn(site).catch(() => undefined);
 		const ok = await this.pauseFor({
