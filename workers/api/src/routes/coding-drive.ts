@@ -59,7 +59,9 @@ export function registerDriveRoutes(codingRoutes: Hono<{ Bindings: Env }>): void
 				"This session has no terminal attached, so a keystroke can't be delivered — a human needs to answer the prompt. Phrase the answer as an instruction and send it as {\"text\": \"...\"} on this route, or restart the engine with POST /v1/instances/:id/coding/sessions/:sid/restart.",
 			);
 		}
-		const action: CodingActionKind = { kind: "message", text: String(body.text ?? "") };
+		// #1481: this door has just authenticated the owner, so say so to the engine instead of leaving it to infer
+		// the turn's standing from its prose. The label is "owner", not "human": an assistant acting for the owner sends here too.
+		const action: CodingActionKind = { kind: "message", text: String(body.text ?? ""), author: "owner" };
 		// An empty instruction is not deliverable either (#504), for the same reason a keystroke isn't:
 		// `session.input("")` writes an empty user turn to the engine's stdin, which flips the pane to
 		// "thinking" and answers 200 with a snapshot — indistinguishable from having sent something. The

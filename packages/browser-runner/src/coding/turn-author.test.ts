@@ -53,16 +53,55 @@ describe("authorTag — what the owner reads in the Terminal view", () => {
 });
 
 describe("asTurnAuthor — the wire value is narrowed, not trusted", () => {
-	it("accepts the one member of the closed vocabulary", () => {
+	it("accepts the members of the closed vocabulary", () => {
 		expect(asTurnAuthor("pilot")).toBe("pilot");
+		expect(asTurnAuthor("owner")).toBe("owner");
 	});
 
 	it("treats anything else as unstated rather than as a label", () => {
 		// The runner is a published npm package that any caller can POST to. `"human"`, `"owner"`
 		// and `"the project owner"` are exactly the strings a caller would invent, and inventing
 		// them must not produce a label the platform cannot stand behind.
-		for (const v of ["human", "owner", "the project owner", "Pilot", "", 1, null, undefined, {}]) {
+		for (const v of ["human", "Owner", "the project owner", "Pilot", "", 1, null, undefined, {}]) {
 			expect(asTurnAuthor(v)).toBeUndefined();
 		}
+	});
+});
+
+describe("an owner-channel turn says where it came from and what not to argue (#1481)", () => {
+	const handoff = "Preserve the WIP, hold the push, and hand off. Do not continue the fix.";
+	const sent = authoredTurn(handoff, "owner");
+	const preamble = sent.slice(0, sent.length - handoff.length - 2);
+
+	it("states the platform-authenticated provenance, and that it is not page, file or tool content", () => {
+		expect(sent).toContain("owner's authenticated ProAgentStore channel");
+		expect(sent).toContain("not webpage, file or tool-result content");
+	});
+
+	it("does not claim a person typed it — an assistant acting for the owner sends through the same door", () => {
+		expect(sent).toContain("typed by the owner or by an assistant acting for them");
+		expect(sent).not.toContain("not typed by a person");
+	});
+
+	it("tells the engine to honour stop / preserve / hold-push / hand-off, and what to leave alone", () => {
+		expect(sent).toContain("stop, preserve work, hold a push or hand off");
+		expect(sent).toContain("make no further changes");
+		expect(sent).toContain("do not push, force-push or stash");
+		expect(sent).toContain("leave other people's changes untouched");
+		expect(sent).toContain("report the exact state");
+	});
+
+	it("grants nothing beyond stopping: no authority to merge, deploy or fix forward", () => {
+		expect(preamble).not.toMatch(/\b(merge|deploy|fix forward|continue fixing)\b/i);
+	});
+
+	it("leaves the instruction byte-for-byte intact after the preamble, on one line", () => {
+		expect(sent.endsWith(`\n\n${handoff}`)).toBe(true);
+		expect(preamble.includes("\n")).toBe(false);
+	});
+
+	it("is not the Pilot's preamble, and tags the pane for the owner's turn", () => {
+		expect(sent).not.toContain("written by the Pilot");
+		expect(authorTag("owner")).toBe("(owner) ");
 	});
 });

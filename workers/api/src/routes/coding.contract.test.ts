@@ -947,8 +947,9 @@ describe("POST …/message and the keystroke that was never delivered (#448)", (
 		// One read-only probe first (#1015 — what the engine was doing decides the delivery state), then
 		// exactly one act carrying the text unchanged.
 		expect(sent.map((s) => s.path)).toEqual(["/coding/capture", "/coding/act"]);
-		// The text unchanged, plus the owner directive's id the runner reports back once a turn consumed it (#1019).
-		expect(sent[1].body.action).toEqual({ kind: "message", text: "run the tests", inputId: expect.stringMatching(/^dir-/) });
+		// The text unchanged, plus the owner directive's id the runner reports back once a turn consumed it (#1019),
+		// plus the owner-channel author (#1481): this door has authenticated the owner and says so to the engine.
+		expect(sent[1].body.action).toEqual({ kind: "message", text: "run the tests", author: "owner", inputId: expect.stringMatching(/^dir-/) });
 	});
 
 	it("answers a blank instruction with 400 and never touches the runner (#504)", async () => {

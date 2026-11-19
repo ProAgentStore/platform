@@ -299,6 +299,22 @@ describe("HeadlessSession (stream-json engine)", () => {
 		s.stop();
 	});
 
+	it("an owner-channel hold-push directive reaches the engine with its provenance, and the pane is tagged (#1481)", async () => {
+		// The engine is mid-session when the owner's hand-off arrives. It must read WHERE the turn came from
+		// from the platform's own line, ahead of the owner's text, rather than infer legitimacy from prose.
+		const s = new HeadlessSession({ id: "owner-author", workDir: dir, clientType: "claude", bin, statePath: defaultStatePath(dir) });
+		s.start();
+		await until(() => s.runState() === "idle");
+		s.input("Preserve the WIP, hold the push and hand off.", { author: "owner" });
+		await until(() => s.runState() === "idle" && s.snapshot().includes("Done: "));
+		const pane = s.snapshot();
+		expect(pane).toContain("Done: [pags] This turn arrived on the owner's authenticated ProAgentStore channel");
+		expect(pane.indexOf("authenticated ProAgentStore channel")).toBeLessThan(pane.lastIndexOf("Preserve the WIP, hold the push and hand off."));
+		expect(pane).toMatch(/❯ \[\d{2}:\d{2}:\d{2}\] \(owner\) Preserve the WIP/);
+		expect(pane).not.toContain("written by the Pilot");
+		s.stop();
+	});
+
 	it("says nothing about an unauthored turn — silence is not a label (#505)", async () => {
 		// The console's manual `/message`, MCP and the Overseer all reach `/coding/act` without
 		// declaring an author, so an absent author must leave the bytes exactly as they were.

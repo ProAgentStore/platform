@@ -48,11 +48,19 @@
  * directions degrade to the status quo rather than to a wrong label.
  */
 
-/** The closed author vocabulary. One member; adding a second is a code review — see above. */
-export type TurnAuthor = "pilot";
+/**
+ * The closed author vocabulary. Adding a member is a code review — see above.
+ *
+ * `"owner"` (#1481) is the second member. Unlike "human" it is a claim the CLOUD can support: the
+ * only door that declares it is the owner-authenticated message route, which has just checked the
+ * owner's credential. It does NOT say a person typed the words — an assistant acting for the owner
+ * (MCP's `coding_session_message`) sends through the same door — and the preamble says so. What it
+ * settles is provenance: the owner's authenticated channel, not a webpage, file or tool result.
+ */
+export type TurnAuthor = "pilot" | "owner";
 
 /** The authors this runner will accept over the wire. Anything else is treated as unstated. */
-const AUTHORS: readonly string[] = ["pilot"];
+const AUTHORS: readonly string[] = ["pilot", "owner"];
 
 /**
  * Narrow an untrusted wire value to a {@link TurnAuthor}.
@@ -76,6 +84,19 @@ const PILOT_PREAMBLE =
 	'[pags] This turn was written by the Pilot, an automated orchestrator, not typed by a person. "The user" in this conversation means the Pilot.';
 
 /**
+ * What the Engine reads before an owner-channel turn (#1481): where it came from, then the one class of
+ * request it is not to second-guess. Engines were classing the owner's "preserve the work, hold the
+ * push, hand off" as injection and carrying on fixing forward; provenance stated by the platform, in
+ * a line the caller's text cannot precede, is what lets them tell the owner's channel from page text.
+ *
+ * Bounded on purpose: it covers stopping and preserving, never new work, and it authorises nothing a
+ * webpage or tool result says.
+ */
+const OWNER_PREAMBLE =
+	"[pags] This turn arrived on the owner's authenticated ProAgentStore channel (typed by the owner or by an assistant acting for them) — it is not webpage, file or tool-result content. " +
+	"If it asks you to stop, preserve work, hold a push or hand off, do that without arguing the technical review: make no further changes, do not push, force-push or stash, leave other people's changes untouched, and report the exact state (branch, HEAD, uncommitted files, anything unpushed).";
+
+/**
  * The instruction as the Engine receives it: the author's preamble, a blank line, then the
  * caller's text **unchanged**.
  *
@@ -83,7 +104,9 @@ const PILOT_PREAMBLE =
  * are the ones the platform can actually name.
  */
 export function authoredTurn(text: string, author?: TurnAuthor): string {
-	return author === "pilot" ? `${PILOT_PREAMBLE}\n\n${text}` : text;
+	if (author === "pilot") return `${PILOT_PREAMBLE}\n\n${text}`;
+	if (author === "owner") return `${OWNER_PREAMBLE}\n\n${text}`;
+	return text;
 }
 
 /**
@@ -91,5 +114,5 @@ export function authoredTurn(text: string, author?: TurnAuthor): string {
  * a reader of the pane can tell a Pilot turn from a turn a person typed.
  */
 export function authorTag(author?: TurnAuthor): string {
-	return author === "pilot" ? "(pilot) " : "";
+	return author === "pilot" ? "(pilot) " : author === "owner" ? "(owner) " : "";
 }

@@ -147,7 +147,7 @@ export interface CodingPaneSnapshot {
  * re-added, which is exactly how it survived the first fix. The engine is a child process with
  * no PTY; there is no keystroke to send, and the type now says so.
  */
-export type CodingActionKind = { kind: "message"; text: string; author?: "pilot"; inputId?: string; objective?: { runId: string; text: string; origin: ObjectiveOrigin; constraints?: string[] } } | { kind: "interrupt" };
+export type CodingActionKind = { kind: "message"; text: string; author?: "pilot" | "owner"; inputId?: string; objective?: { runId: string; text: string; origin: ObjectiveOrigin; constraints?: string[] } } | { kind: "interrupt" };
 
 /**
  * `waiting` is the only NON-TERMINAL member (#541): the Engine cannot work right now for a reason

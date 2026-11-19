@@ -162,17 +162,7 @@ function messageSites(): Site[] {
  * the module that also holds `/run`, `/resume` and `/restart` — absorb a new machine driver
  * silently. (It was `routes/coding.ts` until the #775 split moved the drive routes out.)
  */
-const UNLABELLED_BY_DESIGN: Record<string, { count: number; why: string }> = {
-	"routes/coding-drive.ts": {
-		count: 1,
-		why:
-			"POST …/coding/sessions/:sid/message — the console's MANUAL box and MCP's `coding_session_message`, " +
-			"which passes its argument straight through. A person typed this text. It stays unlabelled because " +
-			"the vocabulary is closed at `\"pilot\"`: absent means 'nobody said', and a `\"human\"` member could only " +
-			"ever be set by the callers that bothered, so it would label some human turns and not others while " +
-			"implying it labelled all of them. See `packages/browser-runner/src/coding/turn-author.ts`.",
-	},
-};
+const UNLABELLED_BY_DESIGN: Record<string, { count: number; why: string }> = {};
 
 describe("every machine driver names itself on the turns it sends an Engine (#505)", () => {
 	const SITES = messageSites();
@@ -195,13 +185,21 @@ describe("every machine driver names itself on the turns it sends an Engine (#50
 		expect(labelled).toContain("lib/storage-tools.ts");
 	});
 
+	it("labels the owner-authenticated message route \"owner\" (#1481)", () => {
+		// Previously the one allowlisted unlabelled site. A turn arriving on the owner's authenticated route
+		// must say so, or an engine can only guess its standing from the prose and class it as injection.
+		const site = SITES.find((s) => s.rel === "routes/coding-drive.ts" && !s.declaration);
+		expect(site, "routes/coding-drive.ts no longer constructs the owner's message").toBeTruthy();
+		expect(site?.literal).toBe("owner");
+	});
+
 	it("declares no author the runner would silently drop", () => {
 		// `asTurnAuthor` narrows an unrecognised value to `undefined` — correctly, since the runner
 		// is a published package anyone can POST to. The consequence is that a typo or an invented
 		// member degrades to "unstated" with no error anywhere: the field is present, the code
 		// reads as labelled, and the preamble never reaches the Engine. That is the #570/#591 class
 		// this repo keeps paying for, so the vocabulary is asserted from the sending side too.
-		const bad = SITES.filter((s) => s.literal !== null && s.literal !== "pilot").map((s) => `${s.rel}:${s.line} → ${s.literal}`);
+		const bad = SITES.filter((s) => s.literal !== null && s.literal !== "pilot" && s.literal !== "owner").map((s) => `${s.rel}:${s.line} → ${s.literal}`);
 		expect(bad).toEqual([]);
 	});
 
