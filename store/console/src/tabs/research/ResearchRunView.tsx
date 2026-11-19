@@ -148,9 +148,9 @@ export default function ResearchRunView({ instanceId, runId }: { instanceId: str
 					<h3 className="text-base font-bold mb-2">Scan activity</h3>
 					<dl className="flex flex-col gap-1">
 						{telemetryRows(run.telemetry).map((row) => (
-							<div key={row.label} className="text-xs flex gap-2 items-baseline">
-								<dt className="text-muted shrink-0 w-40">{row.label}</dt>
-								<dd className={`flex-1 break-words ${row.tone === "danger" ? "text-danger" : row.tone === "warning" ? "text-warning" : "text-ink"}`}>{row.value}</dd>
+							<div key={row.label} className="text-xs flex flex-col sm:flex-row sm:gap-2 sm:items-baseline">
+								<dt className="text-muted sm:shrink-0 sm:w-40">{row.label}</dt>
+								<dd className={`min-w-0 sm:flex-1 [overflow-wrap:anywhere] ${row.tone === "danger" ? "text-danger" : row.tone === "warning" ? "text-warning" : "text-ink"}`}>{row.value}</dd>
 							</div>
 						))}
 					</dl>
