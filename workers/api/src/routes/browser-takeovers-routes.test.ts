@@ -100,6 +100,41 @@ describe("a paused run asks for a takeover BEFORE anything is shown (#1031)", ()
 	});
 });
 
+describe("a paused run's remote view and input need its live takeover (#1673)", () => {
+	const frame = (q = "") => call("GET", `/i1/local-browser/runs/run-1/frame${q}`);
+	const input = (q = "") => call("POST", `/i1/local-browser/runs/run-1/input${q}`, { type: "click", x: 3, y: 4 });
+
+	it("shows nothing while the run is not paused, and nothing reaches the runner", async () => {
+		expect((await frame()).status).toBe(409);
+		expect((await input()).status).toBe(409);
+		expect(sent).not.toContain("/local-browser/frame");
+	});
+
+	it("relays the frame and input of a paused run, opening the takeover", async () => {
+		await pause("captcha");
+		expect((await frame("?device=desktop")).status).toBe(200);
+		expect((await input("?device=desktop")).status).toBe(200);
+		expect(sent).toEqual(expect.arrayContaining(["/local-browser/frame", "/local-browser/input"]));
+		expect((await call("GET", "/i1/browser-takeovers")).body.takeovers[0]).toMatchObject({ state: "active", subjectId: "run-1" });
+	});
+
+	it("refuses a phone when the takeover does not allow mobile, but serves the desktop", async () => {
+		await call("PUT", "/i1/browser-verification", { enabled: true, allowMobile: false });
+		await pause("captcha");
+		expect((await frame("?device=mobile")).body.error).toMatch(/from a phone is off/);
+		expect((await input("?device=mobile")).status).toBe(409);
+		expect(sent).not.toContain("/local-browser/frame");
+		expect((await frame("?device=desktop")).status).toBe(200);
+	});
+
+	it("refuses once the takeover is declined, though the run is still paused", async () => {
+		await pause("captcha");
+		const id = (await call("GET", "/i1/browser-takeovers")).body.takeovers[0].id;
+		await call("PATCH", `/i1/browser-takeovers/${id}`, { state: "ended" });
+		expect((await frame()).body.error).toMatch(/is ended/);
+	});
+});
+
 describe("a run's end is pushed only where it IS the verdict (#1031)", () => {
 	it("a Gmail-lead verification run is left to its dispatcher, which reads the outcome first", async () => {
 		d1.exec(`INSERT INTO job_lead_browser_verification_attempts (id, instance_id, user_id, lead_id, attempt, run_id, state, created_at) VALUES ('att-1', 'i1', 'u1', 'lead-1', 1, 'run-1', 'dispatched', 1)`);

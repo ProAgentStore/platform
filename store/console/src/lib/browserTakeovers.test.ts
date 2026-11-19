@@ -45,7 +45,7 @@ describe("takeover banner (#1031)", () => {
 			expect(banner).toContain(`"${move}"`);
 		}
 		// The remote view tells the server where it is, so the mobile preference is enforced there too.
-		expect(readFileSync(join(__dirname, "../pages/RunDetail.tsx"), "utf8")).toMatch(/frame\?device=\$\{deviceKind\(\)\}/);
+		expect(readFileSync(join(__dirname, "../components/TakeoverLive.tsx"), "utf8")).toMatch(/frame\?device=\$\{deviceKind\(\)\}/);
 	});
 });
 

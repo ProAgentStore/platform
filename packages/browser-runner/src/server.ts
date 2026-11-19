@@ -309,6 +309,8 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	if (req.method === "POST" && path === "/local-browser/shots") {
 		return json(res, 200, runner.localBrowser.shots(await readJson(req)));
 	}
+	if (req.method === "POST" && path === "/local-browser/frame") return json(res, 200, await runner.localBrowser.frame(await readJson(req)));
+	if (req.method === "POST" && path === "/local-browser/input") return json(res, 200, await runner.localBrowser.input(await readJson(req)));
 	if (req.method === "POST" && path === "/local-browser/resume") {
 		const body = await readJson<Record<string, unknown>>(req);
 		return json(res, 200, runner.localBrowser.resume({ ...body, browserWebsiteAccess: websiteAccessFromRequest(req, body) }));

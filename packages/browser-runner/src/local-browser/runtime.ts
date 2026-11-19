@@ -26,6 +26,8 @@ import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Page } from "playwright";
 import { RunnerInputError } from "../errors.js";
+import { type NativeTakeoverSession, nativeTakeoverFrame, nativeTakeoverInput, stopNativeTakeover } from "../takeover-native.js";
+import type { TakeoverInput } from "../types.js";
 import type { BrowserCallsPage } from "../browser-call-recorder.js";
 import { type BrowserTools, BrowserBridge, domainWithin } from "./bridge.js";
 import { parseBrowserWebsiteAccess, websiteDecision, websiteResumePolicy } from "../browser-website-access.js";
@@ -134,6 +136,8 @@ interface Run {
 	activeMs: number;
 	waiters: Array<(outcome: "resumed" | "stopped") => void>;
 	output: string[];
+	/** The owner's live view of the paused page (#1673) — exists only while the run is paused. */
+	view?: NativeTakeoverSession;
 	engineAuth: LocalBrowserEngineAuth;
 	cancelled: boolean;
 	timedOut: boolean;
@@ -422,6 +426,11 @@ export class LocalBrowserRuntime {
 	}
 
 	private release(run: Run, outcome: "resumed" | "stopped"): void {
+		if (run.view) {
+			const view = run.view;
+			run.view = undefined;
+			void stopNativeTakeover(view).catch(() => undefined);
+		}
 		if (run.state === "paused") {
 			run.state = "running";
 			run.pauseReason = undefined;
@@ -445,6 +454,33 @@ export class LocalBrowserRuntime {
 		if (o.profileConsented === true) run.profileConsented = true;
 		this.release(run, "resumed");
 		return this.status({ runId: run.envelope.runId, afterSeq: run.seq });
+	}
+
+	/**
+	 * The live page of a PAUSED run, for the owner's remote view (#1673). Only while paused: a running
+	 * run's page belongs to the engine, and a view of it would be a second hand on the same mouse.
+	 */
+	private viewOf(runId: unknown): NativeTakeoverSession {
+		const run = this.get(String(runId ?? ""));
+		if (run.state !== "paused") throw new RunnerInputError("The run is not paused, so there is nothing to take over", 409);
+		const page = run.browser?.handoffPage?.();
+		if (!page || page.isClosed()) throw new RunnerInputError("This run's browser page is not available to take over", 409);
+		if (run.view?.page !== page) {
+			if (run.view) void stopNativeTakeover(run.view).catch(() => undefined);
+			run.view = { page };
+		}
+		return run.view;
+	}
+
+	async frame(raw: unknown): Promise<{ frame: string; width: number; height: number; url: string }> {
+		return nativeTakeoverFrame(this.viewOf((raw as { runId?: unknown } | null)?.runId));
+	}
+
+	async input(raw: unknown): Promise<{ ok: true }> {
+		const o = (raw && typeof raw === "object" ? raw : {}) as { runId?: unknown; input?: unknown };
+		if (!o.input || typeof o.input !== "object") throw new RunnerInputError("input is required");
+		await nativeTakeoverInput(this.viewOf(o.runId), o.input as TakeoverInput);
+		return { ok: true };
 	}
 
 	cancel(raw: unknown): { runId: string; state: string } {

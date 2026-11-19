@@ -5,7 +5,8 @@ import { replayFrames, SCREENSHOTS_OFF_TEXT } from "../../lib/runReplay";
 import TakeoverBanner from "../../components/TakeoverBanner";
 import { telemetryRows } from "../../lib/scanSchedule";
 import { useCallback, useMemo, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import TakeoverLive from "../../components/TakeoverLive";
 import { api } from "@proagentstore/sdk/client";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import Button from "../../components/Button";
@@ -29,6 +30,9 @@ export default function ResearchRunView({ instanceId, runId }: { instanceId: str
 	const [error, setError] = useState("");
 	const [busy, setBusy] = useState("");
 	const [msg, setMsg] = useState("");
+	// #1673: a push opens `?takeover=<id>`; the live view opens at once when that takeover is live.
+	const autoOpenId = useSearchParams()[0].get("takeover") ?? undefined;
+	const [viewOpen, setViewOpen] = useState(false);
 	// Paths are written out in full at each call: the MCP-parity check reads them as literals.
 
 	const load = useCallback(async () => {
@@ -88,7 +92,8 @@ export default function ResearchRunView({ instanceId, runId }: { instanceId: str
 	return (
 		<div className="max-w-3xl flex flex-col gap-3 sm:gap-4">
 			{/* #1031: a paused run's durable takeover — resume or decline it here, or with browser_takeover_transition. */}
-			<TakeoverBanner instanceId={instanceId} subjectKind="local_browser_run" subjectId={runId} />
+			<TakeoverBanner instanceId={instanceId} subjectKind="local_browser_run" subjectId={runId} onOpen={() => setViewOpen(true)} autoOpenId={autoOpenId} />
+			{viewOpen && <TakeoverLive base={`/v1/instances/${instanceId}/local-browser/runs/${encodeURIComponent(runId)}`} kind="manual" withEnd={false} onClose={() => setViewOpen(false)} onResume={() => { setViewOpen(false); void act("resume", resume); }} />}
 			<div className="flex flex-wrap items-center gap-2">
 				<Button variant="ghost" size="sm" onClick={() => navigate(`/instances/${instanceId}/research`)}>
 					← All runs

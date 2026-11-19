@@ -6,7 +6,7 @@ import { syncScanCard } from "../lib/local-browser/scan-board.js";
 import type { Context, Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { logError } from "../lib/error-log.js";
-import { LOCAL_BROWSER_CANCEL_PATH, LOCAL_BROWSER_TASK_TYPE } from "../lib/local-browser/contract.js";
+import { LOCAL_BROWSER_CANCEL_PATH, LOCAL_BROWSER_FRAME_PATH, LOCAL_BROWSER_INPUT_PATH, LOCAL_BROWSER_TASK_TYPE } from "../lib/local-browser/contract.js";
 import { applyRunnerResult, ingestRunnerEvents, resumeLocalBrowserRun, syncLocalBrowserRun } from "../lib/local-browser/sync.js";
 import { type FindingAction, reviewFinding } from "../lib/local-browser/findings.js";
 import {
@@ -27,7 +27,8 @@ import {
 } from "../lib/local-browser/store.js";
 import { briefFromMemory, briefSuggestion } from "../lib/local-browser/brief.js";
 import { type LocalBrowserCapability, effectiveLocalBrowserPolicy, isTerminal, mergeLocalBrowserSettings, normalizeDomain } from "../lib/local-browser/policy.js";
-import { callRuntime, getLiveRuntime, requireOwnedInstance, runtimeJson } from "./instances-runtime.js";
+import { callRuntime, getLiveRuntime, requireLiveRuntime, requireOwnedInstance, runtimeJson, runtimeStatus } from "./instances-runtime.js";
+import { localBrowserTakeoverGate } from "./instances-browser-takeovers.js";
 import { LOCAL_BROWSER_OBJECTIVE_MAX, engineRunnerProblem, localBrowserCapability, startLocalBrowserRun } from "../lib/local-browser/start.js";
 import type { Env } from "../types.js";
 
@@ -262,6 +263,30 @@ export function registerLocalBrowserRoutes(router: Hono<{ Bindings: Env }>): voi
 		const { uid, instanceId } = await owned(c);
 		const run = await syncLocalBrowserRun(c.env, instanceId, uid, await runOr404(c, instanceId, uid));
 		return c.json(await resumeLocalBrowserRun(c.env, instanceId, uid, run));
+	});
+
+	/**
+	 * The owner's live view of a paused run's browser (#1673), and input into it. Gated by the run's
+	 * live durable takeover and its phone rule (`localBrowserTakeoverGate`) — no remote view without one.
+	 */
+	const relayView = async (c: C, path: string, init: RequestInit): Promise<Response> => {
+		const { uid, instanceId } = await owned(c);
+		const run = await runOr404(c, instanceId, uid);
+		if (run.status !== "paused") throw new HttpError(409, `Only a paused run can be taken over; this one is ${run.status}.`);
+		await localBrowserTakeoverGate(c.env, uid, instanceId, run.id, { open: true, device: c.req.query("device") });
+		const runtime = await requireLiveRuntime(c.env, instanceId, uid);
+		return callRuntime(c.env, runtime, path, init);
+	};
+
+	router.get("/:instanceId/local-browser/runs/:runId/frame", async (c) => {
+		const res = await relayView(c, LOCAL_BROWSER_FRAME_PATH, { method: "POST", body: JSON.stringify({ runId: c.req.param("runId") }) });
+		return c.json((await runtimeJson(res)) as object, runtimeStatus(res, 200));
+	});
+
+	router.post("/:instanceId/local-browser/runs/:runId/input", async (c) => {
+		const input = await c.req.json().catch(() => null);
+		const res = await relayView(c, LOCAL_BROWSER_INPUT_PATH, { method: "POST", body: JSON.stringify({ runId: c.req.param("runId"), input }) });
+		return c.json((await runtimeJson(res)) as object, runtimeStatus(res, 200));
 	});
 
 	router.post("/:instanceId/local-browser/runs/:runId/cancel", async (c) => {

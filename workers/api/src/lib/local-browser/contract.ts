@@ -32,6 +32,9 @@ export const LOCAL_BROWSER_STATUS_PATH = "/local-browser/status";
 export const LOCAL_BROWSER_RESUME_PATH = "/local-browser/resume";
 /** `POST {runId, afterSeq}` — a run's replay screenshots (#1063), pulled like its status. */
 export const LOCAL_BROWSER_SHOTS_PATH = "/local-browser/shots";
+/** The owner's live view and input for a PAUSED run (#1673). */
+export const LOCAL_BROWSER_FRAME_PATH = "/local-browser/frame";
+export const LOCAL_BROWSER_INPUT_PATH = "/local-browser/input";
 
 export type LocalBrowserEngine = "claude" | "codex";
 export const LOCAL_BROWSER_ENGINES: readonly LocalBrowserEngine[] = ["claude", "codex"];

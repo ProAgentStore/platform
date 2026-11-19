@@ -653,3 +653,70 @@ it("browser observability is bound to the research run's owning instance", async
   expect(rt.browserState("run-1", "inst-1")).toMatchObject({ availability: "unavailable", current: false });
  } finally { rt.closeAll(); }
 });
+
+describe("the owner's live view of a paused run (#1673)", () => {
+	function viewable() {
+		const clicks: Array<[number, number]> = [];
+		let screencastStops = 0;
+		const page = {
+			isClosed: () => false,
+			url: () => "https://seek.com.au/jobs",
+			screenshot: async () => Buffer.from("jpeg"),
+			evaluate: async () => ({ width: 800, height: 600 }),
+			screencast: { start: async () => undefined, stop: async () => void screencastStops++ },
+			mouse: { click: async (x: number, y: number) => void clicks.push([x, y]) },
+		};
+		const rt = new LocalBrowserRuntime({ dataDir: dir, homeDir: home, selfUrl: () => "http://127.0.0.1:4999", bridgeScript: "/runner/bridge-stdio.js", now: () => now, browserFor: async () => ({ tools: browser, handoffPage: () => page as never, stop: async () => undefined }), spawn: (() => new FakeChild()) as never });
+		return { rt, clicks, stops: () => screencastStops };
+	}
+	const pauseOnNewSite = async (rt: LocalBrowserRuntime) => {
+		rt.start(envelope({ policy: { ...envelope().policy, allowDomains: [] } }));
+		await settle();
+		const held = rt.bridge({ runId: "run-1", op: "call", name: "browser_navigate", args: { url: "https://seek.com.au/jobs" } });
+		await settle();
+		return { held };
+	};
+
+	it("serves the page's frame and relays input while the run is paused", async () => {
+		const { rt, clicks } = viewable();
+		try {
+			await pauseOnNewSite(rt);
+			expect(await rt.frame({ runId: "run-1" })).toMatchObject({ frame: expect.stringContaining("data:image/jpeg;base64,"), width: 800, height: 600, url: "https://seek.com.au/jobs" });
+			await rt.input({ runId: "run-1", input: { type: "click", x: 5, y: 6 } });
+			expect(clicks).toEqual([[5, 6]]);
+		} finally { rt.closeAll(); }
+	});
+
+	it("refuses to show or drive a run that is not paused, and a run it does not hold", async () => {
+		const { rt } = viewable();
+		try {
+			rt.start(envelope());
+			await settle();
+			await expect(rt.frame({ runId: "run-1" })).rejects.toThrow(/not paused/);
+			await expect(rt.input({ runId: "run-1", input: { type: "click", x: 1, y: 1 } })).rejects.toThrow(/not paused/);
+			await expect(rt.frame({ runId: "nope" })).rejects.toThrow(/No local browser run/);
+		} finally { rt.closeAll(); }
+	});
+
+	it("stops the live stream when the run resumes, and refuses afterwards", async () => {
+		const { rt, stops } = viewable();
+		try {
+			const { held } = await pauseOnNewSite(rt);
+			await rt.frame({ runId: "run-1" });
+			rt.resume({ runId: "run-1", consentedDomains: ["seek.com.au"], denyDomains: [], profileConsented: false });
+			await held;
+			await settle();
+			expect(stops()).toBe(1);
+			await expect(rt.frame({ runId: "run-1" })).rejects.toThrow(/not paused/);
+		} finally { rt.closeAll(); }
+	});
+
+	it("says so when the run has no page to show (a consent pause before the browser starts)", async () => {
+		const rt = runtime();
+		try {
+			rt.start(envelope({ browserProfile: "default" }));
+			await settle();
+			await expect(rt.frame({ runId: "run-1" })).rejects.toThrow(/not available/);
+		} finally { rt.closeAll(); }
+	});
+});

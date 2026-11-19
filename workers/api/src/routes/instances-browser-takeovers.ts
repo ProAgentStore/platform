@@ -100,6 +100,25 @@ export async function takeoverGate(env: Env, uid: string, instanceId: string, ru
 	return takeover;
 }
 
+/**
+ * The same gate for a paused local browser run's remote view and input (#1673): no live durable
+ * takeover for THIS run, no remote control. Unlike a runner task the run is the subject, so there is
+ * nothing to create here — `onPaused` (lib/local-browser/sync.ts) requested the takeover.
+ */
+export async function localBrowserTakeoverGate(env: Env, uid: string, instanceId: string, runId: string, opts: { open: boolean; device?: string }): Promise<BrowserTakeover> {
+	let takeover = await latestTakeoverFor(env, uid, instanceId, "local_browser_run", runId);
+	if (!takeover) throw new HttpError(404, "No takeover is waiting for this run.");
+	if (!LIVE_TAKEOVER_STATES.includes(takeover.state)) throw new HttpError(409, `This takeover is ${takeover.state}, so the run's browser cannot be viewed or controlled.`);
+	if (opts.open && opts.device === "mobile" && !takeover.mobileAllowed) {
+		throw new HttpError(409, "Taking over from a phone is off for this agent (browser verification allowMobile). Take over at the machine, or allow it in Browser verification.");
+	}
+	if (opts.open && takeover.state === "requested") {
+		const moved = await transitionTakeover(env, uid, instanceId, takeover.id, "active");
+		if (moved.ok) takeover = moved.takeover;
+	}
+	return takeover;
+}
+
 export function registerBrowserTakeoverRoutes(router: Hono<{ Bindings: Env }>): void {
 	router.get("/:instanceId/browser-takeovers", async (c) => {
 		const { uid, instanceId } = await owned(c);

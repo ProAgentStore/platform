@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import Button from "./Button";
 import { type BrowserTakeover, type BrowserTakeoverListResponse, type BrowserTakeoverTransitionResponse, deviceKind, isLive, remoteViewBlocked, takeoverLine } from "../lib/browserTakeovers";
@@ -11,9 +11,10 @@ import { type BrowserTakeover, type BrowserTakeoverListResponse, type BrowserTak
  *
  * #1100: "Waiting for you to take over" used to have no take-over control at all — only resume and
  * decline — so a `requested` takeover could be activated only through the API. `onOpen` is the page's
- * live view; taking over records the move to `active` first, then opens it.
+ * live view; taking over records the move to `active` first, then opens it. `autoOpenId` (#1673) is the
+ * takeover a push link named: once, when that takeover is live and the view is allowed, it opens at once.
  */
-export default function TakeoverBanner({ instanceId, subjectKind, subjectId, onOpen }: { instanceId: string; subjectKind: "local_browser_run" | "runtime_task"; subjectId: string; onOpen?: () => void }) {
+export default function TakeoverBanner({ instanceId, subjectKind, subjectId, onOpen, autoOpenId }: { instanceId: string; subjectKind: "local_browser_run" | "runtime_task"; subjectId: string; onOpen?: () => void; autoOpenId?: string }) {
 	const [takeover, setTakeover] = useState<BrowserTakeover | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [err, setErr] = useState("");
@@ -31,6 +32,16 @@ export default function TakeoverBanner({ instanceId, subjectKind, subjectId, onO
 		const t = setInterval(load, 15_000);
 		return () => clearInterval(t);
 	}, [load]);
+
+	const autoOpened = useRef(false);
+	const takeOverRef = useRef<() => Promise<void>>(async () => {});
+	const blockedNow = takeover && isLive(takeover) ? remoteViewBlocked(takeover, deviceKind()) : null;
+	const autoOpen = !!takeover && !!onOpen && takeover.id === autoOpenId && isLive(takeover) && !blockedNow;
+	useEffect(() => {
+		if (!autoOpen || autoOpened.current) return;
+		autoOpened.current = true;
+		void takeOverRef.current();
+	}, [autoOpen]);
 
 	if (!takeover) return null;
 	const line = takeoverLine(takeover);
@@ -61,6 +72,7 @@ export default function TakeoverBanner({ instanceId, subjectKind, subjectId, onO
 		}
 		onOpen?.();
 	};
+	takeOverRef.current = takeOver;
 	const blocked = isLive(takeover) ? remoteViewBlocked(takeover, deviceKind()) : null;
 	return (
 		<div role="status" data-testid="takeover-banner" className={`rounded-lg border px-3 py-2 text-sm ${line.tone === "warn" ? "border-warning text-warning" : line.tone === "ok" ? "border-line text-success" : "border-line text-muted"}`}>
