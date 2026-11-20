@@ -247,6 +247,10 @@ A commit that pushes a file past its pin is refused locally: split the file, or 
 `scripts/check-file-size.mjs` with a reason, in the same commit. The hooks never replace the
 full-suite command above or CI. See CONTRIBUTING.md.
 
+## Brand
+
+Read [brand/BRAND.md](brand/BRAND.md) before changing the platform name, logo, favicon, wordmark or share image.
+
 ## Building an app on the SDK shell: the navigation contract (#1291)
 
 If you are writing or reviewing an app that uses the ProAppStore SDK shell (`ProShell`, called AppShell in prose), follow

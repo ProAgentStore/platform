@@ -1,68 +1,70 @@
 # ProAgentStore brand
 
-ProAgentStore is the server-powered member of the Agents pair. FreeAgentStore is
-its browser-first counterpart. Use the full name **ProAgentStore**, written as
-one word in PascalCase, on platform surfaces.
+Kit version **2026-11-18**. Canonical source: [`serge-ivo/stores-workspace` `brand/`](https://github.com/serge-ivo/stores-workspace/tree/main/brand). This repo vendors the exact PAGS export in [`brand/assets/`](assets/).
 
-## Family identity — 2026-11-18
+## Identity
 
-The canonical family kit is maintained in `serge-ivo/stores-workspace`, under
-`brand/`. This repository vendors the ProAgentStore export in `brand/assets/`.
-There is no cross-store runtime package or network dependency.
+- **Name:** ProAgentStore, one PascalCase word. **Agent** is the coloured noun.
+- **Symbol:** connected nodes, shared with FreeAgentStore. Use the supplied vector paths.
+- **Wordmark:** Manrope 800, on one line.
+- **Colours:** accent violet `#7c3aed`, hover `#6d28d9`, dark-surface accent `#a78bfa`. FreeAgentStore uses
+  indigo `#6366f1` / `#a5b4fc`.
+- **Typography:** Manrope for UI, Fraunces for editorial headings, system monospace for code.
 
-- Symbol: connected nodes, shared with FreeAgentStore. Use the supplied vector
-  paths; do not recreate the platform mark with a lightning emoji, letter or
-  icon-library glyph.
-- Wordmark: Manrope 800, `ProAgentStore`, with **Agent** in the accent colour.
-  Keep it on one line. Compact navigation may show only the symbol, provided its
-  link has an accessible platform name.
-- Primary accent: violet `#7c3aed`; hover `#6d28d9`; wordmark on dark surfaces:
-  `#a78bfa`. FreeAgentStore uses indigo `#6366f1` / `#a5b4fc`.
-- Body: Manrope. Editorial headings: Fraunces. Code: system monospace.
-- Individual agents retain their own names and icons. The platform symbol does
-  not replace agent-specific identities.
+## Assets
 
-## Exported assets
+| File | Use |
+|---|---|
+| `favicon.svg` | Standalone icon; the header image on every page |
+| `mark.svg` / `mark-mono.svg` | Transparent glyph, in colour or `currentColor` |
+| `wordmark-light.svg` / `wordmark-dark.svg` | Complete outlined wordmark for light or dark surfaces |
+| `icon-{16,32,48,64,128,180,192,512}.png` | Raster icons; 192 and 512 are the manifest icons |
+| `apple-touch-icon.png` | iOS home-screen icon |
+| `og-image.svg` / `og-image.png` | 1200×630 share card |
+| `brand.json` | Kit version and colour/identity provenance |
 
-`assets/` contains the SVG symbol, monochrome mark, light/dark wordmarks, favicon,
-PNG sizes 16–512, Apple touch icon, social card and `brand.json`. Update the whole
-export from one family-kit revision. Keep vector paths and supplied padding.
+## Usage rules
 
-The host embeds the favicon, PNG icons and social image from this directory in
-`workers/host/build.js`. The public URLs are `/favicon.svg`, `/icon-192.png`,
-`/icon-512.png`, `/apple-touch-icon.png` and `/og-image.png`.
-`store/manifest.json` defines the default installed-console shortcut.
+- Header: a 28–40px icon beside the accessible full name. No second container or gradient behind the icon.
+- A decorative image beside the name uses `alt=""`. A symbol-only link needs the full name as its accessible label.
+- The 192px and 512px PNGs are opaque and maskable. Do not use them as a square header badge.
+- Never redraw, abbreviate or space the name. Do not stand in for the mark with a lightning emoji, a letter or
+  an icon-library glyph.
+- Individual agents keep their own names and icons. The platform symbol does not replace them.
 
-## Theme and UI ownership
+## Where it ships
 
-ProAgentStore deliberately remains dark-only. This decision is recorded in the
-workspace design system and in this repository's `DESIGN-SYSTEM.md`. The family
-kit has light and dark artwork variants for external use; it does not introduce
-a light UI or a theme preference here.
+The host Worker embeds its copies from `brand/assets/` at build time (`workers/host/build.js`); there is no second
+copy in this repo. Brand URLs carry the cache parameter `?v=2026-11-18`.
 
-`DESIGN-SYSTEM.md` and the console/admin token definitions own the UI contract.
-Use semantic status colours rather than colour literals. The brand wordmark's
-high-contrast dark-surface shade is `--color-brand-ink`; it is separate from the
-primary action accent. Avoid duplicated historical token tables in brand docs.
+- Host routes: `/favicon.svg`, `/icon-192.png`, `/icon-512.png`, `/apple-touch-icon.png`, `/og-image.png`.
+- Storefront pages, `store/**/*.html`: favicon, touch icon, share image and the header image plus wordmark.
+- Console and admin headers: `store/console/src/components/Layout.tsx`, `store/admin/src/components/Layout.tsx`.
+- Installed app: `store/manifest.json` (192 and 512 icons).
+- Embeddable chat widget: `store/widget.js` inlines the `mark-mono.svg` paths as its button.
 
-## Delivery and verification
+## Store-specific notes
 
-The storefront HTML, console and admin headers all use the same favicon artwork.
-The host workflow watches `brand/**` as well as `store/**`, so an asset-only
-change deploys. Build the SDK, console, admin and host pages and inspect
-desktop/mobile branding. Required hooks check the changed surfaces before a
-push to `main`; CI runs the full suite. Use the repository's `test:full` wrapper
-for any local full-suite run and report its explicit verdict.
+**Dark only.** ProAgentStore deliberately has no light UI and no theme preference. The decision is recorded in the
+workspace design system and in this repo's `DESIGN-SYSTEM.md`. The kit's light and dark artwork is for external
+use. `DESIGN-SYSTEM.md` and the console/admin token definitions own the UI contract: use semantic status colours,
+not colour literals. The wordmark's dark-surface shade is the token `--color-brand-ink`, separate from the primary
+action accent.
 
-## Voice
+**Delivery and verification.** `deploy-host.yml` watches `brand/**` as well as `store/**`, so an asset-only change
+deploys. Build the SDK, console, admin and host pages and inspect the branding at desktop and mobile widths. The
+hooks check the changed surfaces before a push to `main`; CI runs the full suite. For a local full-suite run use
+`pnpm -w test:full` and report its verdict line.
 
-Describe what the platform does plainly. Use **Agents**, **Workers** and **Tools**
-for the three agent types, and **Console**, **API**, **SDK**, **CLI** and **MCP** for
-platform components. Keep pricing, capabilities and privacy claims in the
-product documentation that owns them rather than duplicating them here.
+**Voice.** Describe what the platform does plainly. Use **Agents**, **Workers** and **Tools** for the three agent
+types, and **Console**, **API**, **SDK**, **CLI** and **MCP** for platform components. Pricing, capability and
+privacy claims stay in the product documentation that owns them.
 
-## Browser cache updates
+## Updating
 
-Platform asset URLs and manifest icon URLs include `?v=2026-11-18`, matching
-the kit revision. Bump this value when replacing kit assets so returning browsers
-fetch the new identity even when an older stable URL remains cached.
+1. Change the master in the workspace kit and regenerate it there.
+2. Copy the whole PAGS export into `brand/assets/` from one kit revision; keep vector paths and padding.
+3. Update the inlined mark in `store/widget.js` if `mark-mono.svg` changed.
+4. Bump `?v=` on every brand URL, including `store/manifest.json`, so returning browsers fetch the new files.
+5. Run `python3 brand/check-copies.py` in the workspace.
+6. Commit to `main` here; the host deploys from the push.

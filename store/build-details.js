@@ -39,7 +39,7 @@ function generateDetailPage(agent) {
 	})}</script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
     *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
     :root{--font-body:'Manrope',system-ui,sans-serif;--font-display:'Fraunces',Georgia,serif;--paper:#0a0a0a;--panel:#171717;--ink:#fafafa;--muted:#a3a3a3;--muted-soft:#737373;--accent:#7c3aed;--accent-hover:#6d28d9;--free:#3b82f6;--line:#262626;--line-strong:#404040;--shadow:0 1px 3px rgba(0,0,0,0.3);--radius:0.75rem}
@@ -49,8 +49,9 @@ function generateDetailPage(agent) {
     header{border-bottom:1px solid var(--line)}
     header .c{max-width:1200px;margin:0 auto;padding:0.75rem 1.5rem;display:flex;align-items:center;gap:1.25rem}
     .brand{display:flex;align-items:center;gap:0.6rem;text-decoration:none;color:var(--ink)}
-    .brand-mark{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#6366f1);display:flex;align-items:center;justify-content:center;font-size:1.1rem}
-    .brand-name{font-family:var(--font-display);font-size:1.15rem;font-weight:700}
+    .brand-mark{width:36px;height:36px;border-radius:10px;flex-shrink:0;object-fit:contain}
+    .brand-name{font-family:'Manrope',system-ui,sans-serif;font-size:1.15rem;font-weight:800;white-space:nowrap;letter-spacing:-0.035em}
+    .brand-name span{color:#a78bfa}
     nav{display:flex;gap:1.25rem;font-size:0.88rem;font-weight:600;margin-left:auto}
     nav a{color:var(--muted);text-decoration:none}nav a:hover{color:var(--ink)}
     nav a.free{color:var(--free)}
@@ -75,7 +76,7 @@ function generateDetailPage(agent) {
 <body>
   <header>
     <div class="c">
-      <a href="/" class="brand"><span class="brand-mark">&#9889;</span><span class="brand-name">ProAgentStore</span></a>
+      <a href="/" class="brand"><img class="brand-mark" src="/favicon.svg?v=2026-11-18" alt="" width="36" height="36"><span class="brand-name">Pro<span>Agent</span>Store</span></a>
       <nav>
         <a href="/">Agents</a>
         <a href="/about/">About</a>

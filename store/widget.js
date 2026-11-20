@@ -98,7 +98,7 @@
       #pags-powered{text-align:center;padding:6px;font-size:10px;color:${colors.muted};border-top:1px solid ${colors.line}}
       #pags-powered a{color:${colors.accent};text-decoration:none}
     </style>
-    <button id="pags-fab" aria-label="Open chat" aria-expanded="false">&#9889;</button>
+    <button id="pags-fab" aria-label="Open chat" aria-expanded="false"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="48" height="48" aria-hidden="true" focusable="false"><g fill="currentColor" color="currentColor"><path d="m23 23 18 0m-18 0 9 20m9-20-9 20" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linejoin="round"/><circle cx="23" cy="23" r="6"/><circle cx="41" cy="23" r="6"/><circle cx="32" cy="43" r="6"/></g></svg></button>
     <div id="pags-panel">
       <div id="pags-header">
         <span class="dot"></span>

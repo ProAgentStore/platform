@@ -8,6 +8,7 @@ Marketplace for server-powered AI agents. Creators build agent templates, client
 **Console:** https://proagentstore.online/console/
 **GitHub:** https://github.com/ProAgentStore
 **Free pair:** https://freeagentstore.online
+**Brand:** [`brand/BRAND.md`](brand/BRAND.md) — identity, vendored kit assets and usage rules
 
 ## What's in here
 
