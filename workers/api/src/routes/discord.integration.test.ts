@@ -249,6 +249,15 @@ describe("a newly connected bot, through the agent's own tools (#1132)", () => {
 		expect(post).toMatchObject({ path: `/channels/${CH_ALERTS}/messages`, auth: `Bot ${TOKEN_A}` });
 		expect(JSON.parse(post?.body ?? "{}")).toEqual({ content: "on it @everyone", allowed_mentions: { parse: [] } });
 
+		// #1663/#1667: a tagged, listed user is allowlisted; @everyone in the same text still is not.
+		sent = [];
+		const tagged = await tool("discord_send_message", { grantId, content: "<@786471179354767361> check in? @everyone", mentionUserIds: ["786471179354767361"] });
+		expect(tagged.json.success).toBe(true);
+		expect(JSON.parse(sent.find((s) => s.method === "POST")?.body ?? "{}")).toEqual({
+			content: "<@786471179354767361> check in? @everyone",
+			allowed_mentions: { parse: [], users: ["786471179354767361"] },
+		});
+
 		// #1273: a threaded reply goes through the same grant and consent, and the target must be in the granted channel.
 		sent = [];
 		const replied = await tool("discord_send_message", { grantId, content: "welcome!", replyToMessageId: "777777777777777777" });
