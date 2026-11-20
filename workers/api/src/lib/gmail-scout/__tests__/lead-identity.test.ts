@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { canonicalJobUrl, jobPostingIdentity, workKeyForLead } from "../../job-lead-triage.js";
 import { companyFromSender, employerByHost, findRepostOf, inferCompany, isSearchResultsUrl } from "../lead-hygiene.js";
 import { repairJobLeads } from "../repair.js";
-import { ingestGmailCandidates } from "../scan.js";
+import { ingestGmailCandidates, readGmailScoutLeadRecords } from "../scan.js";
 import type { GmailMessage } from "../../gmail.js";
 import type { Env } from "../../../types.js";
 
@@ -122,5 +122,28 @@ describe("repair", () => {
 		expect(store[3].data).toMatchObject({ company: "DEECA" });
 		const again = await repairJobLeads(env(store), "s", { dryRun: false });
 		expect(again).toMatchObject({ rekeyed: 0, duplicatesLinked: 0, repostsLinked: 0, searchPagesArchived: 0, companiesFilled: 0 });
+	});
+
+	// #1613: AgentDO clamps every record query to 200, so a 240-lead Scout used to be read as 200.
+	it("reads and repairs every lead past the 200-record page clamp, reporting truncation from total", async () => {
+		const many = Array.from({ length: 240 }, (_, n) => ({ id: `l${n}`, data: { url: `https://careers.example.com/job/${n}`, status: "new", title: `Role ${n}`, gmail_date: "2026-10-01T00:00:00Z" } }));
+		const paged = (all: typeof many, over = 0) =>
+			({
+				AGENT: {
+					idFromName: (n: string) => n,
+					get: () => ({
+						fetch: async (req: Request) => {
+							const u = new URL(req.url);
+							if (u.pathname === "/collections/job_leads") return Response.json({});
+							const limit = Math.min(Number(u.searchParams.get("limit")) || 50, 200);
+							const offset = Number(u.searchParams.get("offset")) || 0;
+							return Response.json({ records: all.slice(offset, offset + limit), total: all.length + over });
+						},
+					}),
+				},
+			}) as unknown as Env;
+		expect(await readGmailScoutLeadRecords(paged(many), "s")).toHaveLength(240);
+		expect(await repairJobLeads(paged(many), "s", { dryRun: true })).toMatchObject({ scanned: 240, truncated: false });
+		expect(await repairJobLeads(paged(many, 5), "s", { dryRun: true })).toMatchObject({ scanned: 240, truncated: true });
 	});
 });

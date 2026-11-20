@@ -7,7 +7,7 @@
 import type { Env } from "../../types.js";
 import { JOB_LEAD_TRANSITIONS, jobLeadStatus, jobLeadVersion, jobPostingIdentity, workKeyForLead } from "../job-lead-triage.js";
 import { employerByHost, findRepostOf, inferCompany, isSearchResultsUrl } from "./lead-hygiene.js";
-import { readGmailScoutLeadRecords } from "./scan.js";
+import { readGmailScoutLeads } from "./scan.js";
 
 export interface JobLeadRepairCounts {
 	dryRun: boolean;
@@ -26,14 +26,14 @@ export interface JobLeadRepairCounts {
 	truncated: boolean;
 }
 
-const READ_LIMIT = 500;
 type Rec = { id?: string; data?: Record<string, unknown> };
 const when = (d: Record<string, unknown>) => Date.parse(String(d.gmail_date ?? d.posted_date ?? "")) || 0;
 const applied = (d: Record<string, unknown>) => typeof d.apply_request_id === "string";
 
 export async function repairJobLeads(env: Env, instanceId: string, opts: { dryRun: boolean }): Promise<JobLeadRepairCounts> {
-	const records = ((await readGmailScoutLeadRecords(env, instanceId, new URLSearchParams({ limit: String(READ_LIMIT) }))) as Rec[]).filter((r): r is Required<Rec> => !!r.id && !!r.data);
-	const counts: JobLeadRepairCounts = { dryRun: opts.dryRun, scanned: records.length, rekeyed: 0, duplicatesLinked: 0, repostsLinked: 0, searchPagesArchived: 0, companiesFilled: 0, protectedKept: 0, truncated: records.length >= READ_LIMIT };
+	const read = await readGmailScoutLeads(env, instanceId);
+	const records = (read.records as Rec[]).filter((r): r is Required<Rec> => !!r.id && !!r.data);
+	const counts: JobLeadRepairCounts = { dryRun: opts.dryRun, scanned: records.length, rekeyed: 0, duplicatesLinked: 0, repostsLinked: 0, searchPagesArchived: 0, companiesFilled: 0, protectedKept: 0, truncated: read.records.length < read.total };
 	const patches = new Map<string, Record<string, unknown>>();
 	const view = new Map<string, Record<string, unknown>>(records.map((r) => [r.id, { ...r.data }]));
 	const patch = (id: string, p: Record<string, unknown>) => {

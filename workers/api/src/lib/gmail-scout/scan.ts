@@ -284,17 +284,42 @@ function stub(env: Env, id: string) { return env.AGENT.get(env.AGENT.idFromName(
  * any other storage failure into an empty inbox: that would hide an unavailable Scout store.
  */
 export async function readGmailScoutLeadRecords(env: Env, instanceId: string, query?: URLSearchParams) {
+	return (await readGmailScoutLeads(env, instanceId, query)).records;
+}
+
+type LeadRecord = { id?: string; data?: Record<string, unknown> };
+/** AgentDO clamps every record query to 200 (#1613), so "all leads" has to page. */
+const LEAD_PAGE = 200;
+/**
+ * `total` is the collection's real size. With no `query` this PAGES to read every lead; a caller that passes
+ * its own paging query (the status route) gets exactly that one page.
+ */
+export async function readGmailScoutLeads(env: Env, instanceId: string, query?: URLSearchParams): Promise<{ records: LeadRecord[]; total: number }> {
 	const agent = stub(env, instanceId);
 	const collection = await agent.fetch(new Request("https://agent/collections/job_leads"));
-	if (collection.status === 404) return [];
+	if (collection.status === 404) return { records: [], total: 0 };
 	if (!collection.ok) throw new Error("Could not inspect this Scout's job leads.");
+	const readPage = async (suffix: string) => {
+		const res = await agent.fetch(new Request(`https://agent/collections/job_leads/records?${suffix}`));
+		if (!res.ok) throw new Error("Could not read this Scout's job leads.");
+		const body = await res.json() as { records?: LeadRecord[]; total?: number };
+		return { records: body.records ?? [], total: body.total };
+	};
 	// Preserve caller query keys when this is reached from the status route: AgentDO's paging
 	// contract is shared by every collection reader, and dropping one here is the #428 seam bug.
-	const suffix = query?.toString() || "limit=500";
-	const res = await agent.fetch(new Request(`https://agent/collections/job_leads/records?${suffix}`));
-	if (!res.ok) throw new Error("Could not read this Scout's job leads.");
-	const body = await res.json() as { records?: Array<{ id?: string; data?: Record<string, unknown> }> };
-	return body.records ?? [];
+	if (query) {
+		const page = await readPage(query.toString());
+		return { records: page.records, total: page.total ?? page.records.length };
+	}
+	const records: LeadRecord[] = [];
+	let total = 0;
+	for (;;) {
+		const page = await readPage(`limit=${LEAD_PAGE}&offset=${records.length}`);
+		records.push(...page.records);
+		total = page.total ?? records.length;
+		if (!page.records.length || records.length >= total) break;
+	}
+	return { records, total };
 }
 async function insert(env: Env, instanceId: string, data: Record<string, unknown>): Promise<{ created: boolean; id?: string }> {
 	const res = await stub(env, instanceId).fetch(new Request("https://agent/collections/job_leads/records", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ data }) }));
