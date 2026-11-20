@@ -107,6 +107,30 @@ const KNOWN_DUPLICATES = {
  * the text the file now claims. Delete the entry when that lands.
  */
 const GRANDFATHERED = {
+	"0102_coder_repo_drop_repo_setting.sql": {
+		baseline: "3d3ea91",
+		why:
+			"Edited after shipping (#1675): the scalar-subquery value of json_set is wrapped in json(). SQLite\n" +
+			"      3.54 (Node 22.23.5) stopped carrying the JSON subtype out of the subquery, so a fresh replay\n" +
+			"      stored the array as a string. On the SQLite production ran it on, json() is byte-identical,\n" +
+			"      so this edit REMOVES a divergence between production and a fresh database rather than adding one.",
+	},
+	"0126_coder_repo_drop_engine_setting.sql": {
+		baseline: "3d3ea91",
+		why:
+			"Edited after shipping (#1675): the scalar-subquery value of json_set is wrapped in json(). SQLite\n" +
+			"      3.54 (Node 22.23.5) stopped carrying the JSON subtype out of the subquery, so a fresh replay\n" +
+			"      stored the array as a string. On the SQLite production ran it on, json() is byte-identical,\n" +
+			"      so this edit REMOVES a divergence between production and a fresh database rather than adding one.",
+	},
+	"0226_coding_engines_subscription_default.sql": {
+		baseline: "3d3ea91",
+		why:
+			"Edited after shipping (#1675): the scalar-subquery value of json_set is wrapped in json(). SQLite\n" +
+			"      3.54 (Node 22.23.5) stopped carrying the JSON subtype out of the subquery, so a fresh replay\n" +
+			"      stored the array as a string. On the SQLite production ran it on, json() is byte-identical,\n" +
+			"      so this edit REMOVES a divergence between production and a fresh database rather than adding one.",
+	},
 	"0266_lead_verification_closed_reason.sql": {
 		baseline: "d25155b",
 		why:
