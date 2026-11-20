@@ -13,6 +13,11 @@ import { codingQuestionIssueUrl } from "./coding-question-source.js";
 export type CoderQuestionState = "waiting_human" | "brain_deciding" | "answered_human" | "answered_brain" | "escalated" | "unresolved" | "expired";
 export type AnswerVia = "console" | "mcp" | "brain";
 export const OPEN_QUESTION_STATES: readonly CoderQuestionState[] = ["waiting_human", "brain_deciding", "escalated"];
+/**
+ * "An answer is recorded and the run has not applied it yet" (#1231), over a row aliased `q`. The one
+ * definition: status views say "not waiting on you" from it, and the inbox leaves such a run out (#1678).
+ */
+export const ANSWER_PENDING_SQL = "q.applied_at IS NULL AND (q.answered_at IS NOT NULL OR q.state = 'unresolved')";
 
 export interface CoderQuestion {
 	id: string;

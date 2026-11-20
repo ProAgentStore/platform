@@ -13,6 +13,7 @@
  * secure-input value, a credential, a URL a browser is on, or page text.
  */
 import { applicationCardLabel } from "./applications/application-board.js";
+import { ANSWER_PENDING_SQL } from "./coder-question-store.js";
 import { accountApprovalLink, applicationLink, browserTakeoverLink, codingSessionLink, instanceLink, instancePermissionsLink, instanceRunLink, websiteAccessRequestLink } from "./console-links.js";
 import { instanceListName } from "./instance-config.js";
 import type { Env } from "../types.js";
@@ -168,7 +169,7 @@ const SOURCES: Source[] = [
 		instanceCol: "instance_id",
 		where: "r.state IN ('waiting_human', 'escalated')",
 		binds: () => [],
-		select: "r.id, r.session_id, r.question, r.why, r.asked_at, r.expires_at",
+		select: "r.id, r.session_id, r.task_id, r.question, r.why, r.asked_at, r.expires_at",
 		order: "r.asked_at ASC",
 		map: (r) => ({ title: clip(str(r.question), 160), summary: clip(str(r.why), 200), createdAt: toIso(r.asked_at), expiresAt: toIsoOrNull(r.expires_at), urgency: "blocking", route: "" }),
 	},
@@ -220,16 +221,17 @@ const SOURCES: Source[] = [
 		},
 	},
 	{
-		// A run parked on a person. A `decision` park that has an open coder question is that question's row, not a second one.
+		// A run parked on a person. A `decision` park that has an open coder question is that question's row, not a
+		// second one; one whose answer is already recorded is waiting on the RUN, not the owner (#1678).
 		kind: "run_parked",
 		table: "agent_loop_runs",
 		instanceCol: "instance_id",
-		where: `r.status = 'running' AND (r.waiting_reason IN ('human', 'engine_auth') OR (r.waiting_reason = 'decision' AND NOT EXISTS (SELECT 1 FROM coder_questions q WHERE q.run_id = r.run_id AND q.state IN ('waiting_human', 'escalated'))))`,
+		where: `r.status = 'running' AND (r.waiting_reason IN ('human', 'engine_auth') OR (r.waiting_reason = 'decision' AND NOT EXISTS (SELECT 1 FROM coder_questions q WHERE q.run_id = r.run_id AND (q.state IN ('waiting_human', 'escalated') OR (${ANSWER_PENDING_SQL})))))`,
 		binds: () => [],
-		select: "r.run_id AS id, r.session_id, r.objective, r.waiting_reason, r.waiting_until, r.parked_since, r.started_at",
+		select: "r.run_id AS id, r.session_id, r.objective, r.waiting_reason, r.waiting_until, r.parked_since, r.started_at, json_extract(r.waiting_ask, '$.taskId') AS task_id, json_extract(r.waiting_ask, '$.question') AS question",
 		order: "r.started_at ASC",
 		map: (r) => ({
-			title: r.waiting_reason === "engine_auth" ? "A coding CLI needs you to sign in" : r.waiting_reason === "decision" ? "A run is waiting for your decision" : "A run is waiting for you",
+			title: r.waiting_reason === "engine_auth" ? "A coding CLI needs you to sign in" : r.waiting_reason === "decision" ? (str(r.question) ? clip(str(r.question), 160) : "A run is waiting for your decision") : "A run is waiting for you",
 			summary: clip(str(r.objective), 200),
 			createdAt: toIso(r.parked_since ?? r.started_at),
 			expiresAt: toIsoOrNull(r.waiting_until),
@@ -238,6 +240,16 @@ const SOURCES: Source[] = [
 		}),
 	},
 ];
+
+/**
+ * A coding question is answered on its run's task page (`RunDetail`), not the session view, which for a
+ * suspended session has nothing to answer (#1678). Same order as the handoff notification's own link
+ * (`coding-pause.ts` `handoffLink`): the task when there is one, else the session.
+ */
+function codingQuestionRoute(instanceId: string, row: Row): string {
+	const taskId = str(row.task_id);
+	return unslash(taskId ? instanceRunLink(instanceId, taskId) : codingSessionLink(instanceId, str(row.session_id) || undefined));
+}
 
 /** The console route where an item is answered. Reuses the link builders every notification already uses. */
 function routeFor(kind: InboxKind, instanceId: string, row: Row): string {
@@ -254,13 +266,13 @@ function routeFor(kind: InboxKind, instanceId: string, row: Row): string {
 		case "mcp_input":
 			return unslash(`${instanceLink(instanceId)}/settings?subtab=agent`);
 		case "coder_question":
-			return unslash(codingSessionLink(instanceId, str(row.session_id)));
+			return codingQuestionRoute(instanceId, row);
 		case "task":
 			return unslash(instanceRunLink(instanceId, id));
 		case "application":
 			return unslash(applicationLink(instanceId, id));
 		case "run_parked":
-			return unslash(codingSessionLink(instanceId, str(row.session_id) || undefined));
+			return codingQuestionRoute(instanceId, row);
 		case "approval":
 			return "/preferences";
 	}

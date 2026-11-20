@@ -17,6 +17,7 @@ import { wakeParkedRun } from "./coding-park.js";
 import { MAX_CONFIGURABLE_OBJECTIVE_CHARS } from "./loop-limits.js";
 import { referencedIssue } from "./objective-issue.js";
 import { awayCutoffSeconds, ownsCheckoutSql } from "./checkout-hold.js";
+import { ANSWER_PENDING_SQL } from "./coder-question-store.js";
 
 export interface LoopRunRow {
 	run_id: string;
@@ -798,7 +799,7 @@ export async function listBlockedOnAnswer(
 ): Promise<Array<{ runId: string; objective: string; question: string | null; taskId: string | null; answered: boolean; parkedSince: number | null }>> {
 	const { results } = await env.DB.prepare(
 		`SELECT r.run_id, r.objective, r.waiting_ask, r.parked_since,
-		        EXISTS (SELECT 1 FROM coder_questions q WHERE q.run_id = r.run_id AND q.applied_at IS NULL AND (q.answered_at IS NOT NULL OR q.state = 'unresolved')) AS answered
+		        EXISTS (SELECT 1 FROM coder_questions q WHERE q.run_id = r.run_id AND ${ANSWER_PENDING_SQL}) AS answered
 		   FROM agent_loop_runs r LEFT JOIN coding_sessions s ON s.id = r.session_id
 		  WHERE r.instance_id = ?1 AND r.user_id = ?2 AND r.status = 'running' AND r.waiting_reason = 'decision' AND r.checkout_released_at IS NOT NULL
 		    AND (?3 IS NULL OR s.repo_id = ?3)
@@ -814,8 +815,7 @@ export async function listBlockedOnAnswer(
 
 /**
  * For each of these runs that has an answer recorded on its question and not yet applied — a person's,
- * the brain's, or its unresolved instruction — when that answer arrived (#1231). Status views say so
- * instead of showing a normal wait: "waiting for your answer" is false once you have given it.
+ * the brain's, or its unresolved instruction — when that answer arrived (#1231). Status views say so: "waiting for your answer" is false once given.
  */
 export async function answersPendingFor(env: Pick<Env, "DB">, runIds: string[]): Promise<Map<string, number>> {
 	const ids = [...new Set(runIds)];
@@ -824,9 +824,9 @@ export async function answersPendingFor(env: Pick<Env, "DB">, runIds: string[]):
 	for (let i = 0; i < ids.length; i += 100) {
 		const chunk = ids.slice(i, i + 100);
 		const { results } = await env.DB.prepare(
-			`SELECT run_id, MIN(COALESCE(answered_at, resolved_at)) AS at FROM coder_questions
-			  WHERE run_id IN (${chunk.map((_, j) => `?${j + 1}`).join(",")}) AND applied_at IS NULL AND (answered_at IS NOT NULL OR state = 'unresolved')
-			  GROUP BY run_id`,
+			`SELECT q.run_id, MIN(COALESCE(q.answered_at, q.resolved_at)) AS at FROM coder_questions q
+			  WHERE q.run_id IN (${chunk.map((_, j) => `?${j + 1}`).join(",")}) AND ${ANSWER_PENDING_SQL}
+			  GROUP BY q.run_id`,
 		)
 			.bind(...chunk)
 			.all<{ run_id: string; at: number | null }>();
