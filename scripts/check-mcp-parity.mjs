@@ -226,6 +226,11 @@ const KNOWN_GAPS = [
 		why: "Settings -> Agent sets the Finder's daily research budget and scope, and Activity -> History lists its queue. MCP has no tool for either yet (the routes landed in #1608 REST-only); file one when an agent needs to read or change them.",
 		match: /^(GET \/v1\/instances\/\{\}\/original-finder|PUT \/v1\/instances\/\{\}\/original-finder\/settings)$/,
 	},
+	{
+		label: "Needs you inbox (#1640)",
+		why: "The console's Needs you page and nav badge read GET /v1/inbox and /v1/inbox/count. The read-only MCP `inbox` tool is the remaining acceptance item on #1640 (a published-surface change: version bump, surface-lock hash, docs); the REST API landed first.",
+		match: /^GET \/v1\/inbox(\/count)?$/,
+	},
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
