@@ -229,8 +229,8 @@ describe("Usage SQL pre-grouping gives identical totals (#1662)", () => {
 
 		const strip = (s: ReturnType<typeof aggregateUsage>) => {
 			const { payerCoverage: _c, ...rest } = s;
-			const norm = (bs: { key: string }[]) => [...bs].sort((a, b) => a.key.localeCompare(b.key));
-			return { ...rest, byModel: norm(rest.byModel), byKind: norm(rest.byKind), byAgent: norm(rest.byAgent).map(({ label: _l, ...b }: any) => b), byInstance: norm(rest.byInstance).map(({ label: _l, ...b }: any) => b), byPayer: norm(rest.byPayer) };
+			const norm = <T extends { key: string }>(bs: T[]) => [...bs].sort((a, b) => a.key.localeCompare(b.key));
+			return { ...rest, byModel: norm(rest.byModel), byKind: norm(rest.byKind), byAgent: norm(rest.byAgent).map(({ label: _l, ...b }) => b), byInstance: norm(rest.byInstance).map(({ label: _l, ...b }) => b), byPayer: norm(rest.byPayer) };
 		};
 		expect(strip(grouped)).toEqual(strip(expected));
 		expect(grouped.byKind.find((b) => b.key === "engine")?.sessions).toBe(2);
