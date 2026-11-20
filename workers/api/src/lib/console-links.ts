@@ -278,6 +278,14 @@ export function instancePermissionsLink(instanceId: string, requestId?: string):
 	return `${instanceLink(instanceId)}/permissions?${query}`;
 }
 
+/**
+ * The Permissions tab's MCP connection row for one endpoint (#1612): the console scrolls to it, highlights it and
+ * opens it with Connect in view (`mcpEndpointFocus`). `endpoint` is the normalized `https://host/path` form.
+ */
+export function instanceMcpConnectionLink(instanceId: string, endpoint: string): string {
+	return `${instanceLink(instanceId)}/permissions?${new URLSearchParams({ focus: "permissions", mcp_endpoint: endpoint })}`;
+}
+
 // ── Notification links (#894) ────────────────────────────────────────────────
 
 /**

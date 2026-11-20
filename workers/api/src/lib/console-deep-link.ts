@@ -21,7 +21,7 @@
  * The console is a BrowserRouter: a `#fragment` is ignored (`checkConsoleLink`), so there is no anchor
  * finer than a tab or a record page. A "field" is answered with the tab that holds it.
  */
-import { applicationHandoffLink, codingSessionLink, instanceFilesUploadLink, instanceLink, instancePermissionsLink, instanceRunLink, instanceSettingsSubtabLink, localBrowserRunLink, secureInputNotificationLink } from "./console-links.js";
+import { applicationHandoffLink, codingSessionLink, instanceFilesUploadLink, instanceLink, instanceMcpConnectionLink, instancePermissionsLink, instanceRunLink, instanceSettingsSubtabLink, localBrowserRunLink, secureInputNotificationLink } from "./console-links.js";
 
 /** The console's public origin. `/console/…` paths resolve here (and on console.proagentstore.online without the prefix). */
 export const CONSOLE_ORIGIN = "https://proagentstore.online";
@@ -82,6 +82,8 @@ export type ConsoleTarget =
 	| { kind: "section"; section: string; /** Only with `settings`: opens that Settings sub-tab. */ subtab?: string }
 	/** Knowledge's Files uploader, only where uploaded data is readable by this instance. */
 	| { kind: "filesUpload" }
+	/** One MCP server's row on the Permissions tab; `endpoint` is already normalized (`normalizeMcpEndpoint`). */
+	| { kind: "mcpConnection"; endpoint: string }
 	/** A loop run: its coding session when it drives one, else the Assistant where a chat-driven run reports. */
 	| { kind: "run"; runId: string; sessionId: string | null }
 	/** A local browser research run (#946) — its page on the Research tab. */
@@ -140,6 +142,8 @@ export function buildConsoleLink(instanceId: string, target: ConsoleTarget, caps
 					error: "This instance cannot accept Files uploads because it does not declare file or knowledge-reading capability.",
 					reason: "files_upload_unsupported",
 				};
+		case "mcpConnection":
+			return make(instanceMcpConnectionLink(instanceId, target.endpoint), `the Permissions tab, on the MCP connection for ${target.endpoint}`);
 		case "run":
 			return target.sessionId
 				? make(codingSessionLink(instanceId, target.sessionId), "the coding session this run drives — its Co-pilot and terminal")

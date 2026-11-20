@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { buildConsoleLink, type ConsoleTarget } from "../lib/console-deep-link.js";
+import { normalizeMcpEndpoint } from "../lib/mcp-consent.js";
 import { isGmailScoutInstance } from "../lib/gmail-scout/config.js";
 import { getHandoffById } from "../lib/local-apply/store.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
@@ -26,14 +27,20 @@ export function registerConsoleLinkRoutes(router: Hono<{ Bindings: Env }>): void
 		const given = (["section", "target", "run_id", "task_id", "secure_input_id", "permission_request_id", "application_handoff_id"] as const).filter((k) => q(k));
 		if (given.length > 1) throw new HttpError(400, `Give one console-link target, not ${given.join(" and ")} — a record's page already sits on its own tab.`);
 
+		if (q("endpoint") && q("target") !== "mcp-connection") throw new HttpError(400, "endpoint only applies together with target=mcp-connection.");
+
 		// `subtab` refines section=settings; it is not a second target, so it is not in `given`.
 		if (q("subtab") && q("section").toLowerCase() !== "settings") throw new HttpError(400, "subtab only applies together with section=settings.");
 
 		let target: ConsoleTarget = { kind: "instance" };
 		if (q("section")) target = { kind: "section", section: q("section").toLowerCase(), ...(q("subtab") ? { subtab: q("subtab").toLowerCase() } : {}) };
 		else if (q("target")) {
-			if (q("target") !== "files-upload") throw new HttpError(400, `Unknown console-link target "${q("target")}"`);
-			target = { kind: "filesUpload" };
+			if (q("target") === "mcp-connection") {
+				const endpoint = normalizeMcpEndpoint(q("endpoint"));
+				if (!endpoint) throw new HttpError(400, "target=mcp-connection needs `endpoint`, an https MCP endpoint such as https://mcp.example.com/mcp.");
+				target = { kind: "mcpConnection", endpoint };
+			} else if (q("target") === "files-upload") target = { kind: "filesUpload" };
+			else throw new HttpError(400, `Unknown console-link target "${q("target")}"`);
 		}
 		else if (q("run_id")) {
 			const run = await c.env.DB.prepare("SELECT session_id FROM agent_loop_runs WHERE run_id = ?1 AND instance_id = ?2 AND user_id = ?3")

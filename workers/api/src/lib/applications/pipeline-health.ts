@@ -13,7 +13,8 @@ import type { Env } from "../../types.js";
 import { capabilitiesForInstance } from "../agent-capabilities.js";
 import { GMAIL_SCOUT_SCAN_INTERVAL_MS, getGmailScoutConfig, getGmailScoutScanState } from "../gmail-scout/config.js";
 import { emailPermitted } from "../connectors/gmail.js";
-import { jobsAccountProblem } from "../jobs-app.js";
+import { instanceMcpConnectionLink } from "../console-links.js";
+import { JOBS_MCP_URL, jobsAccountProblem } from "../jobs-app.js";
 import { listGmailScoutReceipts, utcIso as iso } from "../gmail-scout/receipts.js";
 import { gmailLeadIntakeRejection, readGmailScoutLeadRecords } from "../gmail-scout/scan.js";
 import { type FinderFact, finderFacts, finderProblems } from "../original-finder/health.js";
@@ -49,6 +50,8 @@ export interface PipelineProblem {
 	message: string;
 	instanceId?: string;
 	connectionId?: string;
+	/** Console path that opens the fix (#1612) — set where the remedy is a console page. */
+	link?: string;
 }
 
 export interface SourceHealth {
@@ -139,7 +142,7 @@ export function pipelineHealthFrom(input: { pipeline: { scouts: string[]; tailor
 		if (j.failing > 0) problems.push({ code: "jobs_sync_failing", instanceId: j.instanceId, message: `Tailor ${j.instanceId} could not send ${j.failing} application${j.failing === 1 ? "" : "s"} to the Jobs app (last error: ${j.lastError ?? "none recorded"}). It retries every 15 minutes; check the Tailor's MCP grant and account for the Jobs endpoint.` });
 	}
 	for (const j of input.jobsConnection ?? []) {
-		problems.push({ code: "jobs_not_connected", instanceId: j.instanceId, message: `${j.role} ${j.instanceId} has a Jobs grant but cannot reach the Jobs app (${j.reason.replace(/_/g, " ")}), so nothing is sent to it. Connect jobs.proappstore.online in Permissions & Connections → MCP connections.` });
+		problems.push({ code: "jobs_not_connected", instanceId: j.instanceId, link: instanceMcpConnectionLink(j.instanceId, JOBS_MCP_URL), message: `${j.role} ${j.instanceId} has a Jobs grant but cannot reach the Jobs app (${j.reason.replace(/_/g, " ")}), so nothing is sent to it. Connect jobs.proappstore.online in Permissions & Connections → MCP connections.` });
 	}
 	for (const q of input.engineQuota ?? []) {
 		problems.push({ code: "engine_quota_exhausted", instanceId: q.instanceId, message: `Scout ${q.instanceId}: ${q.waiting} lead${q.waiting === 1 ? " waits" : "s wait"} for browser verification because its engine is out of quota. ${q.detail ?? "Switch the engine in Settings → Agent (Research), or wait for the reset."}` });

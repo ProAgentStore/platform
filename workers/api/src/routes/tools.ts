@@ -12,6 +12,7 @@ import { agentLacksTool, DISABLED_TOOLS_KEY, explainRefusal, instanceToolPolicy,
 import { builtinToolRouteRefusal } from "../lib/builtin-tool-policy.js";
 import { patchInstanceConfig } from "../lib/instance-config.js";
 import { type ConsentMode, consentModeFor, ensureConsent, hasConsent, listConsents, revokeConsent, setConsent } from "../lib/connector-consent.js";
+import { instanceMcpConnectionLink } from "../lib/console-links.js";
 import { ALL_TOOLS, isDestructiveToolName, listMcpConsents, normalizeMcpEndpoint, revokeMcpConsent, setMcpConsent } from "../lib/mcp-consent.js";
 import { CONNECTORS, getConnector } from "../lib/connectors/registry.js";
 import { instanceConnectorPolicy } from "../lib/instance-connector-access.js";
@@ -855,7 +856,8 @@ toolRoutes.get("/:id/mcp/accounts", async (c) => {
 		// What a real call would do right now, without making one — same contract as
 		// GET /v1/instances/:id/connector-accounts.
 		resolves: resolved.ok ? resolved.account.accountId : null,
-		blocked: resolved.ok ? null : { reason: resolved.reason, message: resolved.message },
+		// A not-connected block carries the exact Permissions-tab link, so nobody has to build it (#1612).
+		blocked: resolved.ok ? null : { reason: resolved.reason, message: resolved.message, ...(resolved.reason === "not_connected" ? { link: instanceMcpConnectionLink(instanceId, endpoint) } : {}) },
 	});
 });
 

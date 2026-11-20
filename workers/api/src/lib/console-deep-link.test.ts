@@ -46,6 +46,11 @@ describe("buildConsoleLink", () => {
 		expect(ok({ kind: "section", section: "permissions" }, { surfaces: [] }).path).toBe("/console/instances/inst_1/permissions");
 	});
 
+	it("links one MCP connection on the Permissions tab, in the form the console focuses on (#1612)", () => {
+		const link = ok({ kind: "mcpConnection", endpoint: "https://mcp.proappstore.online/mcp/apps/jobs" }, { surfaces: [] });
+		expect(link.path).toBe("/console/instances/inst_1/permissions?focus=permissions&mcp_endpoint=https%3A%2F%2Fmcp.proappstore.online%2Fmcp%2Fapps%2Fjobs");
+	});
+
 	it("builds the canonical Files uploader link only when the instance can read uploaded files", () => {
 		const link = ok({ kind: "filesUpload" }, REPO_CHAT);
 		expect(link.path).toBe("/console/instances/inst_1/knowledge?subtab=files");

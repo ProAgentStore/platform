@@ -89,7 +89,7 @@ describe("Jobs connection (#1605)", () => {
 	it("names a Scout or Tailor with a Jobs grant but no resolvable account, and clears once connected", () => {
 		const base = { pipeline: PIPELINE, edges: [edge()], sources: [gmail()], now: NOW };
 		const bad = pipelineHealthFrom({ ...base, jobsConnection: [{ instanceId: "scout", role: "Scout", reason: "not_connected" }] });
-		expect(bad.problems).toEqual([{ code: "jobs_not_connected", instanceId: "scout", message: expect.stringContaining("Connect jobs.proappstore.online in Permissions & Connections → MCP connections") }]);
+		expect(bad.problems).toEqual([{ code: "jobs_not_connected", instanceId: "scout", link: expect.stringContaining("mcp_endpoint="), message: expect.stringContaining("Connect jobs.proappstore.online in Permissions & Connections → MCP connections") }]);
 		expect(pipelineHealthFrom({ ...base, jobsConnection: [] }).ok).toBe(true);
 	});
 });

@@ -63,6 +63,12 @@ describe("get_console_link (#938)", () => {
 		expect(seen).toEqual(["https://api.test/v1/instances/i1/console-link?section=settings&subtab=automation"]);
 	});
 
+	it("forwards target=mcp-connection with its endpoint (#1612)", async () => {
+		const { seen, call } = getConsoleLink({ status: 200, body: { url: "u", path: "p", lands: "l" } });
+		await call({ instance_id: "i1", target: "mcp-connection", endpoint: "https://mcp.proappstore.online/mcp/apps/jobs" });
+		expect(seen).toEqual(["https://api.test/v1/instances/i1/console-link?target=mcp-connection&endpoint=https%3A%2F%2Fmcp.proappstore.online%2Fmcp%2Fapps%2Fjobs"]);
+	});
+
 	it("returns the API-verified Files uploader link through the read-only console-link tool", async () => {
 		const link = {
 			url: "https://proagentstore.online/console/instances/i1/knowledge?subtab=files",
