@@ -48,15 +48,17 @@ Install from this repo marketplace while developing:
 
 ```bash
 codex plugin marketplace add ./platform
+codex plugin add proagentstore@proagentstore
 ```
 
 After publishing the repo as the official marketplace source:
 
 ```bash
 codex plugin marketplace add ProAgentStore/platform
+codex plugin add proagentstore@proagentstore
 ```
 
-Users then install the `proagentstore` plugin from the Codex plugin browser or marketplace.
+Adding the marketplace only registers it; `codex plugin add` installs the plugin (or use the Codex plugin browser).
 
 ## Claude Publishing
 
