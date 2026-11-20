@@ -166,10 +166,18 @@ export const SCHEMA_CACHE_DIR = join(tmpdir(), "pags-real-schema-cache");
  * migration set A is never handed to a test expecting migration set B. This is the
  * "invalidate on migration content changes" key the cache is organized around — add,
  * remove, or edit one migration and the next build gets a new filename instead of a
- * stale hit.
+ * stale hit. The SQLite version is part of the key too: the same migrations can replay to a
+ * different schema on a different SQLite (3.54 stopped carrying JSON subtype out of a scalar
+ * subquery), so a template built by one Node is never reused by another.
  */
 function migrationsContentHash(): string {
 	const h = createHash("sha256");
+	const probe = new DatabaseSync(":memory:");
+	try {
+		h.update((probe.prepare("SELECT sqlite_version() AS v").get() as { v: string }).v).update("\0");
+	} finally {
+		probe.close();
+	}
 	for (const [name, sql] of migrationSources()) h.update(name).update("\0").update(sql);
 	return h.digest("hex");
 }

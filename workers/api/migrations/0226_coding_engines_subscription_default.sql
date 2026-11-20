@@ -16,12 +16,12 @@ UPDATE agent_instances
    SET config = json_set(
          config,
          '$.codingEngines',
-         (SELECT json_group_array(CASE WHEN json_extract(e.value, '$.auth') = 'api-key' THEN json_remove(e.value, '$.auth') ELSE json(e.value) END)
-            FROM json_each(agent_instances.config, '$.codingEngines') AS e),
+         json((SELECT json_group_array(CASE WHEN json_extract(e.value, '$.auth') = 'api-key' THEN json_remove(e.value, '$.auth') ELSE json(e.value) END)
+            FROM json_each(agent_instances.config, '$.codingEngines') AS e)),
          '$.apiCodingMigrated',
-         (SELECT json_group_array(json_extract(e.value, '$.id'))
+         json((SELECT json_group_array(json_extract(e.value, '$.id'))
             FROM json_each(agent_instances.config, '$.codingEngines') AS e
-           WHERE json_extract(e.value, '$.auth') = 'api-key')
+           WHERE json_extract(e.value, '$.auth') = 'api-key'))
        ),
        updated_at = datetime('now')
  WHERE json_valid(config)

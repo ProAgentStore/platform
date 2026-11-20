@@ -75,9 +75,9 @@ UPDATE agents
    SET config = json_set(
          config,
          '$.settingsSchema',
-         (SELECT json_group_array(json(field.value))
+         json((SELECT json_group_array(json(field.value))
             FROM json_each(agents.config, '$.settingsSchema') AS field
-           WHERE json_extract(field.value, '$.id') <> 'repo')
+           WHERE json_extract(field.value, '$.id') <> 'repo'))
        ),
        updated_at = datetime('now')
  WHERE slug = 'coder-repo'
