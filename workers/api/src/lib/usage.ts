@@ -11,7 +11,7 @@ import { engineSessionFromRowId, engineUsageRowId, type EngineUsageReport } from
 import { asPayer, CHARGED_SQL, isCharged, payerForEngineAuth, PAYER_LABEL, UNKNOWN_PAYER_KEY } from "./usage-payer.js";
 import { bucketLabel, UNASSIGNED_KEY, usageInstanceScopeSql } from "./usage-ids.js";
 import { payerCoverage } from "./usage-coverage.js";
-import type { UsageBucket, UsageDay, UsageKind, UsageSummary, UsageTotals } from "./usage-shape.js";
+import type { PayerCoverage, UsageBucket, UsageDay, UsageKind, UsageSummary, UsageTotals } from "./usage-shape.js";
 import type { EngineAuthResolved } from "./usage-payer.js";
 import type { PromptSectionInput } from "./prompt-section-estimates.js";
 import type { Env } from "../types.js";
@@ -294,6 +294,8 @@ export interface UsageRow {
 	/** Who is charged (0092). NULL = unknown, on every row written before it and on machine-login. */
 	payer?: string | null;
 	created_at: string; // "YYYY-MM-DD HH:MM:SS" (UTC, D1 datetime('now'))
+	/** Ledger rows this row stands for (#1662): the Usage query pre-groups in SQL. Absent = 1. */
+	calls?: number;
 }
 
 /**
@@ -320,7 +322,7 @@ function bump(b: UsageBucket, r: UsageRow) {
 	// here is what makes every breakdown decomposable into "value" and "money" — without it the
 	// page could state a true charged total and not say which agent any of it belonged to (#543).
 	if (isCharged(r.payer)) b.chargedCostMicros += r.cost_micros || 0;
-	b.calls += 1;
+	b.calls += r.calls ?? 1;
 }
 
 /** The date portion (UTC) of a D1 timestamp — "2026-07-14 10:00:00" → "2026-07-14". */
@@ -339,7 +341,7 @@ export function usageDay(ts: string): string {
  */
 export function aggregateUsage(
 	rows: UsageRow[],
-	opts: { fromDay?: string; toDay?: string; agentNames?: Record<string, string>; instanceNames?: Record<string, string> } = {},
+	opts: { fromDay?: string; toDay?: string; agentNames?: Record<string, string>; instanceNames?: Record<string, string>; payerCoverage?: PayerCoverage } = {},
 ): UsageSummary {
 	// ANNOTATED, not inferred (#608). An inferred literal is what let this loop sum two cache
 	// columns that `UsageSummary["totals"]` did not declare: the fields crossed the wire, the
@@ -380,7 +382,7 @@ export function aggregateUsage(
 		totals.cacheWriteTokens += r.cache_write_tokens || 0;
 		totals.costMicros += r.cost_micros || 0;
 		if (isCharged(r.payer)) totals.chargedCostMicros += r.cost_micros || 0;
-		totals.calls += 1;
+		totals.calls += r.calls ?? 1;
 		into(dayMap, usageDay(r.created_at), r);
 		into(modelMap, r.model || "unknown", r);
 		into(kindMap, r.kind || "unknown", r);
@@ -428,7 +430,7 @@ export function aggregateUsage(
 		byPayer: sortBuckets(payerMap).map((b) => ({ ...b, label: PAYER_LABEL[b.key] || b.key })),
 		// Over the SAME rows the totals were computed from, never a second query with its own
 		// WHERE — that is how a coverage figure and the total it qualifies start to disagree.
-		payerCoverage: payerCoverage(rows),
+		payerCoverage: opts.payerCoverage ?? payerCoverage(rows),
 	};
 }
 

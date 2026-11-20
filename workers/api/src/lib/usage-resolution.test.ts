@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { aggregateUsage, type UsageRow } from "./usage.js";
-import { instanceLabels, usageRowsSql, USAGE_INSTANCE_NAMES_SQL } from "./usage-ids.js";
+import { instanceLabels, usageCoverageSql, usageRowsSql, USAGE_INSTANCE_NAMES_SQL } from "./usage-ids.js";
 import { engineUsageRowId } from "./engine-usage.js";
 import { instanceListView } from "./instance-config.js";
 
@@ -194,5 +194,54 @@ describe("engine rows carry their coding session through the scan (#551)", () =>
 		const unknown = summary.byPayer.find((b) => b.key === "unknown");
 		expect(unknown?.calls).toBe(3);
 		expect(unknown?.sessions).toBe(2);
+	});
+});
+
+describe("Usage SQL pre-grouping gives identical totals (#1662)", () => {
+	it("grouped rows aggregate to exactly what the raw ledger rows do", () => {
+		const db = seed();
+		const A = "bd43f4de-ef35-4051-bdec-43f8571414a1";
+		const mk: Record<string, string | number | null>[] = [
+			{ agent_id: "agent_coder_repo", instance_id: A, payer: "byok-api", cost_micros: 700, created_at: "2026-08-12 10:00:00" },
+			{ agent_id: "agent_coder_repo", instance_id: A, payer: "byok-api", cost_micros: 300, created_at: "2026-08-12 23:00:00", cache_read_tokens: null },
+			{ agent_id: A, instance_id: null, payer: "platform", kind: "embedding", cost_micros: 50, created_at: "2026-08-13 01:00:00" },
+			{ instance_id: "agent_coder_repo", payer: null, cost_micros: 90, created_at: "2026-08-11 09:00:00" },
+			{ agent_id: "gone-uuid", payer: null, cost_micros: 40, created_at: "2026-08-12 09:00:00" },
+			{ agent_id: "agent_coder_repo", instance_id: A, kind: "engine", payer: "subscription", id: engineUsageRowId("sess-1", "a"), model: "m2", cost_micros: 10 },
+			{ agent_id: "agent_coder_repo", instance_id: A, kind: "engine", payer: "subscription", id: engineUsageRowId("sess-1", "b"), model: "m2", cost_micros: 10 },
+			{ agent_id: "agent_coder_repo", instance_id: A, kind: "engine", payer: "machine-login", id: engineUsageRowId("sess-2", "c"), model: "m2", cost_micros: 5 },
+			{ user_id: OTHER, agent_id: "agent_coder_repo", cost_micros: 99999 },
+		];
+		for (const m of mk) insert(db, m);
+
+		const { summary: grouped } = summarize(db);
+		const raw = db.prepare("SELECT * FROM ai_usage WHERE user_id = ? ORDER BY created_at").all(USER) as unknown as UsageRow[];
+		// Reference: the pre-#1662 per-row resolution, via the same joins on ungrouped rows.
+		const ref = db.prepare(`SELECT COALESCE(ua.id, ia.agent_id, ub.agent_id, uc.id, u.agent_id) AS agent_id,
+			COALESCE(ia.id, ub.id) AS instance_id, u.id AS row_id, u.provider, u.model, u.kind, u.input_tokens, u.output_tokens,
+			u.cache_read_tokens, u.cache_write_tokens, u.cost_micros, u.payer, u.created_at
+			FROM ai_usage u LEFT JOIN agents ua ON ua.id = u.agent_id
+			LEFT JOIN agent_instances ia ON ia.id = u.instance_id AND ia.user_id = u.user_id
+			LEFT JOIN agent_instances ub ON ub.id = u.agent_id AND ub.user_id = u.user_id
+			LEFT JOIN agents uc ON uc.id = u.instance_id WHERE u.user_id = ?`).all(USER) as unknown as UsageRow[];
+		expect(raw.length).toBe(8);
+		const expected = aggregateUsage(ref, { agentNames: { agent_coder_repo: "Repo Coder" }, instanceNames: { [A]: "Chess coder 2" } });
+
+		const strip = (s: ReturnType<typeof aggregateUsage>) => {
+			const { payerCoverage: _c, ...rest } = s;
+			const norm = (bs: { key: string }[]) => [...bs].sort((a, b) => a.key.localeCompare(b.key));
+			return { ...rest, byModel: norm(rest.byModel), byKind: norm(rest.byKind), byAgent: norm(rest.byAgent).map(({ label: _l, ...b }: any) => b), byInstance: norm(rest.byInstance).map(({ label: _l, ...b }: any) => b), byPayer: norm(rest.byPayer) };
+		};
+		expect(strip(grouped)).toEqual(strip(expected));
+		expect(grouped.byKind.find((b) => b.key === "engine")?.sessions).toBe(2);
+
+		// Coverage computed in SQL equals the JS split over the raw rows.
+		const c = db.prepare(usageCoverageSql(false).replaceAll("?1", "?")).get(USER, USER) as Record<string, number | string | null>;
+		const want = aggregateUsage(ref).payerCoverage;
+		expect(c.first_at).toBe(want.firstAttributedAt);
+		expect([c.a_calls, c.value_a, c.b_calls, c.value_b, c.s_calls, c.value_s]).toEqual([
+			want.attributed.calls, want.attributed.costMicros, want.unattributedBefore.calls, want.unattributedBefore.costMicros,
+			want.unattributedSince.calls, want.unattributedSince.costMicros,
+		]);
 	});
 });

@@ -37,20 +37,57 @@ export const UNASSIGNED_KEY = "unassigned";
  * it, which is a different fact from "this row carried no id". {@link bucketLabel} renders it.
  */
 export function usageRowsSql(withRange: boolean): string {
-	return `SELECT COALESCE(ua.id, ia.agent_id, ub.agent_id, uc.id, u.agent_id) AS agent_id,
+	// Grouped BEFORE the joins (#1662): the ledger is scanned once, collapsed to one row per
+	// (raw agent id, raw instance id, model, kind, payer, day, engine session), and the five lookups
+	// then run per group instead of per ledger row (~53,000 rows/call measured). Every figure the
+	// aggregator sums is additive, so `aggregateUsage` over these rows (weighted by `calls`) yields
+	// the same totals as over the raw rows; two groups that resolve to the same agent/instance simply
+	// merge there. `created_at` is the day, which is all `aggregateUsage` reads from it; `row_id` is
+	// reduced to `engine:{session}:` (the only part `engineSessionFromRowId` reads).
+	return `SELECT COALESCE(ua.id, ia.agent_id, ub.agent_id, uc.id, g.agent_id) AS agent_id,
 	        COALESCE(ia.id, ub.id) AS instance_id,
-	        u.id AS row_id,
-	        u.provider, u.model, u.kind,
-	        u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_write_tokens,
-	        u.cost_micros, u.payer, u.created_at, an.name AS agent_name
-	 FROM ai_usage u
-	 LEFT JOIN agents          ua ON ua.id = u.agent_id
-	 LEFT JOIN agent_instances ia ON ia.id = u.instance_id AND ia.user_id = u.user_id
-	 LEFT JOIN agent_instances ub ON ub.id = u.agent_id    AND ub.user_id = u.user_id
-	 LEFT JOIN agents          uc ON uc.id = u.instance_id
+	        g.row_id,
+	        g.provider, g.model, g.kind,
+	        g.input_tokens, g.output_tokens, g.cache_read_tokens, g.cache_write_tokens,
+	        g.cost_micros, g.payer, g.created_at, g.calls, an.name AS agent_name
+	 FROM (
+	   SELECT u.user_id, u.agent_id, u.instance_id, u.provider, u.model, u.kind, u.payer,
+	          substr(u.created_at, 1, 10) AS created_at,
+	          CASE WHEN u.id LIKE 'engine:%:%'
+	               THEN 'engine:' || substr(substr(u.id, 8), 1, instr(substr(u.id, 8), ':') - 1) || ':' END AS row_id,
+	          SUM(u.input_tokens) AS input_tokens, SUM(u.output_tokens) AS output_tokens,
+	          SUM(u.cache_read_tokens) AS cache_read_tokens, SUM(u.cache_write_tokens) AS cache_write_tokens,
+	          SUM(u.cost_micros) AS cost_micros, COUNT(*) AS calls
+	   FROM ai_usage u
+	   WHERE u.user_id = ?1 ${withRange ? "AND u.created_at >= ?2" : ""}
+	   GROUP BY u.agent_id, u.instance_id, u.provider, u.model, u.kind, u.payer, substr(u.created_at, 1, 10), row_id
+	 ) g
+	 LEFT JOIN agents          ua ON ua.id = g.agent_id
+	 LEFT JOIN agent_instances ia ON ia.id = g.instance_id AND ia.user_id = g.user_id
+	 LEFT JOIN agent_instances ub ON ub.id = g.agent_id    AND ub.user_id = g.user_id
+	 LEFT JOIN agents          uc ON uc.id = g.instance_id
 	 LEFT JOIN agents          an ON an.id = COALESCE(ua.id, ia.agent_id, ub.agent_id, uc.id)
-	 WHERE u.user_id = ?1 ${withRange ? "AND u.created_at >= ?2" : ""}
-	 ORDER BY u.created_at ASC`;
+	 ORDER BY g.created_at ASC`;
+}
+
+/**
+ * The payer-coverage split ({@link payerCoverage} in usage-coverage.ts) computed in SQL over the
+ * same WHERE as {@link usageRowsSql} (#1662), since the grouped rows no longer carry the
+ * per-call timestamps it needs. One row: `first_at`, then calls/cost for the three slices.
+ */
+export function usageCoverageSql(withRange: boolean): string {
+	const where = `user_id = ?1 ${withRange ? "AND created_at >= ?2" : ""}`;
+	const has = "payer IN ('byok-api', 'platform', 'subscription')";
+	return `SELECT f.first_at AS first_at,
+	        COALESCE(SUM(CASE WHEN ${has} THEN 1 END), 0) AS a_calls,
+	        COALESCE(SUM(CASE WHEN ${has} THEN cost_micros END), 0) AS value_a,
+	        COALESCE(SUM(CASE WHEN NOT COALESCE(${has}, 0) AND f.first_at IS NOT NULL AND created_at < f.first_at THEN 1 END), 0) AS b_calls,
+	        COALESCE(SUM(CASE WHEN NOT COALESCE(${has}, 0) AND f.first_at IS NOT NULL AND created_at < f.first_at THEN cost_micros END), 0) AS value_b,
+	        COALESCE(SUM(CASE WHEN NOT COALESCE(${has}, 0) AND NOT (f.first_at IS NOT NULL AND created_at < f.first_at) THEN 1 END), 0) AS s_calls,
+	        COALESCE(SUM(CASE WHEN NOT COALESCE(${has}, 0) AND NOT (f.first_at IS NOT NULL AND created_at < f.first_at) THEN cost_micros END), 0) AS value_s
+	 FROM ai_usage,
+	      (SELECT MIN(CASE WHEN ${has} THEN created_at END) AS first_at FROM ai_usage WHERE ${where}) f
+	 WHERE ${where}`;
 }
 
 /**

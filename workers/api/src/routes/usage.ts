@@ -1,11 +1,12 @@
 import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
 import { aggregateUsage, type UsageRow } from "../lib/usage.js";
-import { instanceLabels, usageRowsSql, USAGE_INSTANCE_NAMES_SQL } from "../lib/usage-ids.js";
+import { instanceLabels, usageCoverageSql, usageRowsSql, USAGE_INSTANCE_NAMES_SQL } from "../lib/usage-ids.js";
 import { instanceListView } from "../lib/instance-config.js";
 import { unmeteredUsageSummary } from "../lib/engine-metering.js";
 import { HttpError } from "../lib/auth.js";
 import { compareWindows, DRIVER_ROW_CAP, type DriverRow, spendDrivers, type SpendDrivers } from "../lib/usage-drivers.js";
+import type { PayerCoverage } from "../lib/usage-shape.js";
 import type { Env } from "../types.js";
 
 /**
@@ -47,9 +48,17 @@ usageRoutes.get("/", async (c) => {
 	// Both the agent and the instance are resolved BY LOOKUP, never by trusting which column an id
 	// arrived in — see `usageRowsSql`, which is executed by a test because that is the only way to
 	// prove which join wins.
-	const stmt = c.env.DB.prepare(usageRowsSql(Boolean(days)));
-	const bound = days ? stmt.bind(session.uid, `${dayUtc(days - 1)} 00:00:00`) : stmt.bind(session.uid);
-	const rows = (await bound.all<JoinedRow>()).results ?? [];
+	const args = days ? [session.uid, `${dayUtc(days - 1)} 00:00:00`] : [session.uid];
+	const rows = (await c.env.DB.prepare(usageRowsSql(Boolean(days))).bind(...args).all<JoinedRow>()).results ?? [];
+	// The rows above are pre-grouped in SQL (#1662); the coverage split needs per-call timestamps,
+	// so it is aggregated over the same WHERE rather than from them.
+	const cov = await c.env.DB.prepare(usageCoverageSql(Boolean(days))).bind(...args).first<Record<string, number | string | null>>();
+	const payerCoverage: PayerCoverage = {
+		firstAttributedAt: (cov?.first_at as string | null) ?? null,
+		attributed: { calls: Number(cov?.a_calls ?? 0), costMicros: Number(cov?.value_a ?? 0) },
+		unattributedBefore: { calls: Number(cov?.b_calls ?? 0), costMicros: Number(cov?.value_b ?? 0) },
+		unattributedSince: { calls: Number(cov?.s_calls ?? 0), costMicros: Number(cov?.value_s ?? 0) },
+	};
 
 	const agentNames: Record<string, string> = {};
 	for (const r of rows) {
@@ -67,6 +76,7 @@ usageRoutes.get("/", async (c) => {
 		...(days ? { fromDay: dayUtc(days - 1), toDay: dayUtc(0) } : {}),
 		agentNames,
 		instanceNames,
+		payerCoverage,
 	});
 
 	// What the figures above LEAVE OUT, as a measured quantity rather than a silence (#348).
