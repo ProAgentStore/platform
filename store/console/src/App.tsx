@@ -13,6 +13,7 @@ import InstanceDetail from "./pages/InstanceDetail";
 import ApplicationDetail from "./pages/ApplicationDetail";
 import Profile from "./pages/Profile";
 import Notifications from "./pages/Notifications";
+import Inbox from "./pages/Inbox";
 import Terminals from "./pages/Terminals";
 import Fleet from "./pages/Fleet";
 import Disabled from "./pages/Disabled";
@@ -107,6 +108,7 @@ function AuthGate() {
 				<Route path="preferences" element={<Preferences />} />
 				<Route path="profile" element={<Profile />} />
 				<Route path="notifications" element={<Notifications />} />
+				<Route path="inbox" element={<Inbox />} />
 				<Route path="remote-auth/:requestId" element={<RemoteAuthRequest />} />
 				<Route path="device" element={<DeviceApprove />} />
 				<Route path="*" element={<DefaultRedirect />} />

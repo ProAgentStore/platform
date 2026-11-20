@@ -26,6 +26,7 @@ import { pruneStaleRuntimeNodes } from "./lib/runtime-nodes.js";
 import { emailWorkerManageRoutes } from "./routes/email-worker-manage.js";
 import { gmailIdentityRoutes } from "./routes/gmail-identity.js";
 import { accountApprovalRoutes, setGateReplay } from "./routes/account-approvals.js";
+import { inboxRoutes } from "./routes/inbox.js";
 import { approvalGate } from "./lib/approval-gate-middleware.js";
 import { emailWorkerInboundRoutes, emailWorkerInstanceRoutes, emailWorkerRoutes } from "./routes/email-worker.js";
 import { driveRoutes } from "./routes/drive.js";
@@ -270,6 +271,7 @@ app.route("/v1/instances", toolRoutes); // /v1/instances/:id/tools, /tools/:name
 app.route("/v1/instances", emailWorkerInstanceRoutes); // /v1/instances/:id/email-worker/account — pin this instance to one worker-backed mail connection (#1269)
 app.route("/v1/instances", emailWorkerManageRoutes); // /v1/instances/:id/email-worker/{status,enrollments,test} — MCP management of worker-backed mail; the owner enters the secret in the console (#1277)
 app.route("/v1", accountApprovalRoutes); // /v1/approvals, /v1/approval-gate — held account changes, their decision and the gate settings (#1268)
+app.route("/v1", inboxRoutes); // /v1/inbox, /v1/inbox/count — everything waiting on the owner (#1640)
 app.route("/v1/instances", gmailIdentityRoutes); // /v1/instances/:id/gmail/identity — the verified send-as sender and inbound-recipient scope an instance is pinned to; read and set by MCP (#1279)
 app.route("/v1/instances", ticketRoutes); // /v1/instances/:id/board/items/:jobKey/ticket, /tickets/:ticketId (#757)
 app.route("/v1/instances", runEventRoutes); // /v1/instances/:id/run-events?since= (#579)

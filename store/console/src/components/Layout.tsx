@@ -9,13 +9,15 @@ import CopyPageLink from "./CopyPageLink";
 import Button from "./Button";
 import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
-import { Activity, PowerOff, Bell, Menu, BellRing, X, Bot, Library, Server, BarChart3, Wrench, Terminal, Gauge, SlidersHorizontal, Flag, Stethoscope } from "lucide-react";
+import { Activity, PowerOff, Bell, Menu, BellRing, X, Bot, Library, Server, BarChart3, Wrench, Terminal, Gauge, SlidersHorizontal, Flag, Stethoscope, Inbox } from "lucide-react";
 import { pushPermission, pushSupported, ensurePushSubscribed, enablePush } from "../lib/push";
 import { isSuppressedPush } from "../lib/pushMessages";
 import { rememberRoute } from "../lib/lastRoute";
 
 const navItems = [
 	{ to: "/agents", label: "My Agents", icon: Bot },
+	// Everything waiting on the owner, across every instance (#1640).
+	{ to: "/inbox", label: "Needs you", icon: Inbox },
 	{ to: "/browse", label: "Library", icon: Library },
 	{ to: "/instances", label: "Instances", icon: Server },
 	{ to: "/terminals", label: "Terminals", icon: Terminal },
@@ -45,6 +47,7 @@ export default function Layout() {
 	const location = useLocation();
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [unreadCount, setUnreadCount] = useState(0);
+	const [needsYou, setNeedsYou] = useState(0);
 	const menuRef = useRef<HTMLElement>(null);
 	const menuButtonRef = useRef<HTMLButtonElement>(null);
 	const navHidden = useNavHidden();
@@ -84,6 +87,19 @@ export default function Layout() {
 			// state in the global header for it would follow the user onto every screen.
 		}
 	}, [user]);
+
+	// The "Needs you" count (#1640): COUNT(*) over partial indexes server-side, polled like the bell and halted while hidden.
+	const loadNeedsYou = useCallback(async () => {
+		if (!user) return;
+		try {
+			const d = await api<{ count?: number }>("/v1/inbox/count");
+			setNeedsYou(d.count || 0);
+		} catch {
+			// IGNORABLE (#291): an at-a-glance hint; the Needs you page reports its own read failure.
+		}
+	}, [user]);
+	useEffect(() => { loadNeedsYou(); }, [loadNeedsYou]);
+	useTieredPolling(loadNeedsYou, { activeMs: 60000, passiveMs: 60000 }, false, !!user);
 
 	useEffect(() => { loadBadge(); }, [loadBadge]);
 	// The bell badge is the IN-APP half of a notification; Web Push is the other half, and the
@@ -173,6 +189,14 @@ export default function Layout() {
 						<ConversationPill />
 						<CopyPageLink size={navHidden ? 16 : 18} />
 						{/* A phone-sized tap area around an 18px icon (#1129), drawn by an absolute ::after so no box grows or moves. */}
+						<NavLink to="/inbox" className="relative no-underline text-muted after:absolute after:-inset-2" title="Needs you">
+							<Inbox size={navHidden ? 16 : 18} />
+							{needsYou > 0 && (
+								<span className="absolute -top-1 -right-1.5 bg-danger text-white text-2xs min-w-4 h-4 px-0.5 rounded-full flex items-center justify-center font-bold leading-none" data-testid="needs-you-badge">
+									{needsYou > 9 ? "9+" : needsYou}
+								</span>
+							)}
+						</NavLink>
 						<NavLink to="/notifications" className="relative no-underline text-muted after:absolute after:-inset-2" title="Notifications">
 							<Bell size={navHidden ? 16 : 18} />
 							{unreadCount > 0 && (

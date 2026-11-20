@@ -3148,6 +3148,88 @@ paths:
               schema: { type: object, properties: { tags: { type: array, items: { type: string } } } }
         "400": { description: A value that cannot be a tag }
         "404": { $ref: "#/components/responses/NotFound" }
+  /v1/inbox:
+    get:
+      summary: Everything waiting on me, across every instance ("Needs you")
+      description: |
+        One owner-scoped aggregate over every source that can wait on a person: secure inputs, website
+        access questions, permission requests, browser takeovers, MCP input requests, coder questions,
+        held account approvals, board tasks in needs-human / needs-approval, job applications awaiting
+        review, and runs parked on a person. An item leaves only when it is resolved at its source, never
+        because it was read. Items carry no secret values, credentials or page text (#1640).
+
+        `counts` describe the whole waiting set, not the filtered view. `sources` reports each source's read:
+        a source that failed has `ok: false` and is never silently returned as "nothing waiting"; `complete`
+        is true only when every source read and none was capped.
+      operationId: getInbox
+      tags: [Instances]
+      parameters:
+        - { name: kind, in: query, required: false, schema: { type: array, items: { type: string, enum: [secure_input, website_access, permission, takeover, mcp_input, coder_question, approval, task, application, run_parked] } }, style: form, explode: true, description: "Repeat, or comma-separate, to filter by kind." }
+        - { name: instance, in: query, required: false, schema: { type: array, items: { type: string } }, style: form, explode: true, description: Filter by instance id. }
+        - { name: agent, in: query, required: false, schema: { type: string }, description: Filter by agent slug. }
+        - { name: urgency, in: query, required: false, schema: { type: string, enum: [blocking, normal, low] } }
+        - { name: sort, in: query, required: false, schema: { type: string, enum: [newest, oldest, urgency, expiring], default: urgency } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 200 } }
+      responses:
+        "200":
+          description: The waiting items, counts for filter chips, and each source's read status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  asOf: { type: integer, description: ms epoch the list was read at. }
+                  total: { type: integer, description: Items matching the filters (before `limit`). }
+                  complete: { type: boolean }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, description: "`<kind>:<sourceId>`, stable while it waits." }
+                        kind: { type: string }
+                        instanceId: { type: string, nullable: true }
+                        instanceName: { type: string, nullable: true }
+                        agentSlug: { type: string, nullable: true }
+                        title: { type: string }
+                        summary: { type: string }
+                        createdAt: { type: string, format: date-time }
+                        expiresAt: { type: string, format: date-time, nullable: true }
+                        urgency: { type: string, enum: [blocking, normal, low] }
+                        route: { type: string, description: The console route where it is answered. }
+                  counts:
+                    type: object
+                    properties:
+                      total: { type: integer }
+                      byKind: { type: object, additionalProperties: { type: integer } }
+                      byUrgency: { type: object, additionalProperties: { type: integer } }
+                      byInstance: { type: array, items: { type: object, properties: { instanceId: { type: string }, name: { type: string, nullable: true }, count: { type: integer } } } }
+                      byAgent: { type: array, items: { type: object, properties: { slug: { type: string }, count: { type: integer } } } }
+                  sources:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        kind: { type: string }
+                        ok: { type: boolean }
+                        truncated: { type: boolean, description: More are waiting than were listed for this source. }
+                        error: { type: string }
+  /v1/inbox/count:
+    get:
+      summary: How many items are waiting on me (the nav badge)
+      description: COUNT(*) per source over partial indexes — no rows are read. `partial` is true when a source could not be counted, so `count` is a lower bound (#1640).
+      operationId: getInboxCount
+      tags: [Instances]
+      responses:
+        "200":
+          description: The count
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  partial: { type: boolean }
   /v1/instances/my/activity:
     get:
       summary: What every one of my instances is doing

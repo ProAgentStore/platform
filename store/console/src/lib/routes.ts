@@ -47,6 +47,7 @@ export const CONSOLE_ROUTES = [
 	"preferences",
 	"profile",
 	"notifications",
+	"inbox",
 	"remote-auth/:requestId",
 	"device",
 ] as const;
