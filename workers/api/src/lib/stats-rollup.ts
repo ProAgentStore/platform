@@ -41,6 +41,12 @@ const RETENTION_DAYS = 400;
 /** Rows deleted per tick. Bounded so the retention sweep can never be the expensive part. */
 const RETENTION_BATCH = 500;
 
+/** `card_id` of the marker row written for an instance that produced no card values for a day (#1658).
+ *  Without it such an instance has no `agent_stats_daily` row, so it passes the candidate query's
+ *  NOT EXISTS on every tick all day and can fill the batch ahead of instances that have cards.
+ *  `readStatsSeries` filters by card id, so the marker is never read as data. */
+export const NO_CARDS_MARKER = "__none__";
+
 /** Only trend cards have history. `line` is the only trend kind — see `familyForKind`. */
 export function trendCards(cards: readonly StatsCard[]): StatsCard[] {
 	return cards.filter((c) => c.kind === "line");
@@ -233,6 +239,12 @@ export async function runStatsRollup(env: Env, now = new Date()): Promise<{ inst
 					const value = await readDaily(ctx, card, day);
 					if (value === null) continue;
 					toWrite.push({ cardId: card.id, value });
+				}
+				// Nothing to record (no trend cards, or no card has a daily source): leave a marker so the
+				// candidate query stops returning this instance for the rest of the day (#1658).
+				if (toWrite.length === 0) {
+					await insertDailyOnce(env, { instanceId, userId, cardId: NO_CARDS_MARKER, day, value: 0 });
+					continue;
 				}
 				// Phase 2: write — only reached when every readDaily call resolved (or returned null).
 				for (const { cardId, value } of toWrite) {

@@ -265,11 +265,11 @@ describe("runStatsRollup — all-or-nothing write per instance (#658)", () => {
 	 * - That instance has two line cards: `runs.count` (returns `count`) and `collection.count` (DO)
 	 * - The DO responds with `doStatus` (200 = success, 503 = failure)
 	 */
-	function makeEnv(count: number, doStatus: number) {
+	function makeEnv(count: number, doStatus: number, noCards = false) {
 		const written = new Map<string, number>();
 		// Two-card statsSchema: one D1-backed line, one DO-backed line.
 		const agentConfig = JSON.stringify({
-			statsSchema: [
+			statsSchema: noCards ? [] : [
 				{ id: "runs", title: "Runs", kind: "line", source: "runs.count", params: {} },
 				{ id: "leads", title: "Leads", kind: "line", source: "collection.count", params: { collection: "leads" } },
 			],
@@ -285,7 +285,9 @@ describe("runStatsRollup — all-or-nothing write per instance (#658)", () => {
 						all: async () => {
 							// Activity source queries — return the one test instance from ai_usage only.
 							if (sql.includes("FROM ai_usage") && sql.includes("NOT EXISTS")) {
-								return { results: [{ instance_id: INSTANCE, user_id: USER }] };
+								// Mirror the NOT EXISTS: an instance with any row for the day is not a candidate.
+								const rolled = [...written.keys()].some((k) => k.startsWith(`${INSTANCE}|`) && k.endsWith(`|${binds[2]}`));
+								return { results: rolled ? [] : [{ instance_id: INSTANCE, user_id: USER }] };
 							}
 							// Other activity sources (agent_events, etc.) return empty.
 							if (sql.includes("NOT EXISTS")) return { results: [] };
@@ -354,6 +356,16 @@ describe("runStatsRollup — all-or-nothing write per instance (#658)", () => {
 		expect(result.instances).toBe(1);
 		expect(result.written).toBe(0); // no partial writes
 		expect(written.size).toBe(0); // the NOT EXISTS guard will retry the whole instance next tick
+	});
+
+	it("an instance with no trend cards gets a marker row and stops being a candidate (#1658)", async () => {
+		const { env, written } = makeEnv(7, 200, true);
+		const first = await runStatsRollup(env, NOW);
+		expect(first).toEqual({ instances: 1, written: 0 }); // the marker is not a card value
+		expect(written.has(`${INSTANCE}|__none__|${DAY}`)).toBe(true);
+		// Next tick the candidate query no longer returns it, so it cannot fill the batch.
+		const second = await runStatsRollup(env, NOW);
+		expect(second.instances).toBe(0);
 	});
 });
 
