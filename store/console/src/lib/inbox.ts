@@ -49,6 +49,12 @@ export interface InboxResponse {
 	complete: boolean;
 }
 
+/** `GET /v1/inbox/count`: `partial` means a source could not be counted, so `count` is a lower bound. */
+export interface InboxCountResponse {
+	count: number;
+	partial: boolean;
+}
+
 export interface InboxFilters {
 	kinds: InboxKind[];
 	instances: string[];

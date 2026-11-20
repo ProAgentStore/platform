@@ -13,6 +13,7 @@ import { Activity, PowerOff, Bell, Menu, BellRing, X, Bot, Library, Server, BarC
 import { pushPermission, pushSupported, ensurePushSubscribed, enablePush } from "../lib/push";
 import { isSuppressedPush } from "../lib/pushMessages";
 import { rememberRoute } from "../lib/lastRoute";
+import type { InboxCountResponse } from "../lib/inbox";
 
 const navItems = [
 	{ to: "/agents", label: "My Agents", icon: Bot },
@@ -92,7 +93,7 @@ export default function Layout() {
 	const loadNeedsYou = useCallback(async () => {
 		if (!user) return;
 		try {
-			const d = await api<{ count?: number }>("/v1/inbox/count");
+			const d = await api<InboxCountResponse>("/v1/inbox/count");
 			setNeedsYou(d.count || 0);
 		} catch {
 			// IGNORABLE (#291): an at-a-glance hint; the Needs you page reports its own read failure.
