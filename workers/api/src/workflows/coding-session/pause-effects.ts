@@ -94,6 +94,8 @@ export function makePauseEffects(ctx: PauseEffectsCtx): PauseEffects {
 	let parkedQuestionId: string | null = null;
 	/** Resume attempts on a park (#1077): each its own step, since a busy checkout is a retry, not a journalled answer. */
 	let unparks = 0;
+	/** Ticks taken by this run's parks (#1686): each its own journalled step, numbered so a replay finds the same names. */
+	let ticks = 0;
 	const deps = (round: number, wait: RunWaitReason): PauseDeps => ({
 		repo: goal.repo,
 		sourceIssue: () => codingQuestionSource(env, { instanceId, userId, sessionId, runId: loopRunId ?? null }, { askedAt: Date.now() }),
@@ -222,13 +224,15 @@ export function makePauseEffects(ctx: PauseEffectsCtx): PauseEffects {
 					wait: (questionId, k, timeoutMs) => step.waitForEvent(`answer-${round}-${k}`, { type: answerEventType(questionId), timeout: timeoutMs }).then(() => true, () => false),
 					resumeEngine: async (parkedForMs) => {
 						// #1076–#1078, in order: take the checkout back, relaunch, re-sync onto upstream, put the work back (`resumeFromPark`).
-						const r = (await runRetry(`unpark-${round}-${unparks++}`, () =>
-							resumeFromPark(env, getConn(), { runId: loopRunId as string, instanceId, userId, sessionId, repoId, clientType: goal.clientType, cloneUrl, branch, token, tokenUsername, repoName: goal.repo, driverId: driverId ?? undefined, parkedForMs }),
-						)) as { resumed: boolean; line: string; moved: string | null; node?: string | null } | { busy: string } | { blocked: string };
+						const r = (await runRetry(`unpark-${round}-${unparks++}`, async () => {
+							const resumed = await resumeFromPark(env, getConn(), { runId: loopRunId as string, instanceId, userId, sessionId, repoId, clientType: goal.clientType, cloneUrl, branch, token, tokenUsername, repoName: goal.repo, driverId: driverId ?? undefined, parkedForMs });
+							// No longer parked, from this instant. Inside the step (#1686): outside it, this write re-ran on every later replay of the run.
+							if ("line" in resumed) await recordLiveness(env, loopRunId as string, Date.now(), null).catch(() => undefined);
+							return resumed;
+						})) as { resumed: boolean; line: string; moved: string | null; node?: string | null } | { busy: string } | { blocked: string };
 						if (!("line" in r)) return r;
 						// #1242: it resumed on the machine it parked on, which may not be the one this Workflow re-resolved on waking.
 						if (r.node && normalizeRunnerNode(r.node) !== normalizeRunnerNode(getConn().runnerNode)) setConn((await getRunnerConnIgnoringLiveness(env, instanceId, userId, r.node).catch(() => null)) ?? getConn());
-						await recordLiveness(env, loopRunId as string, Date.now(), null).catch(() => undefined); // no longer parked, from this instant
 						if (!r.resumed) getObjective()?.replaced(); // a fresh engine has read nothing: the objective is owed to it again (#1019)
 						return { line: r.line, moved: r.moved };
 					},
@@ -261,13 +265,23 @@ export function makePauseEffects(ctx: PauseEffectsCtx): PauseEffects {
 		// closes a run at 3h and a usage-limit park may legitimately last six. It was writing the
 		// wrong column, and 0127 gives it its own — plus the reason, so the record can finally say
 		// "parked until X" instead of leaving a reader to infer work from a fresh number.
-		tick: async (park) => {
-			if (driverId) await touchSessionDriver(env, instanceId, userId, sessionId, driverId).catch(() => undefined);
-			await touchSessionActivity(env, instanceId, userId, sessionId).catch(() => undefined);
-			if (!loopRunId) return true;
-			await recordLiveness(env, loopRunId, Date.now(), { reason: wait, until: park?.until ?? null, ask: wait === "decision" ? parkedAsk : null }).catch(() => undefined);
-			return !(await isCancelRequested(env, loopRunId).catch(() => false));
-		},
+		//
+		// JOURNALLED (#1686). It was "outside `step.do`" and so re-executed on every replay: the body replays after
+		// each `step.sleep`, and every earlier tick of the wait ran again, back to back, each as four D1 queries
+		// (driver touch, activity touch, liveness UPDATE, cancel read). A 15-minute handoff wait (180 five-second
+		// sleeps, a tick every 12th) made ~1,440 ticks instead of 15 — the 843K `last_alive_at` calls a day measured
+		// with a handful of open runs. As a step the tick runs once, and a replay reads back its journalled answer
+		// (including a cancel, so the replay stops where the first pass did). Its name comes from its own counter,
+		// not `nextN`: that one numbers the run's `s<n>-` steps, and shifting them would make an in-flight run's replay
+		// look for steps under names it never journalled. The counter is deterministic across replays.
+		tick: (park) =>
+			runRetry(`tick-${round}-${ticks++}`, async () => {
+				if (driverId) await touchSessionDriver(env, instanceId, userId, sessionId, driverId).catch(() => undefined);
+				await touchSessionActivity(env, instanceId, userId, sessionId).catch(() => undefined);
+				if (!loopRunId) return true;
+				await recordLiveness(env, loopRunId, Date.now(), { reason: wait, until: park?.until ?? null, ask: wait === "decision" ? parkedAsk : null }).catch(() => undefined);
+				return !(await isCancelRequested(env, loopRunId).catch(() => false));
+			}) as Promise<boolean>,
 	});
 	return {
 		deps,

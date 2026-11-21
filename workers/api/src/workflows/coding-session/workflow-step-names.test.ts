@@ -231,6 +231,7 @@ describe("the durable step names the coding Workflow emits are frozen (#1359)", 
 			do ask-0
 			do notify-coding-handoff:needs_input:0-0
 			do park-0
+			do tick-0-0
 			do hstatus-0-2
 			do unpark-0-0
 			do applied-0
