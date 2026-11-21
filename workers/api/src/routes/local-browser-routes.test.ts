@@ -502,14 +502,15 @@ describe("pulling state from the runner (#944)", () => {
 		expect((await call("POST", `/i1/local-browser/runs/${run.id}/resume`)).status).toBe(409);
 	});
 
-	it("is what the cron does for every active run, and it prunes traces past their retention", async () => {
+	it("is what the cron does for every active run, and the hourly prune drops traces past their retention", async () => {
 		const { syncActiveLocalBrowserRuns } = await import("../lib/local-browser/sync.js");
+		const { pruneExpiredLocalBrowserTraces } = await import("../lib/local-browser/store.js");
 		const run = (await call("POST", "/i1/local-browser/runs", { objective: "x" })).body;
 		runner.paths = { "/local-browser/status": { status: 200, body: { runId: run.id, state: "ended", lastSeq: 0, events: [], result: result(run.id) } } };
 		expect(await syncActiveLocalBrowserRuns({ DB: d1.DB, RELAY: relay } as unknown as Env)).toBe(1);
 		expect((await d1.DB.prepare("SELECT status FROM local_browser_runs WHERE id = ?1").bind(run.id).first<{ status: string }>())?.status).toBe("completed");
 		d1.exec(`UPDATE local_browser_runs SET ended_at = 1 WHERE id = '${run.id}'`);
-		await syncActiveLocalBrowserRuns({ DB: d1.DB, RELAY: relay } as unknown as Env);
+		await pruneExpiredLocalBrowserTraces({ DB: d1.DB } as unknown as Env, Date.now());
 		expect((await d1.DB.prepare("SELECT COUNT(*) AS n FROM local_browser_run_events WHERE run_id = ?1").bind(run.id).first<{ n: number }>())?.n).toBe(0);
 	});
 });

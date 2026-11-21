@@ -87,6 +87,7 @@ import { runDueDeliveries } from "./lib/connections.js";
 import { runSpendAlerts } from "./lib/spend-alerts.js";
 import { runIssueSync } from "./lib/issue-sync.js";
 import { syncActiveLocalBrowserRuns } from "./lib/local-browser/sync.js";
+import { pruneExpiredLocalBrowserTraces } from "./lib/local-browser/store.js";
 import { sweepExpiredBrowserArtifacts } from "./lib/browser-artifacts.js";
 import { syncActiveTailorRuns } from "./lib/local-artifact/tailor.js";
 import { setApplicationMirror } from "./lib/local-artifact/store.js";
@@ -518,6 +519,9 @@ export default {
 		// ~18% of the database's rows read. Each run drains the sessions it visits back to the cap.
 		if (new Date(_event.scheduledTime).getUTCMinutes() === 0) {
 			ctx.waitUntil(sweepTerminalSnapshots(env).catch((err) => logUnhandled(env, err, { path: "scheduled:terminal-snapshots", method: "CRON" })));
+			// #1688: drop local browser traces past their retention. Retention is counted in days, and the read visits
+			// every run ever made (~1.9K rows a call, deleting nothing), so hourly instead of every minute.
+			ctx.waitUntil(pruneExpiredLocalBrowserTraces(env, Date.now()).catch((err) => logUnhandled(env, err, { path: "scheduled:local-browser-prune", method: "CRON" })));
 		}
 		// Daily spend alerts (#1040): an owner's 24h charged spend reaching the alert they set. Bounded,
 		// at most one push per account per day, and it never stops anything.

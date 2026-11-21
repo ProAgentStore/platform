@@ -43,7 +43,6 @@ import {
 	consentIdsOf,
 	getLocalBrowserRun,
 	listDomainConsent,
-	pruneExpiredLocalBrowserTraces,
 	transitionLocalBrowserRun,
 } from "./store.js";
 
@@ -341,7 +340,7 @@ export async function resumeLocalBrowserRun(env: Env, instanceId: string, uid: s
 	return syncLocalBrowserRun(env, instanceId, uid, (await getLocalBrowserRun(env, instanceId, uid, run.id)) ?? run, now);
 }
 
-/** The cron tick: pull a batch of active runs, oldest-synced first, and drop expired traces. */
+/** The cron tick: pull a batch of active runs, oldest-synced first. Expired traces are pruned hourly by the scheduled handler (#1688). */
 export async function syncActiveLocalBrowserRuns(env: Env, limit = 25): Promise<number> {
 	const now = Date.now();
 	let synced = 0;
@@ -351,6 +350,5 @@ export async function syncActiveLocalBrowserRuns(env: Env, limit = 25): Promise<
 		await syncLocalBrowserRun(env, r.instanceId, r.userId, run, now).catch(() => undefined);
 		synced++;
 	}
-	await pruneExpiredLocalBrowserTraces(env, now).catch(() => undefined);
 	return synced;
 }
