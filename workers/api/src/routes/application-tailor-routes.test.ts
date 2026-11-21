@@ -786,6 +786,20 @@ describe("retry_tailoring rechecks the live job through the connected Runner (#1
 		expect(await runCount()).toBe(0);
 	});
 
+	it("an overloaded machine refuses a direct retry with restart-later wording, since nothing is scheduled (#1568)", async () => {
+		const blocked = await stoppedWhilePaused();
+		reconnect();
+		d1.exec(`UPDATE instance_runtime_nodes SET gate_state = '{"state":"rejecting","metric":"memory","value":99.6,"threshold":92,"streak":0,"since":1}' WHERE instance_id = 't1'`);
+		const r = await retry(blocked.id, blocked.state_version);
+		expect(r.status).toBe(503);
+		expect(r.body.error).toMatch(/overloaded/);
+		expect(r.body.error).toMatch(/start it again once it has/);
+		expect(r.body.error).not.toMatch(/retry automatically/);
+		expect(pathsSent()).toEqual([]);
+		expect(await runCount()).toBe(0);
+		expect(await row()).toMatchObject({ status: "blocked", state_version: blocked.state_version });
+	});
+
 	it("a Runner that is STILL unavailable keeps the lead blocked and says that, with fresh evidence — the old reason is not recycled as new", async () => {
 		const blocked = await stoppedWhilePaused();
 		const before = (await verification()).verification as { checked_at: string };

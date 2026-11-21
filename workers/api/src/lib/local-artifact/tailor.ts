@@ -372,7 +372,8 @@ export async function retryTailoring(env: Env, instanceId: string, uid: string, 
 	if ("error" in settings) throw new HttpError(409, `The Application Tailor settings are invalid: ${settings.error}. Fix them, then retry.`);
 	const runtime = await getLiveRuntime(env, instanceId, uid);
 	if (!runtime) throw new HttpError(503, "No runner is connected. Run `pags up` on the machine that holds your job materials, then retry.");
-	const overloadedRetry = await overloadRefusal(env, instanceId, uid, runtime.runner_node, "tailoring runs", true); // #1175
+	// #1568: a direct owner retry throws before any run, queue row or application move exists and no outbox retries it, so the refusal must say to retry later, not promise it.
+	const overloadedRetry = await overloadRefusal(env, instanceId, uid, runtime.runner_node, "tailoring runs", false); // #1175
 	if (overloadedRetry) throw new HttpError(503, overloadedRetry);
 	const cloudProblem = cloudDocumentsRunnerProblem(runtime.runner_version, runtime.runner_node);
 	if (cloudProblem) throw new HttpError(409, cloudProblem);
