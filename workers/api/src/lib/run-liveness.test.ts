@@ -7,7 +7,7 @@
  * which is the half that would have caught the conflation in the first place.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { countInterruption, getLoopRun, recordIteration, recordLiveness } from "./agent-loop-store.js";
+import { countInterruption, getLoopRun, LIVENESS_WRITE_MIN_MS, recordIteration, recordLiveness } from "./agent-loop-store.js";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
 import { STALE_RUN_MS, sweepStaleRuns } from "./run-sweeper.js";
 import type { Env } from "../types.js";
@@ -178,6 +178,39 @@ describe("recordLiveness — a heartbeat is a statement about the orchestrator, 
 		const row = readRow(d1, "r");
 		expect(row.waiting_reason).toBeNull();
 		expect(row.waiting_until).toBeNull();
+	});
+});
+
+describe("recordLiveness — an unchanged beat does not rewrite the row (#1679)", () => {
+	const park = { reason: "decision" as const, until: NOW + 3_600_000 };
+	it("skips a repeat of the same park inside the throttle, absorbing the drift of a recomputed deadline", async () => {
+		const { env, d1 } = withRun({ runId: "r", startedAt: NOW - 600_000 });
+		await recordLiveness(env, "r", NOW, park);
+		await recordLiveness(env, "r", NOW + 60_000, { ...park, until: park.until + 1_500 });
+		const row = readRow(d1, "r");
+		expect(row.last_alive_at).toBe(NOW);
+		expect(row.waiting_until).toBe(park.until);
+	});
+
+	it("writes once the stored beat is older than the throttle, keeping the park's start", async () => {
+		const { env, d1 } = withRun({ runId: "r", startedAt: NOW - 600_000 });
+		await recordLiveness(env, "r", NOW, park);
+		const parkedSince = readRow(d1, "r").parked_since;
+		await recordLiveness(env, "r", NOW + LIVENESS_WRITE_MIN_MS + 1, park);
+		const row = readRow(d1, "r");
+		expect(row.last_alive_at).toBe(NOW + LIVENESS_WRITE_MIN_MS + 1);
+		expect(row.parked_since).toBe(parkedSince);
+	});
+
+	it("writes at once when the park changes: a new reason, a moved deadline, or a clear", async () => {
+		const { env, d1 } = withRun({ runId: "r", startedAt: NOW - 600_000 });
+		await recordLiveness(env, "r", NOW, park);
+		await recordLiveness(env, "r", NOW + 1_000, { reason: "runner_away", until: park.until });
+		expect(readRow(d1, "r")).toMatchObject({ last_alive_at: NOW + 1_000, waiting_reason: "runner_away" });
+		await recordLiveness(env, "r", NOW + 2_000, { reason: "runner_away", until: park.until + 10 * 60_000 });
+		expect(readRow(d1, "r").last_alive_at).toBe(NOW + 2_000);
+		await recordLiveness(env, "r", NOW + 3_000, null);
+		expect(readRow(d1, "r")).toMatchObject({ last_alive_at: NOW + 3_000, waiting_reason: null, waiting_until: null });
 	});
 });
 

@@ -101,7 +101,7 @@ describe("machine policy — receipt time is not decision time (#1020)", () => {
 		const later = await getMachinePolicy(env(), "u1", M);
 		expect(later.lastAttemptAt).toBe(iso(1_000_000));
 		expect(later.lastDecisionAt).toBeNull();
-		expect(later.lastHeartbeatAt).toBe(iso(1_090_000));
+		expect(later.lastHeartbeatAt).toBe(iso(1_090_000)); // #1679: the 1_030_000 and 1_060_000 beats were inside the refresh interval, so not written
 	});
 
 	it("the runner's own decision/check times are what advance them — and a re-sent decision does not", async () => {
@@ -118,11 +118,15 @@ describe("machine policy — receipt time is not decision time (#1020)", () => {
 			lastCheckAt: iso(1_989_000),
 			nextRetryDueAt: iso(2_005_000),
 			blockerClass: "active_sessions",
-			lastHeartbeatAt: iso(2_030_000),
+			lastHeartbeatAt: iso(2_000_000), // #1679: the unchanged re-send 30s later is not written again
 			observations: [{ success: true, sampledAt: iso(1_989_000), source: "sessions" }],
 		});
+		at(2_070_000);
+		await reportMachinePolicyStatus(env(), "u1", M, report); // unchanged but past the refresh interval: the receipt is written
+		const q = await getMachinePolicy(env(), "u1", M);
+		expect(q.lastHeartbeatAt).toBe(iso(2_070_000));
 		// The heartbeat arrives after the due time, and the decision did not move: a stalled timer is now visible.
-		expect(Date.parse(p.lastHeartbeatAt as string)).toBeGreaterThan(Date.parse(p.nextRetryDueAt as string));
+		expect(Date.parse(q.lastHeartbeatAt as string)).toBeGreaterThan(Date.parse(q.nextRetryDueAt as string));
 	});
 
 	it("interrupted or lost telemetry: a partial report records receipt only; invalid fields are dropped, never invented", async () => {

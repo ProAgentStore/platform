@@ -327,6 +327,13 @@ export function cleanupAnswer(policy: MachinePolicy) {
 }
 
 
+/**
+ * How long an UNCHANGED status report is trusted before `last_heartbeat_at` is written again (#1679). Every attached
+ * agent of a machine posts the same report each 30s cycle; the write fires when anything stored would differ, and
+ * otherwise once a minute. Readers of `last_heartbeat_at` use a 5-minute silence (`UPDATE_SILENCE_MS`).
+ */
+export const HEARTBEAT_RECEIPT_REFRESH_MS = 60_000;
+
 /** Runner observations are accepted only for a policy that already belongs to this owner/id. */
 export async function reportMachinePolicyStatus(env: Pick<Env, "DB">, userId: string, rawMachineId: string | null | undefined, raw: unknown): Promise<void> {
 	const machineId = normalizeMachineId(rawMachineId);
@@ -379,7 +386,17 @@ export async function reportMachinePolicyStatus(env: Pick<Env, "DB">, userId: st
 		update_log = COALESCE(?13, update_log),
 		rollbacks = CASE WHEN ?14 IS NOT NULL THEN ?14 ELSE rollbacks END,
 		rollback_available = CASE WHEN ?15 IS NOT NULL THEN ?15 ELSE rollback_available END,
-		last_heartbeat_at = ?4, updated_at = ?4 WHERE user_id = ?5 AND machine_id = ?6`)
+		last_heartbeat_at = ?4, updated_at = ?4 WHERE user_id = ?5 AND machine_id = ?6
+		AND (status IS NOT ?1 OR last_heartbeat_at IS NULL OR last_heartbeat_at < ?4 - ${HEARTBEAT_RECEIPT_REFRESH_MS}
+		  OR last_error IS NOT ?3
+		  OR (?2 IS NOT NULL AND latest_version IS NOT ?2)
+		  OR (?7 IS NOT NULL AND ?7 > COALESCE(last_decision_at, 0))
+		  OR (?8 IS NOT NULL AND ?8 > COALESCE(last_check_at, 0))
+		  OR (?12 = 1 AND (next_retry_due_at IS NOT ?9 OR blocker_class IS NOT ?10))
+		  OR (?11 IS NOT NULL AND observations IS NOT ?11)
+		  OR (?13 IS NOT NULL AND update_log IS NOT ?13)
+		  OR (?14 IS NOT NULL AND rollbacks IS NOT ?14)
+		  OR (?15 IS NOT NULL AND rollback_available IS NOT ?15))`)
 		.bind(status, latest, error, now, userId, machineId, decisionAt, checkAt, nextRetry, blocker, observations, diagnostics ? 1 : 0, updateLog, rollbacks ? JSON.stringify(rollbacks) : null, rollbackAvailable)
 		.run()
 		.catch(() => undefined);

@@ -929,6 +929,9 @@ export function runtimeStatus(res: Response, okStatus: number): ContentfulStatus
 	return (res.ok ? okStatus : Math.max(400, Math.min(599, res.status))) as ContentfulStatusCode;
 }
 
+/** Seconds an unchanged online beat is trusted before `last_seen_at`/`updated_at` are rewritten (#1679); under HEARTBEAT_FRESH_MS (90s) with the 30s cadence as margin. */
+export const HEARTBEAT_WRITE_MIN_S = 40;
+
 export async function updateRuntimeStatus(
 	env: Env,
 	instanceId: string,
@@ -944,11 +947,16 @@ export async function updateRuntimeStatus(
 	// but `lastSeenAt` itself is shown to the user and fed to `diagnoseAttachment`, and it was a
 	// timestamp of our own conclusion rather than of any contact (#587).
 	const seen = status === "offline" ? "" : ", last_seen_at = datetime('now')";
+	// #1679: an online beat that changes nothing is written at most once per HEARTBEAT_WRITE_MIN_S. Each write
+	// rewrites the row AND its `(…, status, updated_at)` index entry, 2 rows per beat per agent. The beat is every
+	// 30s, so this halves it; the stored `last_seen_at` is then at most ~60s old against the 90s `HEARTBEAT_FRESH_MS`
+	// a reader allows. A status CHANGE (offline → online, any other value) is never throttled, nor is `offline`.
+	const quiet = status === "offline" ? "" : ` AND (status IS NOT ?1 OR last_seen_at IS NULL OR last_seen_at <= datetime('now', '-${HEARTBEAT_WRITE_MIN_S} seconds'))`;
 	if (node) {
 		await env.DB.prepare(
 			`UPDATE instance_runtime_nodes
        SET status = ?1${seen}, updated_at = datetime('now')
-       WHERE instance_id = ?2 AND user_id = ?3 AND runner_node = ?4`,
+       WHERE instance_id = ?2 AND user_id = ?3 AND runner_node = ?4${quiet}`,
 		)
 			.bind(status, instanceId, userId, node)
 			.run();
@@ -967,7 +975,7 @@ export async function updateRuntimeStatus(
 	const stmt = env.DB.prepare(
 		`UPDATE instance_runtimes
      SET status = ?1${seen}, updated_at = datetime('now')
-     WHERE instance_id = ?2 AND user_id = ?3${scope}`,
+     WHERE instance_id = ?2 AND user_id = ?3${scope}${quiet}`,
 	);
 	await (node ? stmt.bind(status, instanceId, userId, node) : stmt.bind(status, instanceId, userId)).run();
 }

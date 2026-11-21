@@ -23,7 +23,15 @@ export interface RunnerAvailability {
 	buckets: AvailabilityBucket[];
 }
 
-/** Only the authenticated heartbeat route calls this. Counts requests, not distinct machines/cycles. */
+/**
+ * Only the authenticated heartbeat route calls this. One runner cycle posts a heartbeat per attached agent within
+ * seconds of each other; a receipt landing within RECEIPT_CYCLE_MS of the bucket's last one is the same cycle and
+ * is not written again (#1679), so `receipts` counts heartbeat CYCLES of a machine, not requests, and the write
+ * volume stops scaling with the number of attached agents. `runnerAvailability` only reads the bucket's presence
+ * and its first/last times; a cycle is 30s, so the 15s window can never merge two cycles.
+ */
+export const RECEIPT_CYCLE_MS = 15_000;
+
 export async function recordHeartbeatReceipt(env: Pick<Env, "DB">, userId: string, node: string, machineId: unknown, receivedAt = Date.now()): Promise<void> {
 	const name = normalizeRunnerNode(node);
 	if (!name) return;
@@ -32,8 +40,9 @@ export async function recordHeartbeatReceipt(env: Pick<Env, "DB">, userId: strin
 	await env.DB.batch([
 		env.DB.prepare(`INSERT INTO runner_heartbeat_receipts (user_id, machine_key, bucket_at, receipts, first_received_at, last_received_at)
 		 VALUES (?1, ?2, ?3, 1, ?4, ?4) ON CONFLICT (user_id, machine_key, bucket_at) DO UPDATE SET
-		 receipts = receipts + 1, first_received_at = MIN(first_received_at, excluded.first_received_at), last_received_at = MAX(last_received_at, excluded.last_received_at)`)
-			.bind(userId, key, bucket, receivedAt),
+		 receipts = receipts + 1, first_received_at = MIN(first_received_at, excluded.first_received_at), last_received_at = MAX(last_received_at, excluded.last_received_at)
+		 WHERE ABS(excluded.last_received_at - runner_heartbeat_receipts.last_received_at) >= ?5`)
+			.bind(userId, key, bucket, receivedAt, RECEIPT_CYCLE_MS),
 		env.DB.prepare("DELETE FROM runner_heartbeat_receipts WHERE user_id = ?1 AND bucket_at < ?2").bind(userId, Math.floor((receivedAt - AVAILABILITY_RETENTION_MS) / AVAILABILITY_BUCKET_MS) * AVAILABILITY_BUCKET_MS),
 	]);
 }

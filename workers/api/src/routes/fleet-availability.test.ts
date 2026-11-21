@@ -31,7 +31,7 @@ describe("server heartbeat receipt timeline", () => {
   expect((await heartbeat({ runnerNode: "pink", machineId: "machine-pink", resources: { sampledAt: NOW + 999999999 } })).status).toBe(200);
   const fleet = await fleetHistory(env, "owner", { tier: "dense", now: NOW });
   expect(fleet.machines[0].latest).toBeNull();
-  expect(fleet.machines[0].availability.buckets).toEqual([{ at: new Date(NOW).toISOString(), receipts: 2, firstReceivedAt: new Date(NOW).toISOString(), lastReceivedAt: new Date(NOW).toISOString() }]);
+  expect(fleet.machines[0].availability.buckets).toEqual([{ at: new Date(NOW).toISOString(), receipts: 1, firstReceivedAt: new Date(NOW).toISOString(), lastReceivedAt: new Date(NOW).toISOString() }]);
   expect(fleet.machines[0].availability.coverage).toBe("observed_only");
  });
  it("does not fabricate history from registration timestamps, resource samples, or empty gaps", async () => {

@@ -259,9 +259,10 @@ describe("health reads the wait: waiting, not working and then stalled (real sch
 		expect(waitClause({ ...row(), status: "running" }, T0 + 5 * MIN)).toMatch(/GIVES UP/);
 		// heartbeat ticks while waiting: liveness moves, progress does not
 		const before = row();
-		await recordLiveness(env, "run-1", T0 + 4 * MIN);
+		const tick = (before.lastAliveAt as number) + 4 * MIN; // past the unchanged-beat throttle (#1679)
+		await recordLiveness(env, "run-1", tick);
 		const after = row();
-		expect(after.lastAliveAt).toBe(T0 + 4 * MIN);
+		expect(after.lastAliveAt).toBe(tick);
 		expect(after.lastProgressAt).toBe(before.lastProgressAt);
 		expect(after.waitingReason).toBe("runner_away");
 		// the machine is back: the reason clears and the run reads as working again

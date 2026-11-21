@@ -612,6 +612,17 @@ export async function recordIteration(env: Env, runId: string, iteration: number
 }
 
 /**
+ * How old `last_alive_at` must be before an UNCHANGED heartbeat rewrites it (#1679). The parked-run tick fires
+ * every minute and was the largest D1 writer on the account (1.5M rows/day, 20-21 Nov). Every reader treats a
+ * run as dead only after 15 minutes (`STALLED_AFTER_MS`, `STALE_DRIVER_MS`; the sweeper's 3h is longer still), so
+ * a value up to 3 minutes + one tick old cannot read a live run as stalled. A change of park (reason, ask, a
+ * moved deadline) always writes at once.
+ */
+export const LIVENESS_WRITE_MIN_MS = 3 * 60_000;
+/** `waiting_until` is recomputed from the clock on each tick, so it drifts by the sleep jitter; that is not a new park. */
+const PARK_UNTIL_JITTER_MS = 60_000;
+
+/**
  * Record that the ORCHESTRATOR is still alive, and — when it is parked — what it is waiting for.
  *
  * The half of {@link recordIteration} that a heartbeat actually wanted. A tick is a statement about
@@ -643,7 +654,9 @@ export async function recordLiveness(
 	wait?: { reason: RunWaitReason; until?: number | null; ask?: WaitingAsk | null } | null,
 ): Promise<void> {
 	if (wait === undefined) {
-		await env.DB.prepare("UPDATE agent_loop_runs SET last_alive_at = ?2 WHERE run_id = ?1").bind(runId, at).run();
+		await env.DB.prepare("UPDATE agent_loop_runs SET last_alive_at = ?2 WHERE run_id = ?1 AND (last_alive_at IS NULL OR last_alive_at < ?2 - ?3)")
+			.bind(runId, at, LIVENESS_WRITE_MIN_MS)
+			.run();
 		return;
 	}
 	// `parked_since` is set only when the row is NOT ALREADY PARKED, and that CASE is the whole
@@ -663,9 +676,14 @@ export async function recordLiveness(
 		          WHEN waiting_reason IS NULL OR parked_since IS NULL THEN ?2
 		          ELSE parked_since
 		        END
-		  WHERE run_id = ?1`,
+		  WHERE run_id = ?1
+		    AND (last_alive_at IS NULL OR last_alive_at < ?2 - ?6
+		         OR waiting_reason IS NOT ?3
+		         OR waiting_ask IS NOT ?5
+		         OR (waiting_until IS NULL) <> (?4 IS NULL)
+		         OR ABS(waiting_until - ?4) > ?7)`,
 	)
-		.bind(runId, at, wait?.reason ?? null, wait?.until ?? null, wait?.reason === "decision" && wait.ask ? JSON.stringify(wait.ask) : null)
+		.bind(runId, at, wait?.reason ?? null, wait?.until ?? null, wait?.reason === "decision" && wait.ask ? JSON.stringify(wait.ask) : null, LIVENESS_WRITE_MIN_MS, PARK_UNTIL_JITTER_MS)
 		.run();
 }
 
