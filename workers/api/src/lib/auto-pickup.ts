@@ -571,9 +571,12 @@ export async function sweepAutoPickup(env: Env, now = Date.now(), wake: typeof w
 			`SELECT i.id, i.user_id FROM agent_instances i
 			  WHERE i.status = 'active' AND json_valid(i.config) AND json_extract(i.config, '$.autoPickup.enabled') = 1
 			    AND (NOT EXISTS (SELECT 1 FROM auto_pickup_log l WHERE l.instance_id = i.id AND l.outcome = 'none_eligible' AND l.created_at > ?1)
-			    OR EXISTS (SELECT 1 FROM auto_pickup_log l JOIN instance_objective_queue q ON q.id = l.entry_id
-			      WHERE l.instance_id = i.id AND l.outcome = 'started' AND l.reserved = 0
-			        AND q.status = 'pending' AND (q.next_retry_at IS NULL OR q.next_retry_at <= ?3)))
+			    -- #1683: from the pending entries of the instance (usually none) to their log row, as
+			    -- pendingAutoPickupAdmission does (#1659), not from every log row the instance ever wrote.
+			    -- CROSS JOIN fixes that order; the unary + keeps the log lookup on its entry index.
+			    OR EXISTS (SELECT 1 FROM instance_objective_queue q CROSS JOIN auto_pickup_log l ON l.entry_id = q.id
+			      WHERE q.instance_id = i.id AND q.status = 'pending' AND (q.next_retry_at IS NULL OR q.next_retry_at <= ?3)
+			        AND +l.instance_id = i.id AND l.outcome = 'started' AND l.reserved = 0))
 			  ORDER BY COALESCE(CASE WHEN json_type(i.config, '$.autoPickupSweep.lastInspectedAt') = 'integer'
 			     THEN json_extract(i.config, '$.autoPickupSweep.lastInspectedAt') END, 0), i.id LIMIT ?2`,
 		)
