@@ -195,7 +195,8 @@ function sweep(root: string, find = findHandAuthoredControls) {
 // 45 → 44 (console) and 23 → 22 (coder/web) at #187: the per-message copy button, one copy in
 // each tree, became ONE block in packages/blocks — a move, not a migration to <Button>, so it is
 // counted there (1) rather than disappearing from the sweep.
-const PINNED = { "store/console": 44, "store/admin": 4, "agents/coder/web": 22, "packages/blocks": 1 };
+// 44 → 43 at #1338: the answer box's hand-built Send button (RunDetail) became `<Button variant="primary" size="lg">` inside AnswerBox — a migration, so the pin goes DOWN.
+const PINNED = { "store/console": 43, "store/admin": 4, "agents/coder/web": 22, "packages/blocks": 1 };
 
 describe.each(TREES)("%s holds its count of buttons that draw their own box", (name, root) => {
 	/**

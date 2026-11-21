@@ -1,4 +1,5 @@
 import TakeoverBanner from "../components/TakeoverBanner";
+import AnswerBox from "../components/AnswerBox";
 import TakeoverLive from "../components/TakeoverLive";
 import RunReplay, { useBrowserArtifacts } from "../components/RunReplay";
 import { type LegacyShot, replayFrames, SCREENSHOTS_OFF_TEXT } from "../lib/runReplay";
@@ -454,14 +455,10 @@ export default function RunDetail() {
 							)}
 						</div>
 					)}
-					{((options.length === 0 && parts.length === 0) || otherAnswer) && <div className="flex gap-2 mt-2">
-						{/* The agent's question is already rendered above; point at it instead of
-						    duplicating it into a placeholder that vanishes mid-answer. This is the
-						    field where someone types a legal name or a salary because the agent
-						    refused to guess — losing the question while typing is the worst case. */}
-						<input aria-labelledby={fieldLabelId} value={inputVal} onChange={(e) => setInputVal(e.target.value)} readOnly={saving} aria-busy={saving || undefined} onKeyDown={(e) => { if (e.key === "Enter") sendValue(inputVal); }} placeholder={field} className="flex-1 min-w-0 bg-panel border border-line rounded-lg px-3 py-2.5 text-base text-ink" />
-						<button type="button" disabled={saving || !inputVal.trim()} onClick={() => sendValue(inputVal)} className="px-5 py-2.5 rounded-lg bg-accent text-white font-bold text-base disabled:opacity-40 shrink-0">{saving ? "Saving…" : "Send"}</button>
-					</div>}
+					{/* The agent's question is already rendered above; AnswerBox points at it instead of duplicating it into a placeholder that vanishes
+					    mid-answer. This is where someone types a legal name or a salary because the agent refused to guess — losing the question, or being
+					    unable to see what they typed, while answering is the worst case (#1338). */}
+					{((options.length === 0 && parts.length === 0) || otherAnswer) && <AnswerBox value={inputVal} onChange={setInputVal} onSend={() => sendValue(inputVal)} saving={saving} labelledBy={fieldLabelId} placeholder={field} />}
 					<AnswerStatus send={send} resumed={false} />
 				</div>
 			)}

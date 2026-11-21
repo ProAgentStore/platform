@@ -118,25 +118,62 @@ test.describe("on a touch phone", () => {
 		expect(ctl.posts).toHaveLength(3);
 	});
 
-	test("typed answer: keeps the text on failure, sends once despite repeated Enter", async ({ page }) => {
+	test("typed answer: keeps the text on failure; Enter is a NEW LINE and never sends; Send sends once (#1338)", async ({ page }) => {
 		const ctl = await mount(page, {});
 		ctl.status = 500; ctl.error = "boom";
 		const input = page.getByPlaceholder("Which approach should I take for the migration?");
-		const sendBtn = input.locator("xpath=..").getByRole("button", { name: /^(Send|Saving…)$/ });
+		const sendBtn = page.getByTestId("answer-send");
 		await input.fill("my legal name");
 		await sendBtn.tap();
 		await expect(page.getByRole("alert")).toContainText("boom");
 		await expect(input).toHaveValue("my legal name");
 		ctl.status = 200;
+		// Enter makes a second line and sends nothing — only the one failed POST so far.
+		await input.press("Enter");
+		await input.pressSequentially("second line");
+		await expect(input).toHaveValue("my legal name\nsecond line");
+		expect(ctl.posts).toHaveLength(1);
 		const release = gate(ctl);
-		await input.press("Enter");
-		await input.press("Enter");
+		await sendBtn.tap();
 		await expect(page.getByTestId("answer-saving")).toBeVisible();
 		await expect(sendBtn).toBeDisabled();
+		await sendBtn.click({ force: true }); // a repeat press that slips past the disabled attribute
 		release();
 		await expect(page.getByTestId("answer-saved")).toBeVisible();
 		await expect(input).toHaveValue("");
-		expect(ctl.posts.map((p) => p.value)).toEqual(["my legal name", "my legal name"]);
+		expect(ctl.posts.map((p) => p.value)).toEqual(["my legal name", "my legal name\nsecond line"]);
+	});
+
+	test("the answer box is comfortably tall, grows with long text, and Send stays reachable with no sideways scroll (#1338)", async ({ page }) => {
+		await mount(page, {});
+		const box = page.getByTestId("answer-textarea");
+		const sendBtn = page.getByTestId("answer-send");
+		await expect(box).toBeVisible();
+		const empty = (await box.boundingBox())?.height ?? 0;
+		expect(empty).toBeGreaterThanOrEqual(110); // ~4 lines, not one
+		expect(await box.evaluate((el) => Number.parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(16); // no iOS focus-zoom
+		// Send is a full-width button UNDER the box on a phone.
+		const b = await box.boundingBox();
+		const s = await sendBtn.boundingBox();
+		expect((s?.y ?? 0) >= (b?.y ?? 0) + (b?.height ?? 0)).toBe(true);
+		expect(s?.width ?? 0).toBeGreaterThanOrEqual((b?.width ?? 1) - 2);
+		// Long text grows the box, up to a share of the viewport, then scrolls INSIDE it.
+		await box.fill(Array.from({ length: 30 }, (_, i) => `line ${i + 1} of a long, considered reply`).join("\n"));
+		const grown = (await box.boundingBox())?.height ?? 0;
+		expect(grown).toBeGreaterThan(empty);
+		expect(grown).toBeLessThanOrEqual(844 * 0.45 + 1);
+		expect(await box.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+		expect(await noHScroll(page)).toBe(true);
+		// Reachable: the button can be scrolled to and is fully on screen.
+		await sendBtn.scrollIntoViewIfNeeded();
+		await expect(sendBtn).toBeInViewport({ ratio: 1 });
+		await expect(sendBtn).toBeEnabled();
+	});
+
+	test("a long unbroken word wraps inside the box instead of widening the page (#1338)", async ({ page }) => {
+		await mount(page, {});
+		await page.getByTestId("answer-textarea").fill("x".repeat(400));
+		expect(await noHScroll(page)).toBe(true);
 	});
 
 	test("multipart: Send shows saving, disables the picks, and sends one combined answer", async ({ page }) => {
@@ -161,5 +198,20 @@ test.describe("on a touch phone", () => {
 		await expect(page.getByTestId("answer-saving")).toContainText("Still saving", { timeout: 12_000 });
 		release();
 		await expect(page.getByTestId("answer-saved")).toBeVisible();
+	});
+});
+
+test.describe("mobile — on a very narrow phone", () => {
+	test.use({ viewport: { width: 320, height: 568 }, hasTouch: true, isMobile: true });
+
+	test("the answer box and Send fit a 320px screen (#1338)", async ({ page }) => {
+		await mount(page, {});
+		const box = page.getByTestId("answer-textarea");
+		await box.fill("a reply that is long enough to wrap across several lines on a very narrow screen, and then some more words after it");
+		expect(await noHScroll(page)).toBe(true);
+		const b = await box.boundingBox();
+		expect((b?.x ?? -1) >= 0 && (b?.x ?? 0) + (b?.width ?? 0) <= 320).toBe(true);
+		await page.getByTestId("answer-send").scrollIntoViewIfNeeded();
+		await expect(page.getByTestId("answer-send")).toBeInViewport({ ratio: 1 });
 	});
 });
