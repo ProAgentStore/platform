@@ -651,8 +651,21 @@ export async function reopenInfrastructureFailedLeads(env: Env, instanceId: stri
 	const rows = results ?? [];
 	const counts: InfrastructureReopenCounts = { dryRun: opts.dryRun, scanned: rows.length, reopened: 0, engineQuota: 0, runnerOverloaded: 0, notInfrastructure: 0, leadMovedOn: 0, truncated: rows.length >= REOPEN_LIMIT };
 	for (const row of rows) {
-		const { results: attempts } = await env.DB.prepare("SELECT id, state, outcome, detail FROM job_lead_browser_verification_attempts WHERE instance_id = ?1 AND lead_id = ?2 ORDER BY attempt, created_at").bind(instanceId, row.lead_id).all<{ id: string; state: string; outcome: string | null; detail: string | null }>();
-		const found = (attempts ?? []).map((a) => (a.state === "completed" && a.outcome === "temporarily_unverifiable" ? infrastructureFailureOfDetail(a.detail) : null));
+		const { results: attempts } = await env.DB.prepare("SELECT id, state, outcome, detail, run_id FROM job_lead_browser_verification_attempts WHERE instance_id = ?1 AND lead_id = ?2 ORDER BY attempt, created_at").bind(instanceId, row.lead_id).all<{ id: string; state: string; outcome: string | null; detail: string | null; run_id: string | null }>();
+		const found: Array<InfrastructureFailure | null> = [];
+		for (const a of attempts ?? []) {
+			if (a.state !== "completed" || a.outcome !== "temporarily_unverifiable") {
+				found.push(null);
+				continue;
+			}
+			// The stored detail is clipped to 300 characters and an engine's limit line comes last, so when it does not say, the run's own error does (#1611).
+			let f = infrastructureFailureOfDetail(a.detail);
+			if (!f && a.run_id) {
+				const run = await getLocalBrowserRun(env, instanceId, row.user_id, a.run_id);
+				f = run?.status === "failed" ? infrastructureFailure(run.errorCode, run.error, now) : null;
+			}
+			found.push(f);
+		}
 		if (!found.length || found.some((f) => !f)) {
 			counts.notInfrastructure++;
 			continue;

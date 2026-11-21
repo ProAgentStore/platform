@@ -22,6 +22,10 @@ describe("infrastructure failures of a verification run (#1611)", () => {
 		expect(infrastructureFailureOfDetail("The verification run ended failed (runner_overloaded): load")).toMatchObject({ kind: "runner_overloaded" });
 		expect(infrastructureFailureOfDetail("The verification run ended failed (runner_lost).")).toBeNull();
 		expect(infrastructureFailureOfDetail("The run reported no typed outcome.")).toBeNull();
+		// The readable sentences a later write stores in place of the raw output (#1598).
+		expect(infrastructureFailureOfDetail("Codex usage limit reached. Resets at 11 Nov, 5:38 pm.")).toMatchObject({ kind: "engine_quota" });
+		expect(infrastructureFailureOfDetail("Codex account has no quota left.")).toMatchObject({ kind: "engine_quota" });
+		expect(infrastructureFailureOfDetail("Codex was unavailable.")).toBeNull();
 	});
 	it("defers to a future reset (capped), else a bounded backoff", () => {
 		expect(deferUntil({ kind: "engine_quota", resetAt: NOW + 3_600_000 }, NOW)).toBe(NOW + 3_600_000);

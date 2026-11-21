@@ -1103,9 +1103,9 @@ describe("an engine usage limit or an overloaded runner is not a verification at
 	});
 
 	describe("repair of leads already closed by it", () => {
-		const closed = (id: string, details: Array<{ outcome?: string; detail: string }>) => {
+		const closed = (id: string, details: Array<{ outcome?: string; detail: string; runId?: string }>) => {
 			d1.exec(`INSERT INTO job_lead_browser_verifications (instance_id, lead_id, user_id, canonical_url, state, attempts, next_attempt_at, awaiting_since, created_at, updated_at) VALUES ('s1', '${id}', 'u1', '${CANONICAL}', 'unverifiable', 3, 1, 1, 1, 1)`);
-			for (const [i, a] of details.entries()) d1.exec(`INSERT INTO job_lead_browser_verification_attempts (id, instance_id, user_id, lead_id, attempt, state, outcome, detail, created_at) VALUES ('${id}-r${i}', 's1', 'u1', '${id}', ${i + 1}, 'completed', '${a.outcome ?? "temporarily_unverifiable"}', '${a.detail.replace(/'/g, "''")}', ${i + 1})`);
+			for (const [i, a] of details.entries()) d1.exec(`INSERT INTO job_lead_browser_verification_attempts (id, instance_id, user_id, lead_id, attempt, run_id, state, outcome, detail, created_at) VALUES ('${id}-r${i}', 's1', 'u1', '${id}', ${i + 1}, ${a.runId ? `'${a.runId}'` : "NULL"}, 'completed', '${a.outcome ?? "temporarily_unverifiable"}', '${a.detail.replace(/'/g, "''")}', ${i + 1})`);
 			leads.set(id, { id, data: { status: "unverifiable", lifecycle_version: 2, url: CANONICAL, verification: { state: "unverifiable", reason: "temporarily_unverifiable_exhausted", attempts: 3, receipt_id: `${id}-r${details.length - 1}` } } } as unknown as CollectionRecord);
 		};
 		const quota = { detail: `The verification run ended failed (engine_failed): ${CODEX_LIMIT}` };
@@ -1133,6 +1133,15 @@ describe("an engine usage limit or an overloaded runner is not a verification at
 			expect(leads.get("mixed")!.data.status).toBe("unverifiable");
 			// Idempotent: nothing left to reopen.
 			expect(await reopenInfrastructureFailedLeads(env, "s1", { dryRun: false }, 9_000)).toMatchObject({ scanned: 2, reopened: 0 });
+		});
+
+		it("reopens a lead whose stored detail was clipped before the limit line, by reading the run (#1611)", async () => {
+			const preamble = `The verification run ended failed (engine_failed): The codex CLI exited with code 1: {"type":"warning","message":"Under-development features enabled: skip_host_skill_discovery. ${"x".repeat(300)}`.slice(0, 300);
+			runs.set("clip-1", { id: "clip-1", status: "failed", errorCode: "engine_failed", error: `The codex CLI exited with code 1: ${"x".repeat(200)}\n${CODEX_LIMIT}\nturn.failed`, policy: { engine: "codex" } });
+			runs.set("clip-2", { id: "clip-2", status: "failed", errorCode: "engine_failed", error: "codex crashed", policy: { engine: "codex" } });
+			closed("c", [{ detail: preamble, runId: "clip-1" }, { detail: "Codex usage limit reached. Resets at 11 Nov, 5:38 pm." }, { detail: preamble, runId: "clip-1" }]);
+			closed("notquota", [{ detail: preamble, runId: "clip-2" }]);
+			expect(await reopenInfrastructureFailedLeads(env, "s1", { dryRun: true }, 9_000)).toMatchObject({ scanned: 2, reopened: 1, engineQuota: 1, notInfrastructure: 1 });
 		});
 
 		it("leaves a lead the Scout has moved on from", async () => {

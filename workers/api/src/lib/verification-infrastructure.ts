@@ -58,8 +58,16 @@ export function deferUntil(f: InfrastructureFailure, now: number): number {
 	return Math.min(f.resetAt, now + MAX_DEFER_MS);
 }
 
-/** An attempt's stored detail (`The verification run ended failed (CODE): ERROR`), read back as an infrastructure failure. */
+/** The sentences `readableVerificationDetail` (#1598) stores for a refused engine in place of the raw CLI output (`verification-engine-failure.ts`). */
+const READABLE_ENGINE_QUOTA = /^\S+ usage limit reached\.|^\S+ account has no quota left\.$/;
+
+/**
+ * An attempt's stored detail, read back as an infrastructure failure: the raw `The verification run ended failed (CODE): ERROR`, or
+ * the readable sentence a later write replaced it with. The raw form is clipped to 300 characters when stored and Codex prints its
+ * limit line LAST, so a clipped detail can miss it: the caller then reads the run itself (#1611).
+ */
 export function infrastructureFailureOfDetail(detail: string | null | undefined): InfrastructureFailure | null {
+	if (READABLE_ENGINE_QUOTA.test(detail ?? "")) return { kind: "engine_quota", resetAt: null };
 	const m = /ended failed \(([a-z_]+)\)(?::\s*([\s\S]*))?$/.exec(detail ?? "");
 	return m ? infrastructureFailure(m[1], m[2]) : null;
 }
