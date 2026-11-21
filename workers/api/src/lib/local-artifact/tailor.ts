@@ -270,7 +270,9 @@ export async function startTailoring(env: Env, instanceId: string, uid: string, 
 	}
 	const runtime = await getLiveRuntime(env, instanceId, uid);
 	if (!runtime) throw new HttpError(503, "No runner is connected. Run `pags up` on the machine that holds your job materials; the lead will be tailored when it connects.");
-	const overloaded = await overloadRefusal(env, instanceId, uid, runtime.runner_node, "tailoring runs", true); // #1175
+	// Admission refuses before a run or application exists. Only a connection's outbox retries this 503
+	// (triggers.ts runs this action under it); an owner start has no durable retry, so it must say to start again (#1568, as apply.ts).
+	const overloaded = await overloadRefusal(env, instanceId, uid, runtime.runner_node, "tailoring runs", source === "connection"); // #1175
 	if (overloaded) throw new HttpError(503, overloaded);
 	const cloudProblem = cloudDocumentsRunnerProblem(runtime.runner_version, runtime.runner_node);
 	if (cloudProblem) throw new HttpError(409, cloudProblem);

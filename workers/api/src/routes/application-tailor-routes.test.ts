@@ -138,6 +138,28 @@ async function call(method: string, path: string, body?: unknown) {
 const appCount = async () => (await d1.DB.prepare("SELECT COUNT(*) AS n FROM job_applications").first<{ n: number }>())?.n;
 const runCount = async () => (await d1.DB.prepare("SELECT COUNT(*) AS n FROM local_artifact_runs").first<{ n: number }>())?.n;
 
+describe("an overloaded machine refuses a new tailoring start with wording true for who retries (#1568)", () => {
+	const overload = () => d1.exec(`UPDATE instance_runtime_nodes SET gate_state = '{"state":"rejecting","metric":"memory","value":99.6,"threshold":92,"streak":0,"since":1}' WHERE instance_id = 't1'`);
+	it("an owner start says to start again, and creates no run, application or runner call", async () => {
+		overload();
+		const result = await call("POST", "/t1/applications", { event: leadEvent() });
+		expect(result.status).toBe(503);
+		expect(result.body.error).toMatch(/start it again once it has/);
+		expect(result.body.error).not.toMatch(/retry automatically/);
+		expect(sent).toEqual([]);
+		expect(await runCount()).toBe(0);
+		expect(await appCount()).toBe(0);
+	});
+	it("a connection start keeps the automatic-retry wording, since its outbox retries the 503", async () => {
+		overload();
+		const { startTailoring } = await import("../lib/local-artifact/tailor.js");
+		const error = await startTailoring(env(), "t1", "u1", leadEvent(), "connection").catch((e: unknown) => e);
+		expect(error).toMatchObject({ status: 503 });
+		expect((error as Error).message).toMatch(/will retry automatically/);
+		expect(await runCount()).toBe(0);
+	});
+});
+
 describe("owner instance memory reaches tailoring (#1508)", () => {
 	const preference = (answer: string) => ({ key: "job_application_preferences", source: "user", type: "preference", updatedAt: Date.now(), content: JSON.stringify({ version: 1, facts: [{ field: "salary_expectation", answer, confirmedAt: "2026-10-01" }] }) });
 	it("uses only this Tailor's preferences and refreshes them on queued dispatch", async () => {
