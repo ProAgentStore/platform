@@ -27,7 +27,8 @@ describe("sweepAutoPickup reads only the auto-pickup set (#1683)", () => {
 		 ('on', 'a', 'u', 'active', '${on}'),
 		 ('off', 'a', 'u', 'active', '${off}'),
 		 ('none', 'a', 'u', 'active', '{}'),
-		 ('paused', 'a', 'u', 'paused', '${on}')`);
+		 ('paused', 'a', 'u', 'paused', '${on}'),
+		 ('bad', 'a', 'u', 'active', 'not json')`);
 		const woken: string[] = [];
 		await sweepAutoPickup(env, 1_000_000, (async (_e: Env, id: string) => {
 			woken.push(id);

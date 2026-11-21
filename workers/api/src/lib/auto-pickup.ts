@@ -569,7 +569,7 @@ export async function sweepAutoPickup(env: Env, now = Date.now(), wake: typeof w
 	try {
 		const { results } = await env.DB.prepare(
 			`SELECT i.id, i.user_id FROM agent_instances i
-			  WHERE i.status = 'active' AND json_extract(i.config, '$.autoPickup.enabled') = 1
+			  WHERE i.status = 'active' AND json_valid(i.config) AND json_extract(i.config, '$.autoPickup.enabled') = 1
 			    AND (NOT EXISTS (SELECT 1 FROM auto_pickup_log l WHERE l.instance_id = i.id AND l.outcome = 'none_eligible' AND l.created_at > ?1)
 			    OR EXISTS (SELECT 1 FROM auto_pickup_log l JOIN instance_objective_queue q ON q.id = l.entry_id
 			      WHERE l.instance_id = i.id AND l.outcome = 'started' AND l.reserved = 0
