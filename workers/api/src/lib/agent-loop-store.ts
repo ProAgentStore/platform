@@ -411,10 +411,20 @@ export async function pageLoopRuns(env: Env, userId: string, instanceId: string,
 	return { runs, more, nextCursor: more && last ? keysetCursor(last.startedAt, last.runId) : null };
 }
 
-/** How many runs an instance has in all — so a page of {@link listLoopRuns} can say it is one (#898). */
-export async function countLoopRuns(env: Env, userId: string, instanceId: string): Promise<number> {
-	const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM agent_loop_runs WHERE user_id = ?1 AND instance_id = ?2").bind(userId, instanceId).first<{ n: number }>();
-	return Number(row?.n ?? 0);
+/** The most runs {@link countLoopRuns} reads for its total before it reports a lower bound (#1681). */
+export const LOOP_RUNS_COUNT_CAP = 1000;
+
+/**
+ * How many runs an instance has, so a page of {@link listLoopRuns} can say it is one (#898). Bounded (#1681): a bare
+ * `COUNT(*)` reads one index entry per run (~6k and growing) on every listing request. This counts over a LIMITed
+ * subquery, so rows read per call stop growing with the run history. `lowerBound` means "at least `total`". The
+ * limit is never below `reach + 1` (the last row the page can show, plus one), so offset paging still sees "more".
+ */
+export async function countLoopRuns(env: Env, userId: string, instanceId: string, reach = 0): Promise<{ total: number; lowerBound: boolean }> {
+	const cap = Math.max(LOOP_RUNS_COUNT_CAP, reach) + 1;
+	const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM (SELECT 1 FROM agent_loop_runs WHERE user_id = ?1 AND instance_id = ?2 LIMIT ?3)").bind(userId, instanceId, cap).first<{ n: number }>();
+	const total = Number(row?.n ?? 0);
+	return { total, lowerBound: total >= cap };
 }
 
 /**

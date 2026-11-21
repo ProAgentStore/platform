@@ -1543,14 +1543,14 @@ toolRoutes.get("/:id/loop", async (c) => {
 	// deleted between page reads. `offset` / `starts_offset` remain the weaker legacy contract.
 	const after = cursorParam(c.req.query("cursor"), "cursor");
 	const startsAfter = cursorParam(c.req.query("starts_cursor"), "starts_cursor");
-	const [{ runs, more, nextCursor }, total] = await Promise.all([pageLoopRuns(c.env, session.uid, instanceId, { limit, offset, after }), countLoopRuns(c.env, session.uid, instanceId)]);
+	const [{ runs, more, nextCursor }, { total, lowerBound: totalIsLowerBound }] = await Promise.all([pageLoopRuns(c.env, session.uid, instanceId, { limit, offset, after }), countLoopRuns(c.env, session.uid, instanceId, after ? 0 : offset + limit)]); // #1681: bounded
 	const nextOffset = !after && more ? offset + runs.length : null;
 	// The repository's pipeline, BESIDE the runs' `health` and never folded into it (#903).
 	const repoCi = await instanceRepoCi(c.env, instanceId, session.uid);
 	const startsPage = c.req.query("include_starts") === "true" ? await loopStartsPage(c.env, session.uid, instanceId, Number(c.req.query("starts_offset")), startsAfter) : {};
 	const [pending, autoPickup, runnerGate] = await Promise.all([answersPendingFor(c.env, runs.map((r) => r.runId)), autoPickupStatus(c.env, instanceId, session.uid), instanceGateView(c.env, instanceId, session.uid)]); // #1231, #1233, #1275
 	const facts = await sessionFactsFor(c.env, session.uid, runs.map((r) => r.sessionId ?? "")); // #1185: a run is read beside its session
-	return c.json({ runs: runs.map((run) => reconcileRunWithSession(withHealth(run, now, pending), facts, now)), autoPickup, runnerGate, total, offset: after ? null : offset, nextOffset, nextCursor, complete: !more, ...(repoCi ? { repoCi } : {}), ...startsPage });
+	return c.json({ runs: runs.map((run) => reconcileRunWithSession(withHealth(run, now, pending), facts, now)), autoPickup, runnerGate, total, ...(totalIsLowerBound ? { totalIsLowerBound } : {}), offset: after ? null : offset, nextOffset, nextCursor, complete: !more, ...(repoCi ? { repoCi } : {}), ...startsPage });
 });
 
 /**
