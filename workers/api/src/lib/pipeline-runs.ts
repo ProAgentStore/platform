@@ -16,6 +16,7 @@
 import { closePipelineRunCard, upsertPipelineRunCard } from "./pipeline-board.js";
 import type { Env } from "../types.js";
 import { logError } from "./error-log.js";
+import { recordTriggerRunOutcome } from "./local-browser/trigger-outcome.js";
 
 export type RunStatus = "running" | "completed" | "failed" | "interrupted";
 
@@ -155,6 +156,12 @@ export async function closeRun(
 	} catch (err) {
 		const owner = await runOwner(env, runId);
 		await recordBookkeepingFailure(env, "card", runId, owner?.user_id ?? null, owner?.instance_id ?? null, err);
+	}
+	// A run a trigger started reports its outcome on that trigger (#1582). `interrupted` is not an
+	// outcome (the run resumes), so it stays out. Best-effort: never blocks the close.
+	if (status === "completed" || status === "failed") {
+		const owner = await runOwner(env, runId);
+		if (owner) await recordTriggerRunOutcome(env, { id: runId, instanceId: owner.instance_id, userId: owner.user_id }, { status, errorCode: null, error: detail ?? null }).catch(() => undefined);
 	}
 	return true;
 }
