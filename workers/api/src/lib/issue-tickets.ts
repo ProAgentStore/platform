@@ -63,6 +63,9 @@ export function parseIssueCache(raw: string | null | undefined): IssueCache | nu
 	}
 }
 
+/** Hours an unchanged issue's ticket row is trusted before the sync touches it again (#1687); half of the one-day `context_old` limit. */
+export const ISSUE_CACHE_REFRESH_HOURS = 12;
+
 /** How strongly a link was made: a person or a named argument outranks a parsed one, which outranks the sync. */
 const LINK_RANK: Record<IssueLinkedBy, number> = { sync: 0, objective: 1, explicit: 2, manual: 3 };
 
@@ -85,17 +88,25 @@ export async function upsertIssueTicket(
 		createdBy: input.linkedBy === "manual" ? "human" : "agent",
 	});
 	const ranks = Object.entries(LINK_RANK);
+	// The linked_by this write would leave: never a weaker link over a stronger one.
+	const nextLinkedBy = `CASE
+		          WHEN linked_by IS NULL THEN ?8
+		          WHEN (CASE linked_by ${ranks.map(([k, v]) => `WHEN '${k}' THEN ${v}`).join(" ")} END) < ?9 THEN ?8
+		          ELSE linked_by END`;
+	// #1687: the sync lists the newest issue again on every pass (its `since` is inclusive), and a manual refresh lists
+	// them all. A call that would store what the row already holds writes nothing, except once per
+	// ISSUE_CACHE_REFRESH_HOURS so `updated_at` (the age `codingQuestionSource` judges `context_old` by, one day) stays
+	// younger than that for an issue the sync keeps seeing.
 	await env.DB.prepare(
 		`UPDATE tickets
 		    SET repo_id = ?4, issue_number = ?5,
 		        issue_cache = COALESCE(?6, issue_cache),
 		        title = CASE WHEN ?6 IS NULL THEN title ELSE ?7 END,
-		        linked_by = CASE
-		          WHEN linked_by IS NULL THEN ?8
-		          WHEN (CASE linked_by ${ranks.map(([k, v]) => `WHEN '${k}' THEN ${v}`).join(" ")} END) < ?9 THEN ?8
-		          ELSE linked_by END,
+		        linked_by = ${nextLinkedBy},
 		        updated_at = datetime('now')
-		  WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3`,
+		  WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3
+		    AND (repo_id IS NOT ?4 OR issue_number IS NOT ?5 OR (?6 IS NOT NULL AND (issue_cache IS NOT ?6 OR title IS NOT ?7))
+		         OR linked_by IS NOT (${nextLinkedBy}) OR updated_at <= datetime('now', '-${ISSUE_CACHE_REFRESH_HOURS} hours'))`,
 	)
 		.bind(
 			ticket.id,

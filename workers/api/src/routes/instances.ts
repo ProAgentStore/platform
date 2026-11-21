@@ -819,12 +819,12 @@ instanceRoutes.post("/:instanceId/runtime/heartbeat", async (c) => {
 	const node = normalizeRunnerNode(body.runnerNode);
 	await recordHeartbeatReceipt(c.env, session.uid, node, body.machineId, receivedAt).catch(() => undefined);
 	await updateRuntimeStatus(c.env, instanceId, session.uid, "online", node);
-		await saveResourceSample(c.env, instanceId, session.uid, node, body.resources).catch(() => undefined); // #924, best-effort: never fails a heartbeat
+		const saved = await saveResourceSample(c.env, instanceId, session.uid, node, body.resources).catch(() => null); // #924, best-effort: never fails a heartbeat
 		// #1264: re-judge the admission gate off the sample just stored, so coding_loop_start reads a
 		// verdict no older than this heartbeat. One notification per OVERLOAD EPISODE, not per
 		// rejected job — gated on the accepting → rejecting transition itself, read off the DB write.
 		if (node) {
-			const gate = await updateGateState(c.env, instanceId, session.uid, node).catch(() => null);
+			const gate = await updateGateState(c.env, instanceId, session.uid, node, Date.now(), saved).catch(() => null);
 			if (gate?.enteredOverload) {
 				const rejection = rejectionFor(gate.state, node);
 				if (rejection) {

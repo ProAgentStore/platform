@@ -317,10 +317,11 @@ export async function machineNodeNames(env: Pick<Env, "DB">, userId: string, mac
  * every kind on every hostname the machine has used — so two agents on one laptop share one verdict. A runner
  * too old to send a machine id keeps the per-row behaviour of #1264.
  */
-export async function updateGateState(env: Pick<Env, "DB"> & { RUNNER_GATE_DEFAULTS?: string }, instanceId: string, userId: string, node: string, now: number = Date.now()): Promise<{ state: GateState; enteredOverload: boolean }> {
+export async function updateGateState(env: Pick<Env, "DB"> & { RUNNER_GATE_DEFAULTS?: string }, instanceId: string, userId: string, node: string, now: number = Date.now(), fresh: RunnerResourceSample | null = null): Promise<{ state: GateState; enteredOverload: boolean }> {
 	try {
 		const row = await env.DB.prepare(NODE_SQL).bind(instanceId, userId, node).first<GateRow>();
-		const own = row ? parseResourceSample(row.resources) : null;
+		// `fresh` is the sample of the heartbeat that called: the row keeps only every other one (#1687), so the stored copy can be older.
+		const own = fresh ?? (row ? parseResourceSample(row.resources) : null);
 		// No sample yet (an older CLI, or the first heartbeat before one arrives) — nothing to judge, stay open.
 		if (!own) return { state: DEFAULT_GATE_STATE, enteredOverload: false };
 		const defaults = gateDefaults(env);
@@ -341,7 +342,8 @@ export async function updateGateState(env: Pick<Env, "DB"> & { RUNNER_GATE_DEFAU
 		// row is counted by the heartbeat that stored it.
 		if (machine?.gate_evaluated_at && own.sampledAt < machine.gate_evaluated_at + GATE_SAMPLE_SPACING_MS) return { state: prev, enteredOverload: false };
 		const names = await machineNodeNames(env, userId, row.machine_id, node);
-		const sample = (await latestResourceSample(env, userId, names)) ?? own;
+		const stored = await latestResourceSample(env, userId, names);
+		const sample = stored && stored.sampledAt > own.sampledAt ? stored : own;
 		const thresholds = parseGateThresholds(machine?.gate_thresholds ? safeParse(machine.gate_thresholds) : null, defaults);
 		const next = nextGateState(prev, sample, await activeWorkOn(env, userId, names), thresholds, now);
 		await env.DB.prepare(

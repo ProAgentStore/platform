@@ -391,16 +391,34 @@ export function resourcesView(raw: unknown, activeSessions: number | null, gateS
 }
 
 /**
- * Record a heartbeat's sample on this machine's row AND in its history (#924). A missing or
- * malformed sample writes nothing.
+ * Sample age after which an unchanged heartbeat rewrites the node row's `resources` (#1687). The runner beats every
+ * 30s, so this stores every other sample. Readers of the stored copy tolerate more than that: duplicate-runner
+ * detection takes a sample up to `DUPLICATE_WINDOW_MS` (90s) old, the runtime verdict 3 minutes, and the admission
+ * gate is handed the sample of the beat it runs on (see `updateGateState`), so it never judges the stored copy.
+ * The stored copy is therefore at most ~60s old, the same margin the status rows keep.
  */
-export async function saveResourceSample(env: Pick<Env, "DB">, instanceId: string, userId: string, node: string, raw: unknown): Promise<void> {
+export const RESOURCES_WRITE_MIN_MS = 40_000;
+
+/**
+ * Record a heartbeat's sample on this machine's row AND in its history (#924). A missing or
+ * malformed sample writes nothing. The row is rewritten only when its stored sample is at least
+ * `RESOURCES_WRITE_MIN_MS` older than this one (or newer, i.e. the runner's clock went back, or absent), or at once
+ * when the runtime's own health verdict flipped (the one field a reader acts on within a beat);
+ * the history always records the sample. Returns the parsed sample so the caller can judge it without
+ * reading the row back.
+ */
+export async function saveResourceSample(env: Pick<Env, "DB">, instanceId: string, userId: string, node: string, raw: unknown): Promise<RunnerResourceSample | null> {
 	const sample = parseResourceSample(raw);
-	if (!sample || !node) return;
-	await env.DB.prepare("UPDATE instance_runtime_nodes SET resources = ?1 WHERE instance_id = ?2 AND user_id = ?3 AND runner_node = ?4")
-		.bind(JSON.stringify(sample), instanceId, userId, node)
+	if (!sample || !node) return null;
+	await env.DB.prepare(
+		`UPDATE instance_runtime_nodes SET resources = ?1 WHERE instance_id = ?2 AND user_id = ?3 AND runner_node = ?4
+		   AND (resources IS NULL OR json_extract(resources, '$.sampledAt') IS NULL OR json_extract(resources, '$.sampledAt') > ?5 OR json_extract(resources, '$.sampledAt') <= ?5 - ${RESOURCES_WRITE_MIN_MS}
+		        OR json_extract(resources, '$.runtime.ok') IS NOT ?6)`,
+	)
+		.bind(JSON.stringify(sample), instanceId, userId, node, sample.sampledAt, sample.runtime ? (sample.runtime.ok ? 1 : 0) : null)
 		.run();
 	await recordHistory(env, userId, node, sample);
+	return sample;
 }
 
 /** Coding sessions active on these machine names, for this user. */
