@@ -62,6 +62,13 @@ jobs:
       # in 0ca213b3. Extracting the chain (#779) is what stops the copy existing to go stale.
       - uses: ./.github/actions/build-platform
 
+      # #1676: `pnpm test` runs the browser-runner suite, whose tests launch chromium. Without this the
+      # browsers download mid-suite (LocalRunner first launch) and a test that launches before the
+      # download finishes fails with "Executable doesn't exist". Same step as ci.yml.
+      - name: Install native runner browser engines
+        timeout-minutes: 30
+        run: node scripts/install-playwright-browsers.mjs --runner
+
       - name: Run tests
         run: pnpm test
 

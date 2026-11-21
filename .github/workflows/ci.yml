@@ -271,6 +271,11 @@ jobs:
         run: cd store/admin && npx vite build
       - name: Build host pages
         run: cd workers/host && node build.js
+      # #1676: installed BEFORE the suite. Tests that launch chromium directly (upload-verification)
+      # otherwise race the in-suite `LocalRunner` download and fail "Executable doesn't exist".
+      - name: Install native runner browser engines (#1431)
+        timeout-minutes: 30
+        run: node scripts/install-playwright-browsers.mjs --runner
       - name: Unit + integration tests (verdict from the JSON report, #920)
         # Not bare `pnpm test`: test:full fails unless vitest's own JSON report exists, counts
         # >0 tests and records 0 failures — so a lost report or an empty collection is red
@@ -301,9 +306,6 @@ jobs:
       - name: Install Playwright browsers (bounded, with diagnostics)
         timeout-minutes: 30
         run: node scripts/install-playwright-browsers.mjs
-      - name: Install native runner browser engines (#1431)
-        timeout-minutes: 30
-        run: node scripts/install-playwright-browsers.mjs --runner
       - name: Native browser tools, screenshots and takeover across engines (#1431)
         env:
           PAGS_TEST_BROWSER_ENGINES: chromium,firefox,webkit
