@@ -106,7 +106,7 @@ export async function upsertIssueTicket(
 		        updated_at = datetime('now')
 		  WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3
 		    AND (repo_id IS NOT ?4 OR issue_number IS NOT ?5 OR (?6 IS NOT NULL AND (issue_cache IS NOT ?6 OR title IS NOT ?7))
-		         OR linked_by IS NOT (${nextLinkedBy}) OR updated_at <= datetime('now', '-${ISSUE_CACHE_REFRESH_HOURS} hours'))`,
+		         OR linked_by IS NOT (${nextLinkedBy}) OR updated_at <= datetime('now', ?10))`,
 	)
 		.bind(
 			ticket.id,
@@ -118,6 +118,7 @@ export async function upsertIssueTicket(
 			input.cache ? `#${input.issueNumber} ${input.cache.title}` : null,
 			input.linkedBy,
 			LINK_RANK[input.linkedBy],
+			`-${ISSUE_CACHE_REFRESH_HOURS} hours`,
 		)
 		.run();
 	return { ticketId: ticket.id, created };
