@@ -580,6 +580,17 @@ describe("settings and access", () => {
 		expect(JSON.parse(row!.config)).toMatchObject({ runnerNode: "mac", applicationTailor: { engine: "codex" } });
 	});
 
+	it("a removed source stays removed on the next read, and other sources keep their value (#1567)", async () => {
+		const put = await call("PUT", "/t1/application-tailor/settings", { sources: { profile: null, answers: "answers/screening.md" } });
+		expect(put.body.settings.sources).toEqual({ resume: "resume.md", answers: "answers/screening.md" });
+		expect((await call("GET", "/t1/application-tailor/settings")).body.settings.sources).toEqual({ resume: "resume.md", answers: "answers/screening.md" });
+		// A later unrelated patch must not bring it back either.
+		expect((await call("PUT", "/t1/application-tailor/settings", { retainDays: 5 })).body.settings.sources).toEqual({ resume: "resume.md", answers: "answers/screening.md" });
+		// Removing every source also sticks.
+		await call("PUT", "/t1/application-tailor/settings", { sources: { resume: "", answers: null } });
+		expect((await call("GET", "/t1/application-tailor/settings")).body.settings.sources).toEqual({});
+	});
+
 	it.each([
 		[{ authMode: "api-key" }, /never on a provider API key/],
 		[{ workspace: "/etc" }, /under the home folder/],

@@ -100,7 +100,11 @@ export function mergeTailorSettings(current: ApplicationTailorSettings, patch: u
 
 /** The stored settings over the defaults. A stored block that no longer validates reads as the reason. */
 export function effectiveTailorSettings(stored: unknown): { settings: ApplicationTailorSettings } | { error: string } {
-	return stored === undefined || stored === null ? { settings: TAILOR_DEFAULTS } : mergeTailorSettings(TAILOR_DEFAULTS, stored);
+	if (stored === undefined || stored === null) return { settings: TAILOR_DEFAULTS };
+	// A stored block carrying `sources` is the owner's whole choice (PUT stores the full merged settings), so a role absent from it was
+	// REMOVED (#1567) and must not be re-added from the defaults; only a block with no `sources` at all ("never set") takes them.
+	const hasSources = typeof stored === "object" && !Array.isArray(stored) && "sources" in stored && (stored as { sources: unknown }).sources !== undefined;
+	return mergeTailorSettings(hasSources ? { ...TAILOR_DEFAULTS, sources: {} } : TAILOR_DEFAULTS, stored);
 }
 
 export function sourcesOf(s: ApplicationTailorSettings): LocalArtifactSource[] {
