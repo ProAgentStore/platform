@@ -347,11 +347,11 @@ export async function syncLeadWritebacks(env: DB, sinceMs: number, limit = 50): 
 	const { results } = await env.DB.prepare(
 		// Two index-served arms instead of one OR (#1680): the OR defeated every index and scanned all of history.
 		// Recently moved seeks idx_job_applications_updated; the unsynced-disposition backlog reads only its partial index
-		// (the arm predicate must stay identical to that index's WHERE for the planner to use it).
+		// (INDEXED BY pins it: the planner otherwise picks by SQLite version and table stats, and the arm predicate must stay identical to that index's WHERE).
 		`SELECT id, user_id FROM (
 			SELECT id, user_id, updated_at FROM job_applications WHERE updated_at >= ?1
 			UNION
-			SELECT id, user_id, updated_at FROM job_applications WHERE lead_disposition_synced_at IS NULL AND (archive_reason = 'job_unavailable' OR json_extract(lead, '$.verification.state') IN ('live', 'unavailable', 'unverifiable'))
+			SELECT id, user_id, updated_at FROM job_applications INDEXED BY idx_job_applications_disposition_backlog WHERE lead_disposition_synced_at IS NULL AND (archive_reason = 'job_unavailable' OR json_extract(lead, '$.verification.state') IN ('live', 'unavailable', 'unverifiable'))
 		) ORDER BY updated_at DESC LIMIT ?2`,
 	)
 		.bind(sinceMs, limit)
