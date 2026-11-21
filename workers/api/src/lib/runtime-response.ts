@@ -98,5 +98,32 @@ export function runtimeNodeResponse(row: RuntimeRow) {
 	return {
 		...runtimeResponse(row),
 		relayName: relayNameForInstance(row.instance_id, row.runner_node),
+		machineId: row.machine_id || null,
 	};
+}
+
+/**
+ * A machine's node rows, with a renamed machine's older hostnames marked rather than listed as
+ * separate offline machines (#1583). `instance_runtime_nodes` is keyed on hostname (the relay DO
+ * name and legacy pins depend on it), so a hostname change inserts a second row for the same
+ * machine. Presentation only: `supersededBy` names the freshest row that shares this row's
+ * `machine_id`, and is null for that freshest row, for a row alone on its id, and always for a row
+ * with no `machine_id`. Nothing is hidden, merged or deleted.
+ */
+export function runtimeNodesResponse(rows: readonly RuntimeRow[]) {
+	const seen = (r: RuntimeRow) => {
+		const t = Date.parse(r.last_seen_at ? `${r.last_seen_at.replace(" ", "T")}Z` : "");
+		return Number.isNaN(t) ? -1 : t;
+	};
+	const freshest = new Map<string, RuntimeRow>();
+	for (const r of rows) {
+		if (!r.machine_id) continue;
+		const best = freshest.get(r.machine_id);
+		if (!best || seen(r) > seen(best)) freshest.set(r.machine_id, r);
+	}
+	return rows.map((r) => {
+		const best = r.machine_id ? freshest.get(r.machine_id) : undefined;
+		const superseded = best && best !== r && seen(best) > seen(r);
+		return { ...runtimeNodeResponse(r), supersededBy: superseded ? best.runner_node : null };
+	});
 }

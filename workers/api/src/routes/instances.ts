@@ -82,7 +82,7 @@ import {
 	getLiveRuntime,
 	d1Timestamp,
 	holdsDefaultRow,
-	runtimeNodeResponse,
+	runtimeNodesResponse,
 	runtimeResponse,
 	safeCapabilities,
 	updateRuntimeStatus,
@@ -653,7 +653,7 @@ instanceRoutes.post("/:instanceId/runtime", async (c) => {
 		const autoUpdatePolicy = { ...updatePolicy, fleetUpdating: await fleetUpdatingFor(c.env, session.uid, machineId) };
 		return c.json({
 			runtime: runtime ? runtimeResponse(runtime) : { instanceId, endpointUrl, placement, status: "registered" },
-			nodes: nodes.map(runtimeNodeResponse),
+			nodes: runtimeNodesResponse(nodes),
 			autoUpdatePolicy,
 			...cleanupAnswer(await getMachinePolicy(c.env, session.uid, machineId)),
 		}, 201);
@@ -666,7 +666,7 @@ instanceRoutes.get("/:instanceId/runtime", async (c) => {
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	const runtime = await getRuntime(c.env, instanceId, session.uid);
 	const nodes = await listRuntimeNodes(c.env, instanceId, session.uid).catch(() => []);
-	return c.json({ runtime: runtime ? runtimeResponse(runtime) : null, nodes: nodes.map(runtimeNodeResponse) });
+	return c.json({ runtime: runtime ? runtimeResponse(runtime) : null, nodes: runtimeNodesResponse(nodes) });
 });
 
 /**

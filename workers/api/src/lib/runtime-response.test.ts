@@ -13,7 +13,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { d1Timestamp, runtimeNodeResponse, runtimeResponse } from "./runtime-response.js";
+import { d1Timestamp, runtimeNodeResponse, runtimeNodesResponse, runtimeResponse } from "./runtime-response.js";
 import { HEARTBEAT_FRESH_MS } from "./runtime-attachment.js";
 import type { RuntimeRow } from "./runtime-nodes.js";
 
@@ -141,9 +141,10 @@ describe("a synthesised timestamp is written in the shape the derivation parses 
 });
 
 describe("runtimeNodeResponse is runtimeResponse plus the relay name", () => {
-	it("adds relayName and changes nothing else", () => {
+	it("adds relayName and machineId and changes nothing else", () => {
 		const r = row({ runner_node: "laptop-A" });
-		const { relayName, ...rest } = runtimeNodeResponse(r);
+		const { relayName, machineId, ...rest } = runtimeNodeResponse(r);
+		expect(machineId).toBeNull();
 		expect(relayName).toBe("12ebf1f0:node:laptop-A");
 		expect(rest).toEqual(runtimeResponse(r));
 	});
@@ -153,5 +154,28 @@ describe("runtimeNodeResponse is runtimeResponse plus the relay name", () => {
 		// this function grows is filled with 0, 1, 2… Assert against the real call shape.
 		const rows = [row({ last_seen_at: stamp(0) }), row({ last_seen_at: stamp(10 * 3_600_000) })];
 		expect(rows.map(runtimeNodeResponse).map((n) => n.status)).toEqual(["online", "offline"]);
+	});
+});
+
+describe("runtimeNodesResponse marks a renamed machine's older rows (#1583)", () => {
+	it("points older rows sharing a machine id at the freshest one", () => {
+		const out = runtimeNodesResponse([
+			row({ runner_node: "macmini", machine_id: "m1", last_seen_at: stamp(0) }),
+			row({ runner_node: "Macmini.modem", machine_id: "m1", last_seen_at: stamp(5 * 86_400_000) }),
+			row({ runner_node: "Sergeys-Mac-mini.local", machine_id: "m1", last_seen_at: stamp(6 * 86_400_000) }),
+		]);
+		expect(out.map((n) => n.supersededBy)).toEqual([null, "macmini", "macmini"]);
+		expect(out.map((n) => n.machineId)).toEqual(["m1", "m1", "m1"]);
+	});
+
+	it("never marks NULL machine ids, lone machines, or rows with an equal heartbeat", () => {
+		const out = runtimeNodesResponse([
+			row({ runner_node: "a", machine_id: null, last_seen_at: stamp(0) }),
+			row({ runner_node: "b", machine_id: null, last_seen_at: stamp(86_400_000) }),
+			row({ runner_node: "d", machine_id: "m3", last_seen_at: stamp(86_400_000) }),
+			row({ runner_node: "e", machine_id: "m4", last_seen_at: stamp(0) }),
+			row({ runner_node: "f", machine_id: "m4", last_seen_at: stamp(0) }),
+		]);
+		expect(out.every((n) => n.supersededBy === null)).toBe(true);
 	});
 });

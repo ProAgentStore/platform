@@ -213,7 +213,7 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 
 	server.tool(
 		"describe_instance",
-		"Read a secret-safe execution description for one of your instances: template and declared tools, runtime registration and runner nodes, credential posture counts (never credential values), named handoffs, current/recent run metadata, and the migrations that define those records. Use this to distinguish a legacy managed Claude-API browser agent from a local Codex/Claude CLI Playwright runner without joining opaque ids yourself. This never returns runtime tokens, encrypted key material, credential usernames, connection config, traces, or artifact contents.",
+		"Read a secret-safe execution description for one of your instances: template and declared tools, runtime registration and runner nodes (each with its `machineId`; a node whose hostname was renamed carries `supersededBy`, the fresher node name for the same machine, so it is not a separate offline machine), credential posture counts (never credential values), named handoffs, current/recent run metadata, and the migrations that define those records. Use this to distinguish a legacy managed Claude-API browser agent from a local Codex/Claude CLI Playwright runner without joining opaque ids yourself. This never returns runtime tokens, encrypted key material, credential usernames, connection config, traces, or artifact contents.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Private instance ID from my_instances."),
