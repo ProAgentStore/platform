@@ -70,7 +70,8 @@ jobs:
   publish:
     needs: [smoke-linux, smoke-windows]
     runs-on: ${{ fromJSON(vars.PAGS_RUNNER || '"ubuntu-24.04"') }}  # PAGS_RUNNER (#1214) names the pinned self-hosted machine when Actions minutes run out; the fallback stays pinned, see #1266
-    timeout-minutes: 45  # 30 min availability poll (#1529) + install/build/publish
+    # 30 min availability poll (#1529) + install/build/publish
+    timeout-minutes: 45
     permissions:
       contents: read
       id-token: write
