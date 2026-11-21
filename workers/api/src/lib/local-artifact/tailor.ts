@@ -539,7 +539,13 @@ async function syncTailorRunFromRunner(env: Env, uid: string, run: TailorRun, no
 	}
 	if (!res.ok) return lostByTime ? endLost(env, uid, run, "The runner stopped answering for this run.", now) : run;
 	const body = (await runtimeJson(res)) as { state?: unknown; events?: unknown; lastSeq?: unknown; result?: unknown };
-	const events = (Array.isArray(body.events) ? body.events : []).map(parseLocalArtifactEvent).filter((e): e is NonNullable<typeof e> => e !== null) as TraceEvent[];
+	// Keep the runner's sequence identity: the store drops an event at or below its own cursor, so
+	// an overlapping poll cannot append it twice (#1525).
+	const events = (Array.isArray(body.events) ? body.events : []).flatMap((raw): TraceEvent[] => {
+		const parsed = parseLocalArtifactEvent(raw);
+		const seq = (raw as { seq?: unknown } | null)?.seq;
+		return parsed ? [typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0 ? { ...parsed, seq } : parsed] : [];
+	});
 	const lastSeq = typeof body.lastSeq === "number" && body.lastSeq >= run.runnerSeq ? body.lastSeq : run.runnerSeq;
 	let current = (await updateTailorRun(env, run, { events, runnerSeq: lastSeq }, now)) ?? (await getTailorRun(env, run.instanceId, uid, run.id)) ?? run;
 	if (body.state === "ended" && body.result !== undefined && !isTerminalRun(current.status)) current = await settleFromResult(env, uid, current, body.result, now, runtime);

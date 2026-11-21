@@ -593,7 +593,7 @@ export interface TailorRunPolicy {
 	stallMinutes?: number | null;
 }
 
-export type TraceEvent = Omit<LocalArtifactEvent, "type"> & { type: LocalArtifactEvent["type"] | "run.requested" | "runner.dispatched" | "run.ended" };
+export type TraceEvent = Omit<LocalArtifactEvent, "type"> & { type: LocalArtifactEvent["type"] | "run.requested" | "runner.dispatched" | "run.ended"; seq?: number };
 
 export interface TailorRun {
 	id: string;
@@ -674,8 +674,27 @@ export async function createTailorRun(env: DB, r: { id: string; instanceId: stri
 export const MAX_TRACE = 200;
 
 /**
+ * Append to the row's CURRENT trace inside the UPDATE, never to the caller's snapshot (#1525, the
+ * Tailor twin of #1524). ?7 is this writer's events, ?8 its cursor. A runner event (it carries
+ * `seq`) at or below the stored cursor was already persisted by an overlapping poll and is
+ * skipped; platform events have no `seq` and always append. Retention is unchanged: the FIRST
+ * MAX_TRACE events, in append order. json(value) keeps objects from becoming JSON strings.
+ */
+const APPEND_TAILOR_TRACE_SQL = `(WITH events AS (
+	SELECT value, 0 AS part, CAST(key AS INTEGER) AS position FROM json_each(
+		CASE WHEN json_valid(trace) THEN CASE WHEN json_type(trace) = 'array' THEN trace ELSE '[]' END ELSE '[]' END)
+	UNION ALL
+	SELECT value, 1 AS part, CAST(key AS INTEGER) AS position FROM json_each(?7)
+	WHERE json_extract(value, '$.seq') IS NULL OR json_extract(value, '$.seq') > runner_seq
+), retained AS (
+	SELECT value, part, position FROM events ORDER BY part, position LIMIT ${MAX_TRACE}
+)
+SELECT json_group_array(json(value)) FROM (SELECT value FROM retained ORDER BY part, position))`;
+
+/**
  * Move a run — compare-and-set on the status it was read in — appending trace events and moving
- * the runner cursor in the same statement. Null when the move lost a race.
+ * the runner cursor in the same statement. Null when the move lost a race, or when the writer's
+ * runner cursor is older than the stored one (a stale poll must not regress or re-add evidence).
  */
 export async function updateTailorRun(
 	env: DB,
@@ -684,15 +703,14 @@ export async function updateTailorRun(
 	now: number,
 ): Promise<TailorRun | null> {
 	const to = u.to ?? run.status;
-	const trace = [...run.trace, ...(u.events ?? [])].slice(0, MAX_TRACE);
 	const res = await env.DB.prepare(
 		`UPDATE local_artifact_runs
 		    SET status = ?1, result = COALESCE(?2, result), engine_auth = COALESCE(?3, engine_auth), error_code = CASE WHEN ?1 = 'completed' THEN NULL ELSE COALESCE(?4, error_code) END,
-		        error = CASE WHEN ?1 = 'completed' THEN NULL ELSE COALESCE(?5, error) END, runner_node = COALESCE(?6, runner_node), trace = ?7, runner_seq = MAX(runner_seq, ?8),
+		        error = CASE WHEN ?1 = 'completed' THEN NULL ELSE COALESCE(?5, error) END, runner_node = COALESCE(?6, runner_node), trace = ${APPEND_TAILOR_TRACE_SQL}, runner_seq = MAX(runner_seq, ?8),
 		        last_synced_at = CASE WHEN ?9 THEN ?10 ELSE last_synced_at END,
 		        started_at = CASE WHEN ?1 = 'running' AND started_at IS NULL THEN ?10 ELSE started_at END,
 		        ended_at = CASE WHEN ?11 THEN ?10 ELSE ended_at END, updated_at = ?10
-		  WHERE id = ?12 AND instance_id = ?13 AND status = ?14`,
+		  WHERE id = ?12 AND instance_id = ?13 AND status = ?14 AND (?9 = 0 OR runner_seq <= ?8)`,
 	)
 		.bind(
 			to,
@@ -701,7 +719,7 @@ export async function updateTailorRun(
 			u.errorCode ?? null,
 			u.error ?? null,
 			u.runnerNode ?? null,
-			JSON.stringify(trace),
+			JSON.stringify(u.events ?? []),
 			u.runnerSeq ?? 0,
 			u.runnerSeq !== undefined ? 1 : 0,
 			now,
