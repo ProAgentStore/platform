@@ -345,7 +345,14 @@ export async function mirrorToJobs(env: DB, userId: string, applicationId: strin
 /** The cron backstop: re-send the state of applications that moved recently. Idempotent on the lead's side. */
 export async function syncLeadWritebacks(env: DB, sinceMs: number, limit = 50): Promise<number> {
 	const { results } = await env.DB.prepare(
-		"SELECT id, user_id FROM job_applications WHERE updated_at >= ?1 OR (lead_disposition_synced_at IS NULL AND (archive_reason = 'job_unavailable' OR json_extract(lead, '$.verification.state') IN ('live', 'unavailable', 'unverifiable'))) ORDER BY updated_at DESC LIMIT ?2",
+		// Two index-served arms instead of one OR (#1680): the OR defeated every index and scanned all of history.
+		// Recently moved seeks idx_job_applications_updated; the unsynced-disposition backlog reads only its partial index
+		// (the arm predicate must stay identical to that index's WHERE for the planner to use it).
+		`SELECT id, user_id FROM (
+			SELECT id, user_id, updated_at FROM job_applications WHERE updated_at >= ?1
+			UNION
+			SELECT id, user_id, updated_at FROM job_applications WHERE lead_disposition_synced_at IS NULL AND (archive_reason = 'job_unavailable' OR json_extract(lead, '$.verification.state') IN ('live', 'unavailable', 'unverifiable'))
+		) ORDER BY updated_at DESC LIMIT ?2`,
 	)
 		.bind(sinceMs, limit)
 		.all<{ id: string; user_id: string }>();
