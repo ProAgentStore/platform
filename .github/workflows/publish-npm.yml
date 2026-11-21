@@ -70,7 +70,7 @@ jobs:
   publish:
     needs: [smoke-linux, smoke-windows]
     runs-on: ${{ fromJSON(vars.PAGS_RUNNER || '"ubuntu-24.04"') }}  # PAGS_RUNNER (#1214) names the pinned self-hosted machine when Actions minutes run out; the fallback stays pinned, see #1266
-    timeout-minutes: 20
+    timeout-minutes: 45  # 30 min availability poll (#1529) + install/build/publish
     permissions:
       contents: read
       id-token: write
@@ -124,7 +124,7 @@ jobs:
         run: cd packages/cli && npm publish --access public
 
       # #1529: npm accepting a publish is not the same as the version being readable. Twice the public registry kept
-      # answering 404 for minutes after "+ @proagentstore/cli@x.y.z" (3 to 26 min observed). Anything that dispatches
+      # answering 404 for minutes after "+ @proagentstore/cli@x.y.z" (3 to ~26 min observed). Anything that dispatches
       # a runner update straight after this workflow must not race that gap, so the job only succeeds once the exact
       # version AND the `latest` tag resolve. Skipped when the version already existed (nothing was published).
       - name: Verify CLI is available on the public registry
@@ -134,7 +134,7 @@ jobs:
         run: |
           registry="https://registry.npmjs.org"
           pkg="@proagentstore/cli"
-          attempts=40   # 40 x 15s = 10 minutes
+          attempts=120   # 120 x 15s = 30 minutes
           for i in $(seq 1 "$attempts"); do
             exact="$(npm view "$pkg@$VERSION" version --prefer-online --registry="$registry" 2>/dev/null || true)"
             latest="$(npm view "$pkg" dist-tags.latest --prefer-online --registry="$registry" 2>/dev/null || true)"
@@ -145,5 +145,5 @@ jobs:
             echo "Attempt $i/$attempts: exact='${exact:-<404>}' latest='${latest:-<none>}', want '$VERSION'. Retrying in 15s."
             sleep 15
           done
-          echo "::error::$pkg@$VERSION was accepted by npm publish but is still not visible on $registry after 10 minutes (exact='${exact:-<404>}', latest='${latest:-<none>}'). Registry propagation is pending, not failed: do NOT republish this version and do NOT dispatch runner_update until 'npm view $pkg@$VERSION version' returns $VERSION."
+          echo "::error::$pkg@$VERSION was accepted by npm publish but is still not visible on $registry after 30 minutes (exact='${exact:-<404>}', latest='${latest:-<none>}'). Registry propagation is pending, not failed: do NOT republish this version and do NOT dispatch runner_update until 'npm view $pkg@$VERSION version' returns $VERSION."
           exit 1
