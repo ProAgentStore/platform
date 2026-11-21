@@ -645,8 +645,13 @@ export async function syncApplyRun(env: Env, uid: string, run: ApplyRun, now = D
 	return synced;
 }
 
+/** The runner's status page size (`LocalApplyRuntime.status` slices `pending` at 500). A page this full may have more behind it. */
+const RUNNER_STATUS_PAGE = 500;
+/** Extra pages one sync will drain after the runner has ended; the runner keeps at most 1000 events, so this is never the limit. */
+const MAX_TERMINAL_PAGES = 4;
+
 /** Bring one run up to date from its runner, mirroring a pause onto the application. */
-async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now: number): Promise<ApplyRun> {
+async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now: number, pagesLeft = MAX_TERMINAL_PAGES): Promise<ApplyRun> {
 	// A run recorded but never handed over (the Worker died between the two) is not left queued forever.
 	if (run.status === "queued") {
 		// A definitive busy/offline refusal is a durable capacity wait, not an abandoned start.
@@ -726,6 +731,11 @@ async function syncApplyRunFromRunner(env: Env, uid: string, run: ApplyRun, now:
 	const to = body.state === "paused" && pause ? "paused" : body.state === "running" ? "running" : run.status;
 	const accepted = await updateApplyRun(env, run, { to, events, runnerSeq: lastSeq, ...(pause?.answerWait && run.pause?.handoffRequestId !== pause.handoffRequestId ? { expectedRunnerSeq: run.runnerSeq } : {}), ...(to !== run.status || to === "paused" ? { pause: to === "paused" ? pause : null } : {}) }, now);
 	if (!accepted || accepted.runnerSeq > lastSeq) return (await getApplyRun(env, run.instanceId, uid, run.id)) ?? run;
+	// #1527: an ended runner returns its result with EVERY page, but a settled run is never polled
+	// again, so a full page may not be the last. Keep the run unsettled and read the next page (read-only
+	// status call; no browser work). A short page, including the empty one after exactly 500, ends it.
+	// Out of pages: leave the run unsettled and the next tick carries on, rather than drop the rest.
+	if (body.state === "ended" && events.length >= RUNNER_STATUS_PAGE) return pagesLeft > 0 ? syncApplyRunFromRunner(env, uid, accepted, now, pagesLeft - 1) : accepted;
 	let current: ApplyRun = accepted;
 	// Receipt is durable before a cloud brain can see the pause. The checkpoint has no prose or
 	// form values — only runner-derived facts validated by `sanitizeSupervisorFacts` above.

@@ -66,3 +66,47 @@ describe("application sync trace races (#1524)", () => {
 		expect(await syncApplyRun(env, "u", await read(), 4)).toMatchObject({ status: "paused", runnerSeq: 0, trace: [], result: null });
 	});
 });
+
+describe("application terminal trace paging (#1527)", () => {
+	const result = { runId: "run", outcome: "awaiting_review", mode: "fill_and_review", traceId: "run", engineAuth: "machine-login", filled: 1, uploaded: [], submitAttempted: false, summary: "Done" };
+	/** The runner's real contract (runtime.ts status): events after `afterSeq`, at most 500 per page, `lastSeq` = page end while more remain. */
+	function endedRunner(total: number) {
+		const afterSeqs: number[] = [];
+		const answer = async (_env: unknown, _runtime: unknown, path: string, init: { body: string }) => {
+			if (path !== "/local-apply/status") return new Response(null, { status: 404 });
+			const after = (JSON.parse(init.body) as { afterSeq: number }).afterSeq;
+			afterSeqs.push(after);
+			const pending = Array.from({ length: Math.max(0, total - after) }, (_, i) => event(after + i + 1));
+			const page = pending.slice(0, 500);
+			return Response.json({ state: "ended", events: page, lastSeq: page.length < pending.length ? page[page.length - 1].seq : total, result });
+		};
+		runtimeCall.mockImplementation(answer);
+		return { afterSeqs, answer };
+	}
+
+	it.each([
+		["more than one page pending at termination", 700, [0, 500]],
+		["exactly one full page", 500, [0, 500]],
+		["a short run", 3, [0]],
+	])("drains every page before settling: %s", async (_name, total, expectedAfter) => {
+		const { afterSeqs } = endedRunner(total);
+		const synced = await syncApplyRun(env, "u", await read(), 4);
+		expect(afterSeqs).toEqual(expectedAfter);
+		expect(synced).toMatchObject({ status: "awaiting_review", runnerSeq: total });
+		const stored = await read();
+		expect(stored.runnerSeq).toBe(total);
+		expect(Math.max(...stored.trace.map((e) => e.seq ?? 0))).toBe(total);
+	});
+
+	it("does not settle while pages remain, and a later tick resumes from the stored cursor", async () => {
+		const { afterSeqs, answer } = endedRunner(700);
+		let secondPageUp = false;
+		runtimeCall.mockImplementation((e: unknown, r: unknown, path: string, init: { body: string }) =>
+			path === "/local-apply/status" && (JSON.parse(init.body) as { afterSeq: number }).afterSeq === 500 && !secondPageUp ? Promise.resolve(new Response(null, { status: 503 })) : answer(e, r, path, init));
+		expect(await syncApplyRun(env, "u", await read(), 4)).toMatchObject({ status: "paused", runnerSeq: 500, result: null });
+		secondPageUp = true;
+		await syncApplyRun(env, "u", await read(), 5);
+		expect(afterSeqs).toEqual([0, 500]);
+		expect(await read()).toMatchObject({ status: "awaiting_review", runnerSeq: 700 });
+	});
+});
