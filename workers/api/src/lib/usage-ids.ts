@@ -112,6 +112,16 @@ export function usageCoverageSql(withRange: boolean): string {
  *    already names an instance correctly is unaffected. Only rows whose `instance_id` resolves to
  *    nothing — the ones these readers could not see at all — fall through to `agent_id`.
  *
+ * ── Why the OR and the unary plus (#1682)
+ *
+ * `COALESCE(ia.id, ub.id) = ?` cannot use an index, so the planner read every ledger row of the user
+ * (~56,600 rows per call, the top reader of the database) and probed `agent_instances` twice per row.
+ * The COALESCE is only true when `instance_id` or `agent_id` IS the instance, so
+ * `(u.instance_id = ? OR u.agent_id = ?)` is implied by it and changes no result; it lets SQLite
+ * serve the rows by `idx_ai_usage_instance` and `idx_ai_usage_agent_time` (multi-index OR). The `+`
+ * on `user_id` stops the planner preferring a per-user index, which it otherwise does on a database
+ * without ANALYZE statistics; the equality still filters every row, so tenant scoping is unchanged.
+ *
  * ── Why the FROM stays at the call site
  *
  * `lib/usage-aggregates.ts` (#346) judges every `SUM(cost_micros)` on the SQL AS WRITTEN inside one
@@ -129,7 +139,9 @@ export function usageCoverageSql(withRange: boolean): string {
 export function usageInstanceScopeSql(userParam: string, instanceParam: string): string {
 	return `LEFT JOIN agent_instances ia ON ia.id = u.instance_id AND ia.user_id = u.user_id
 	 LEFT JOIN agent_instances ub ON ub.id = u.agent_id    AND ub.user_id = u.user_id
-	 WHERE u.user_id = ${userParam} AND COALESCE(ia.id, ub.id) = ${instanceParam}`;
+	 WHERE +u.user_id = ${userParam}
+	   AND (u.instance_id = ${instanceParam} OR u.agent_id = ${instanceParam})
+	   AND COALESCE(ia.id, ub.id) = ${instanceParam}`;
 }
 
 /** The instances a Usage response may need to name. Small, and read apart from the row scan:

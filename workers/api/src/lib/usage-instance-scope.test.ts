@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { realSchemaD1, seedTenant } from "./d1-sqlite.js";
+import { usageInstanceScopeSql } from "./usage-ids.js";
 import { resolveMeterIds } from "./meter-ids.js";
 import { readPointInTime, statsPeriod, type StatsCtx } from "./stats-sources.js";
 import { instanceSpendMicros } from "./usage.js";
@@ -158,6 +159,49 @@ describe("instance-scoped ledger readers see the rows the writer mislabelled (#6
 		try {
 			expect(await instanceSpendMicros({ DB: d1.DB } as unknown as Env, "u1", "inst-1")).toBe(500);
 			expect(await instanceSpendMicros({ DB: d1.DB } as unknown as Env, "u1", "inst-2")).toBe(0);
+		} finally {
+			d1.close();
+		}
+	});
+});
+
+describe("instance-scoped spend reads the ledger through an index (#1682)", () => {
+	const OLD = `SELECT COALESCE(SUM(cost_micros), 0) AS total FROM ai_usage u
+		  LEFT JOIN agent_instances ia ON ia.id = u.instance_id AND ia.user_id = u.user_id
+		  LEFT JOIN agent_instances ub ON ub.id = u.agent_id AND ub.user_id = u.user_id
+		  WHERE u.user_id = ?1 AND COALESCE(ia.id, ub.id) = ?2 AND payer IN ('byok-api', 'platform')`;
+
+	it("returns exactly what the COALESCE statement returned, for every user and instance", async () => {
+		const d1 = fixture();
+		d1.exec("INSERT OR IGNORE INTO users (id, github_login) VALUES ('u2', 'u2')");
+		usageRow(d1, { id: "a", agent: "inst-1", instance: null, payer: "platform", cost: 3 });
+		usageRow(d1, { id: "b", agent: "agent-1", instance: "inst-1", payer: "byok-api", cost: 5 });
+		usageRow(d1, { id: "c", agent: "inst-2", instance: "inst-1", payer: "platform", cost: 7 });
+		usageRow(d1, { id: "d", agent: "inst-1", instance: "inst-2", payer: "platform", cost: 11 });
+		usageRow(d1, { id: "e", agent: "inst-1", instance: "gone", payer: "platform", cost: 13 });
+		usageRow(d1, { id: "f", agent: "inst-1", instance: "inst-1", payer: "subscription", cost: 17 });
+		usageRow(d1, { id: "g", user: "u2", agent: "inst-1", instance: "inst-1", payer: "platform", cost: 19 });
+		usageRow(d1, { id: "h", agent: "agent-1", instance: null, payer: "platform", cost: 23 });
+		try {
+			for (const user of ["u1", "u2"]) {
+				for (const inst of ["inst-1", "inst-2", "agent-1", "gone", "nope"]) {
+					const old = d1.sqlite.prepare(OLD).get(user, inst) as { total: number };
+					expect(await instanceSpendMicros({ DB: d1.DB } as unknown as Env, user, inst), `${user}/${inst}`).toBe(old.total);
+				}
+			}
+		} finally {
+			d1.close();
+		}
+	});
+
+	it("never scans the ledger whole or through a per-user index", () => {
+		const d1 = fixture();
+		try {
+			const sql = `SELECT COALESCE(SUM(cost_micros), 0) FROM ai_usage u ${usageInstanceScopeSql("?1", "?2")} AND payer IN ('byok-api', 'platform')`;
+			const plan = (d1.sqlite.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as Array<{ detail: string }>).map((r) => r.detail);
+			// Not asserting WHICH index (the planner differs across SQLite versions), only that the
+			// ledger is never read whole or by the per-user indexes.
+			expect(plan.filter((d) => /^SCAN u\b/.test(d) || /SEARCH u USING INDEX idx_ai_usage_user/.test(d))).toEqual([]);
 		} finally {
 			d1.close();
 		}
