@@ -105,7 +105,7 @@ export class ShotRecorder {
 	}
 
 	/** The reason is explicit so a replay can distinguish missing evidence from an unchanged page. */
-	async captureResult(page: MaskablePage | null, point: ReplayPoint, meta: { url?: string; action?: string; target?: string } = {}, accept?: () => boolean): Promise<{ seq: number } | { seq: null; reason: "capture_limit" | "page_unavailable" | "capture_failed" | "frame_too_large" | "capture_invalidated" }> {
+	async captureResult(page: MaskablePage | null, point: ReplayPoint, meta: { url?: string; urlOf?: (page: MaskablePage) => string; action?: string; target?: string } = {}, accept?: () => boolean): Promise<{ seq: number } | { seq: null; reason: "capture_limit" | "page_unavailable" | "capture_failed" | "frame_too_large" | "capture_invalidated" }> {
 		if (this.cap <= 0 || this.nextSeq >= Number.MAX_SAFE_INTEGER) return { seq: null, reason: "capture_limit" };
 		if (!page) return { seq: null, reason: "page_unavailable" };
 		const data = await capturePageScreenshot(page, { quality: 50, timeout: 8_000, blurFormFields: this.blurFormFields });
@@ -114,8 +114,13 @@ export class ShotRecorder {
 		// Revalidate ownership/Stop after the asynchronous capture, before retaining pixels or assigning a sequence.
 		try { if (accept && !accept()) return { seq: null, reason: "capture_invalidated" }; }
 		catch { return { seq: null, reason: "capture_invalidated" }; }
+		// The URL is read from the page the pixels came from, after the shot settled (#1519): a redirect landing
+		// during the capture is in the pixels, so a URL read before it would label them with the pre-redirect page.
+		let url = "";
+		try { url = meta.urlOf?.(page) ?? ""; } catch { /* a closed page keeps the caller's best-effort URL */ }
+		url ||= meta.url ?? "";
 		const seq = ++this.nextSeq;
-		this.shots.push({ seq, point, ...(meta.url ? { url: meta.url } : {}), ...(meta.action ? { action: meta.action } : {}), ...(meta.target ? { target: meta.target } : {}), mimeType: "image/jpeg", data, at: new Date(this.now()).toISOString() });
+		this.shots.push({ seq, point, ...(url ? { url } : {}), ...(meta.action ? { action: meta.action } : {}), ...(meta.target ? { target: meta.target } : {}), mimeType: "image/jpeg", data, at: new Date(this.now()).toISOString() });
 		if (this.shots.length > this.cap) this.shots.splice(0, this.shots.length - this.cap);
 		return { seq };
 	}

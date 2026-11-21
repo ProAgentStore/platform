@@ -126,10 +126,11 @@ export class ApplyReplay {
 		let page: MaskablePage | null = null;
 		try { page = this.host.page?.() ?? null; } catch { /* Replay must not turn a completed action into a failure. */ }
 		let result: Awaited<ReturnType<ShotRecorder["captureResult"]>>;
-		try { result = await this.shots.captureResult(page, point, { url, ...(tool ? { action: tool } : {}), ...(target ? { target } : {}) }, accept); }
+		try { result = await this.shots.captureResult(page, point, { url, urlOf: (p) => this.safe(traceUrl(p.url?.() ?? "")), ...(tool ? { action: tool } : {}), ...(target ? { target } : {}) }, accept); }
 		catch { result = { seq: null, reason: "capture_failed" }; }
 		const detail = { point, ...(tool ? { tool } : {}), ...(target ? { target } : {}) };
-		if (result.seq !== null) this.host.emit({ type: "screenshot.captured", url, detail: { ...detail, shot: result.seq, ...(reason ? { reason } : {}) } });
+		const shotUrl = result.seq === null ? url : this.shots.shots.find((s) => s.seq === result.seq)?.url ?? url;
+		if (result.seq !== null) this.host.emit({ type: "screenshot.captured", url: shotUrl, detail: { ...detail, shot: result.seq, ...(reason ? { reason } : {}) } });
 		else this.host.emit({ type: "policy.decision", url, detail: { ...detail, class: "replay", decision: "missing", reason: result.reason } });
 		if (result.seq === null) return { shot: null, reason: result.reason };
 		const shot = this.shots.shots.find((s) => s.seq === result.seq);
