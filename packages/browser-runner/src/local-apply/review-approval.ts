@@ -1,5 +1,6 @@
 /** A live review lease is execution continuity, not proof of absence of arbitrary Full-mode effects. */
 import { RunnerInputError } from "../errors.js";
+import { traceUrl } from "./contract.js";
 import type { LocalApplyReviewAuthorization, LocalApplyTaskEnvelope } from "./contract.js";
 import type { PreparedUpload } from "./documents.js";
 
@@ -16,8 +17,13 @@ export interface ReviewApprovalLease {
 export function reviewApprovalFailure(lease: ReviewApprovalLease | undefined, page: ReviewPage | null | undefined, now: number): string | null {
 	if (!lease || lease.authorization) return null;
 	if (now >= lease.expiresAt) return "The bounded owner-review approval wait expired.";
-	try { if (!page || page !== lease.page || page.isClosed() || page.url() !== lease.url) return "The exact owner-review browser page is no longer available or its URL changed."; }
-	catch { return "The exact owner-review browser page is unavailable."; }
+	// #1579: the three causes read differently to the owner (a closed tab, a newer tab that took over as the active page,
+	// a navigation away from the reviewed page), so say which one. URLs are origin + path only: a query can carry session ids.
+	try {
+		if (!page || page.isClosed()) return "The owner-review browser page was closed.";
+		if (page !== lease.page) return "Another browser tab became the active page during the owner review.";
+		if (page.url() !== lease.url) return `The owner-review browser page navigated away from ${traceUrl(lease.url) || "the reviewed page"} to ${traceUrl(page.url()) || "a non-web page"}.`;
+	} catch { return "The exact owner-review browser page is unavailable."; }
 	return null;
 }
 
