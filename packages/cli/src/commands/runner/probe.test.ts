@@ -1,6 +1,6 @@
 /** #1148 — the probe proves a candidate loads, reaches the API with the saved sign-in, and can open a relay socket. */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type ProbeDeps, PROBE_MARKER, runProbe, webSocketRoundTrip } from "./probe.js";
+import { type ProbeDeps, PROBE_MARKER, PROBE_REQUEST_TIMEOUT_MS, runProbe, webSocketRoundTrip } from "./probe.js";
 
 const good = (over: Partial<ProbeDeps> = {}): ProbeDeps => ({
 	version: "0.4.150",
@@ -14,6 +14,7 @@ const good = (over: Partial<ProbeDeps> = {}): ProbeDeps => ({
 const failed = (r: Awaited<ReturnType<typeof runProbe>>) => r.steps.filter((s) => !s.ok).map((s) => s.name);
 
 describe("runProbe", () => {
+	afterEach(() => vi.useRealTimers());
 	it("passes when it loads as the expected release, the API takes the sign-in and a relay socket answers", async () => {
 		const r = await runProbe(good());
 		expect(r.ok).toBe(true);
@@ -24,7 +25,7 @@ describe("runProbe", () => {
 		const mint = vi.fn(async () => "tok");
 		const trip = vi.fn(async () => 5);
 		await runProbe(good({ mintRelayToken: mint, roundTrip: trip }));
-		expect(mint).toHaveBeenCalledWith("i1");
+		expect(mint).toHaveBeenCalledWith("i1", expect.any(AbortSignal));
 		expect(trip).toHaveBeenCalledWith("i1", "tok");
 	});
 	it("fails if it is not the release that was installed", async () => {
@@ -57,6 +58,44 @@ describe("runProbe", () => {
 	});
 	it("its marker is what the parent searches for", () => {
 		expect(PROBE_MARKER).toBe("PAGS_PROBE ");
+	});
+	it("bounds a stalled account request, aborts it, and never advances after its late answer", async () => {
+		vi.useFakeTimers();
+		let signal: AbortSignal | undefined;
+		let answer!: (ids: string[]) => void;
+		const mint = vi.fn(async () => "tok");
+		const probe = runProbe(good({
+			listInstances: (s) => { signal = s; return new Promise((resolve) => { answer = resolve; }); },
+			mintRelayToken: mint,
+		}));
+		await vi.advanceTimersByTimeAsync(PROBE_REQUEST_TIMEOUT_MS);
+		const result = await probe;
+		expect(result.ok).toBe(false);
+		expect(result.steps[1]).toMatchObject({ name: "session", ok: false, detail: expect.stringContaining("did not finish within 15s") });
+		expect(signal?.aborted).toBe(true);
+		answer(["i1"]);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(mint).not.toHaveBeenCalled();
+		expect(vi.getTimerCount()).toBe(0);
+	});
+	it("bounds a stalled relay-token request without opening a socket after a late response", async () => {
+		vi.useFakeTimers();
+		let signal: AbortSignal | undefined;
+		let answer!: (token: string) => void;
+		const trip = vi.fn(async () => 5);
+		const probe = runProbe(good({
+			mintRelayToken: (_, s) => { signal = s; return new Promise((resolve) => { answer = resolve; }); },
+			roundTrip: trip,
+		}));
+		await vi.advanceTimersByTimeAsync(PROBE_REQUEST_TIMEOUT_MS);
+		const result = await probe;
+		expect(failed(result)).toEqual(["relay"]);
+		expect(result.steps[2].detail).toContain("did not finish within 15s");
+		expect(signal?.aborted).toBe(true);
+		answer("tok");
+		await vi.advanceTimersByTimeAsync(0);
+		expect(trip).not.toHaveBeenCalled();
+		expect(vi.getTimerCount()).toBe(0);
 	});
 });
 

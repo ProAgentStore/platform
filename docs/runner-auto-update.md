@@ -234,6 +234,11 @@ the update fails with the reason and is tried again. The trial window stays as t
 runs for the stub's payload cache only (a global `npm i -g` install has no payload to try), and
 `PAGS_NO_UPDATE_PROBE=1` skips it.
 
+The saved-sign-in and relay-token HTTP requests each have a 15-second deadline that aborts the request and body read;
+the relay round trip has a 10-second deadline. A stalled HTTP stage now reports its own failure before the parent's
+60-second process deadline. Late responses cannot advance the probe or authorize a swap. The outer deadline still
+guards candidate loading and any other process hang; an outer timeout alone does not establish its cause.
+
 **A runner not under the stub (#1147).** The trial and the fall-back above need the bootstrap stub, which runs payloads
 from `~/.config/proagentstore/cli/<version>`. A runner started any other way — a global install run from a path other
 than the stub — updates in place with `npm i -g`, and there is no older copy beside it. Two things change for it. It

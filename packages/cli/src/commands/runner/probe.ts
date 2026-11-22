@@ -15,10 +15,13 @@ import { writeLine } from "../../output.js";
 import { loadSession } from "../login.js";
 import { CLI_VERSION } from "./process.js";
 import { apiPathSegment, pagsApiBase, requestPags } from "./http.js";
+import { boundedRelayWork } from "./relay-io.js";
 
 /** The line the parent reads back: the last stdout line starting with this, then a JSON {@link ProbeResult}. */
 export const PROBE_MARKER = "PAGS_PROBE ";
 export const PROBE_SOCKET_TIMEOUT_MS = 10_000;
+// Both HTTP stages plus the socket must finish before the parent's 60s process deadline.
+export const PROBE_REQUEST_TIMEOUT_MS = 15_000;
 
 export interface ProbeStep {
 	name: "loads" | "session" | "relay";
@@ -37,8 +40,8 @@ export interface ProbeDeps {
 	expect?: string;
 	hasSession: () => boolean;
 	/** The agents this account runs, by id — also the proof that the API accepts the sign-in. Throws when it does not. */
-	listInstances: () => Promise<string[]>;
-	mintRelayToken: (instanceId: string) => Promise<string>;
+	listInstances: (signal: AbortSignal) => Promise<string[]>;
+	mintRelayToken: (instanceId: string, signal: AbortSignal) => Promise<string>;
 	/** Open the probe socket and return the round trip in ms. Throws when it cannot connect or no echo comes back. */
 	roundTrip: (instanceId: string, token: string) => Promise<number>;
 }
@@ -56,10 +59,10 @@ export async function runProbe(deps: ProbeDeps): Promise<ProbeResult> {
 	if (!deps.hasSession()) add("session", false, "no saved sign-in on this machine (run `pags login`)");
 	else {
 		try {
-			instances = await deps.listInstances();
+			instances = await boundedRelayWork((signal) => deps.listInstances(signal), PROBE_REQUEST_TIMEOUT_MS);
 			add("session", true, `the API accepted the saved sign-in (${instances.length} agent${instances.length === 1 ? "" : "s"})`);
 		} catch (e) {
-			add("session", false, `the API did not accept the saved sign-in: ${msg(e)}`);
+			add("session", false, `the saved-sign-in check did not complete successfully: ${msg(e)}`);
 		}
 	}
 
@@ -67,7 +70,7 @@ export async function runProbe(deps: ProbeDeps): Promise<ProbeResult> {
 	else if (instances.length === 0) add("relay", true, "no agents to open a relay socket for; nothing to prove here");
 	else {
 		try {
-			const token = await deps.mintRelayToken(instances[0]);
+			const token = await boundedRelayWork((signal) => deps.mintRelayToken(instances[0], signal), PROBE_REQUEST_TIMEOUT_MS);
 			const rtt = await deps.roundTrip(instances[0], token);
 			add("relay", true, `a relay socket opened and answered in ${rtt}ms`);
 		} catch (e) {
@@ -110,11 +113,11 @@ export function probeCommand(): Command {
 				version: CLI_VERSION,
 				expect: opts.expect,
 				hasSession: () => loadSession() !== null,
-				listInstances: async () => {
-					const r = await requestPags<{ instances?: Array<{ id?: unknown }> }>("GET", "/v1/instances/my/instances", api);
+				listInstances: async (signal) => {
+					const r = await requestPags<{ instances?: Array<{ id?: unknown }> }>("GET", "/v1/instances/my/instances", api, undefined, signal);
 					return (r.instances ?? []).flatMap((i) => (typeof i.id === "string" ? [i.id] : []));
 				},
-				mintRelayToken: (id) => requestPags<{ token: string }>("POST", `/v1/relay/${apiPathSegment(id)}/token`, api, {}).then((r) => r.token),
+				mintRelayToken: (id, signal) => requestPags<{ token: string }>("POST", `/v1/relay/${apiPathSegment(id)}/token`, api, {}, signal).then((r) => r.token),
 				// A name no real machine registers under, so even an API that predates probe mode cannot disturb the machine's own socket.
 				roundTrip: webSocketRoundTrip(base.replace(/^http/, "ws"), `pags-probe-${hostname()}`),
 			});
