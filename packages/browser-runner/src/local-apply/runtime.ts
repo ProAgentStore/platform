@@ -1008,6 +1008,7 @@ export class LocalApplyRuntime {
 		throw new RunnerInputError("op must be list or call");
 	}
 
+	/** The instance that started this run, if this runner holds it (#1194). */ instanceOfRun(runId: string): string | undefined { return this.runs.get(runId)?.envelope.instanceId; }
 	private get(runId: string): Run {
 		const run = this.runs.get(runId); if (!run) throw new RunnerInputError(`No application run ${runId} on this runner (it may have restarted)`, 404);
 		return run;

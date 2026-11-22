@@ -65,8 +65,16 @@ describe("the route policy (#1164)", () => {
 		expect(routeRefusal(JOB_APPLY, "/tasksx")).toMatch(/do not include it/);
 	});
 
+	it("any agent's socket carries the native preflight and a halt; resume, reads and acts stay with local_native (#1194)", () => {
+		for (const caps of [REPO_CODER, JOB_APPLY, undefined]) {
+			for (const path of ["/native/preflight", "/native/halt"]) expect(routeRefusal(caps, path), path).toBeNull();
+			for (const path of ["/native/resume", "/native/list-apps", "/native/click", "/native/screenshot"]) expect(routeRefusal(caps, path), path).toMatch(/do not include it/);
+		}
+		for (const path of ["/native/resume", "/native/click"]) expect(routeRefusal({ runtime: "local_native" }, path), path).toBeNull();
+	});
+
 	it("an agent whose capabilities are not known yet gets only what every agent has", () => {
-		expect(allowedPrefixes(undefined)).toEqual(["/health", "/capabilities", "/events"]);
+		expect(allowedPrefixes(undefined)).toEqual(["/health", "/capabilities", "/events", "/native/preflight", "/native/halt"]);
 		expect(routeRefusal(undefined, "/coding/start")).toMatch(/do not include it/);
 	});
 });

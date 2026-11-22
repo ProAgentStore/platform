@@ -21,6 +21,11 @@
  *   • each `local_*` runtime has its own route family; local apply's handoffs also use the task,
  *     browser and takeover routes (lib/local-apply/fill-handoff.ts).
  *   • the browser connector's tools (`browser_*`) act through `/browser/*` on any agent that declares them.
+ *   • two `/native` routes are sent through ANY of the owner's agents on the machine, not only a `local_native`
+ *     one (#1194): the read-only preflight checks "the machine running this instance's runner" for whichever
+ *     instance the owner names (lib/native/preflight.ts), and a halt is told to the runner through whichever
+ *     attached agent answers first (lib/native/halt.ts `tellRunner`). Halt only ever stops; resume and every
+ *     read and act route stay with `local_native`.
  *
  * This confines each agent to its kind. It is NOT a defence against whoever controls the capability
  * record (the owner's session, or a compromised API worker can change it). That needs signed commands
@@ -34,7 +39,7 @@ export interface DeclaredCapabilities {
 }
 
 /** Every agent: liveness, what the runtime offers, and the board's task reads (any agent's board lists them). */
-const ALWAYS = ["/health", "/capabilities", "/events"];
+const ALWAYS = ["/health", "/capabilities", "/events", "/native/preflight", "/native/halt"];
 const READ_ALWAYS = ["/tasks"];
 
 /** A browser agent's task run: tasks, the browser, takeovers. */

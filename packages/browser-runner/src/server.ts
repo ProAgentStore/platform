@@ -5,7 +5,7 @@ import { handleCleanupRoute } from "./coding/cleanup-routes.js";
 import { readRecordAck } from "./coding/record-cursor.js";
 import { outgoing, redactPanesOf, secureTerminalRoute } from "./coding/pane-redact.js";
 import { secureSudoRoute } from "./coding/secure-sudo.js";
-import { codingSessionRefusal, instanceOf, readJson } from "./request-instance.js";
+import { boundWorkRefusal, codingSessionRefusal, instanceOf, readJson, taskVisibleTo } from "./request-instance.js";
 import {
 	createServer,
 	type IncomingMessage,
@@ -102,9 +102,9 @@ export async function startRunnerServer(config: RunnerConfig): Promise<{
 async function route(runner: LocalRunner, req: IncomingMessage, res: ServerResponse) {
 	const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
 	const path = url.pathname.replace(/\/$/, "") || "/";
-	// The agent this request came from, and whether it may touch the coding session it names (#1164, request-instance.ts).
+	// The agent this request came from, and whether it may touch the coding session, task or local run it names (#1164, #1194, request-instance.ts).
 	const caller = instanceOf(req);
-	const refused = await codingSessionRefusal(runner.coding, req, path, caller);
+	const refused = (await codingSessionRefusal(runner.coding, req, path, caller)) ?? (await boundWorkRefusal(runner, req, path, caller));
 	if (refused) return json(res, 403, { error: refused });
 	// Panes leave this machine redacted (#1166, coding/pane-redact.ts); a delivered secret is scrubbed.
 	redactPanesOf(res, path, req.method === "POST" && /^\/(tmux|terminal)\//.test(path) ? await readJson<{ unmasked?: unknown }>(req) : undefined);
@@ -185,7 +185,7 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	}
 
 	if (req.method === "GET" && path === "/tasks") {
-		return json(res, 200, { tasks: runner.store.listTasks() });
+		return json(res, 200, { tasks: runner.store.listTasks().filter((t) => taskVisibleTo(runner, t.id, caller)) });
 	}
 
 	if (req.method === "POST" && path === "/tasks") {
@@ -275,7 +275,7 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 
 	// ── Human takeover (remote view + control) ──────────────────────────────
 	if (req.method === "GET" && path === "/takeover") {
-		return json(res, 200, { takeovers: runner.listTakeovers(), requests: runner.listTakeoverRequests() });
+		return json(res, 200, { takeovers: runner.listTakeovers().filter((id) => taskVisibleTo(runner, id, caller)), requests: runner.listTakeoverRequests().filter((r) => taskVisibleTo(runner, r.taskId, caller)) });
 	}
 	const frameMatch = path.match(/^\/takeover\/([^/]+)\/frame$/);
 	if (req.method === "GET" && frameMatch) {

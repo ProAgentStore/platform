@@ -79,3 +79,72 @@ describe("a coding session answers only to the agent that started it (#1164)", (
 		sessions.clear();
 	});
 });
+
+describe("a runtime task and a local run answer only to the agent that started them (#1194)", () => {
+	const createTask = async (instance: string | null) => ((await (await call("/tasks", instance, { type: "echo", input: { message: "hi" }, requiresApproval: true })).json()) as { id: string; instanceId?: string }).id;
+	const taskIds = async (instance: string | null) => ((await (await call("/tasks", instance)).json()) as { tasks: Array<{ id: string }> }).tasks.map((t) => t.id);
+
+	it("another agent's socket naming the task is refused — read, approve, cancel, artifacts, a browser step and its takeover", async () => {
+		const id = await createTask("inst-apply");
+		for (const [path, body] of [
+			[`/tasks/${id}`, undefined],
+			[`/tasks/${id}/approve`, {}],
+			[`/tasks/${id}/cancel`, {}],
+			[`/tasks/${id}/artifacts`, { captureArtifacts: [] }],
+			["/browser/event", { taskId: id, type: "note", message: "forged" }],
+			["/browser/complete", { taskId: id, outcome: "submitted" }],
+			[`/takeover/${id}/frame`, undefined],
+			[`/takeover/${id}/input`, { type: "text", text: "x" }],
+		] as const) {
+			const res = await call(path, "inst-third-party", body);
+			expect(res.status, path).toBe(403);
+			expect(((await res.json()) as { error: string }).error, path).toMatch(/belongs to another agent/);
+		}
+		expect((await call(`/tasks/${id}`, "inst-apply")).status).toBe(200);
+		expect((await call(`/tasks/${id}`, null)).status).toBe(200);
+	});
+
+	it("the task list shows each agent its own and the unbound ones — and a local caller all of them", async () => {
+		const mine = await createTask("inst-apply");
+		const unbound = await createTask(null);
+		expect(await taskIds("inst-third-party")).toEqual([unbound]);
+		expect((await taskIds("inst-apply")).sort()).toEqual([mine, unbound].sort());
+		expect((await taskIds(null)).sort()).toEqual([mine, unbound].sort());
+	});
+
+	it("a task nobody is bound to is not refused", async () => {
+		const unbound = await createTask(null);
+		expect((await call(`/tasks/${unbound}`, "inst-third-party")).status).toBe(200);
+	});
+
+	it("another agent's socket naming a local run is refused, in every local family", async () => {
+		const held = { envelope: { instanceId: "inst-apply" } };
+		for (const [runtime, key] of [[runner.localBrowser, "runs"], [runner.localApply, "runs"], [runner.localArtifact, "runs"], [runner.localApplyReconciliation, "sessions"]] as const) {
+			(runtime as unknown as Record<string, Map<string, unknown>>)[key].set("run-1", held);
+		}
+		for (const [path, body] of [
+			["/local-browser/status", { runId: "run-1" }],
+			["/local-browser/cancel", { runId: "run-1" }],
+			["/local-apply/status", { runId: "run-1" }],
+			["/local-apply/directive", { runId: "run-1" }],
+			["/local-apply/handoff/input", { runId: "run-1" }],
+			["/local-artifact/cancel", { runId: "run-1" }],
+			["/local-apply/reconciliation/status", { reconciliationId: "run-1" }],
+		] as const) {
+			const res = await call(path, "inst-third-party", body);
+			expect(res.status, path).toBe(403);
+			expect(((await res.json()) as { error: string }).error, path).toMatch(/belongs to another agent/);
+		}
+		for (const [runtime, key] of [[runner.localBrowser, "runs"], [runner.localApply, "runs"], [runner.localArtifact, "runs"], [runner.localApplyReconciliation, "sessions"]] as const) {
+			(runtime as unknown as Record<string, Map<string, unknown>>)[key].clear();
+		}
+	});
+
+	it("a local run cannot be started in another agent's name, and its own agent is not refused", async () => {
+		for (const path of ["/local-browser/run", "/local-apply/run", "/local-artifact/run"]) {
+			expect((await call(path, "inst-third-party", { runId: "run-2", requestId: "req-2", instanceId: "inst-apply" })).status, path).toBe(403);
+			// Its own agent gets past the binding; the incomplete envelope is then a plain 400.
+			expect((await call(path, "inst-apply", { runId: "run-2", requestId: "req-2", instanceId: "inst-apply" })).status, path).toBe(400);
+		}
+	});
+});
