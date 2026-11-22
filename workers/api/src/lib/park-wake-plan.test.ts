@@ -24,6 +24,9 @@ describe("runDueParkWakes plan", () => {
 		const plan = (d1.sqlite.prepare(`EXPLAIN QUERY PLAN ${sweep.sql}`).all() as Array<{ detail: string }>).map((r) => r.detail);
 		expect(plan).toContain("SCAN r USING INDEX idx_agent_loop_runs_parked");
 		expect(plan).toContain("SEARCH q EXISTS USING INDEX idx_coder_questions_run (run_id=?)");
-		expect(plan.filter((d) => d.startsWith("SCAN") && !d.startsWith("SCAN r USING INDEX idx_agent_loop_runs_parked"))).toEqual([]);
+		// #1689: the due runs are found first (materialized), and holders are asked about only for those.
+		expect(plan).toContain("MATERIALIZE due");
+		expect(plan.indexOf("MATERIALIZE due")).toBeLessThan(plan.findIndex((d) => d.includes("idx_coding_sessions_held")));
+		expect(plan.filter((d) => d.startsWith("SCAN") && d !== "SCAN due" && !d.startsWith("SCAN r USING INDEX idx_agent_loop_runs_parked"))).toEqual([]);
 	});
 });

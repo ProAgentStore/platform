@@ -122,11 +122,16 @@ export async function runDueParkWakes(env: Pick<Env, "DB" | "CODING_SESSION">, n
 	const { results } = await env.DB.prepare(
 		// #1641: EXISTS, not JOIN + DISTINCT — the DISTINCT led the planner to scan every question (or
 		// every run) each minute; this way it walks only the parked runs (idx_agent_loop_runs_parked).
-		`SELECT r.run_id FROM agent_loop_runs r
-		  WHERE r.status = 'running' AND r.waiting_reason = 'decision' AND r.workflow_instance_id IS NOT NULL
-		    AND EXISTS (SELECT 1 FROM coder_questions q WHERE q.run_id = r.run_id
-		      AND ((r.cancel_requested = 1 AND COALESCE(r.cancel_requested_at, 0) < ?1)
-		        OR (q.applied_at IS NULL AND ((q.answered_at IS NOT NULL AND q.answered_at < ?1) OR (q.state = 'unresolved' AND q.resolved_at < ?1)))))
+		// #1689: two stages. The planner ran the holder and machine sub-queries for EVERY parked run before
+		// the question check (1,732 rows a call for 53 parked runs, none due). MATERIALIZED pins the order:
+		// find the runs with something due first, then ask who holds the repo only for those.
+		`WITH due AS MATERIALIZED (
+		  SELECT r.run_id FROM agent_loop_runs r
+		   WHERE r.status = 'running' AND r.waiting_reason = 'decision' AND r.workflow_instance_id IS NOT NULL
+		     AND EXISTS (SELECT 1 FROM coder_questions q WHERE q.run_id = r.run_id
+		       AND ((r.cancel_requested = 1 AND COALESCE(r.cancel_requested_at, 0) < ?1)
+		         OR (q.applied_at IS NULL AND ((q.answered_at IS NOT NULL AND q.answered_at < ?1) OR (q.state = 'unresolved' AND q.resolved_at < ?1))))))
+		SELECT r.run_id FROM due JOIN agent_loop_runs r ON r.run_id = due.run_id
 		    -- #1077: a run that released its checkout is not re-woken while something else holds that repo —
 		    -- it could only find it busy again. The holder's end wakes it. "Holds" is the ownership model's
 		    -- (repoOwners: a running unreleased run, a driver, a direct turn), NOT "another session is open" (#1323):
@@ -135,7 +140,7 @@ export async function runDueParkWakes(env: Pick<Env, "DB" | "CODING_SESSION">, n
 		    -- and this read them all each minute. A driver or direct turn is found through
 		    -- idx_coding_sessions_held; a holding run through the running runs of the instance
 		    -- (idx_agent_loop_runs_open_instance — a run is always in the instance of its session).
-		    AND NOT (r.checkout_released_at IS NOT NULL AND r.cancel_requested = 0 AND (
+		  WHERE NOT (r.checkout_released_at IS NOT NULL AND r.cancel_requested = 0 AND (
 		          EXISTS (SELECT 1 FROM coding_sessions mine JOIN coding_sessions other ON other.repo_id = mine.repo_id AND other.instance_id = mine.instance_id AND other.id <> mine.id
 		                   WHERE mine.id = r.session_id AND (other.driver_id IS NOT NULL OR other.direct_turn_id IS NOT NULL))
 		          OR EXISTS (SELECT 1 FROM coding_sessions mine JOIN agent_loop_runs o ON o.instance_id = mine.instance_id AND o.status = 'running' JOIN coding_sessions other ON other.id = o.session_id
