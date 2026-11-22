@@ -173,6 +173,7 @@ describe("isTransientInfraError", () => {
 		// #1256: the console answer-submit path's actual 500 — D1 queueing more requests than it
 		// could serve in a burst, self-healing within seconds, not a bug in the route it hit.
 		expect(isTransientInfraError(new Error("D1_ERROR: D1 DB is overloaded. Requests queued for too long."))).toBe(true);
+		expect(isTransientInfraError(new Error("D1_ERROR: Your account is generating too much load on D1 DBs. Please back off and try again later."))).toBe(true);
 	});
 	it("does not match real bugs", () => {
 		expect(isTransientInfraError(new Error("Cannot read properties of undefined"))).toBe(false);
@@ -180,5 +181,6 @@ describe("isTransientInfraError", () => {
 		expect(isTransientInfraError("some string")).toBe(false);
 		// A D1 error that is NOT the overload message (a real query bug) must still surface as one.
 		expect(isTransientInfraError(new Error("D1_ERROR: no such table: coder_questions"))).toBe(false);
+		expect(isTransientInfraError(new Error("D1_ERROR: exceeded maximum database size"))).toBe(false);
 	});
 });

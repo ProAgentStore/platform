@@ -117,9 +117,37 @@ describe("the request entrypoint (index.ts default.fetch)", () => {
 		expect(JSON.parse(String(rows("transient")[0].context))).toMatchObject({ path: "/v1/errors", method: "GET" });
 	});
 
+	it.each([
+		"D1_ERROR: Your account is generating too much load on D1 DBs. Please back off and try again later.",
+		"D1_ERROR: D1 DB is overloaded. Requests queued for too long.",
+	])("D1 capacity refusal returns backoff guidance and records one correlated warning: %s", async (message) => {
+		// Exercise the real handler: a recognized dependency refusal must not become an opaque
+		// 500, claim a deployment is happening, or disappear from the durable diagnostic log.
+		let attempts = 0;
+		failWhen = (sql) => {
+			if (!sql.startsWith("SELECT id, created_at, user_id, source")) return null;
+			attempts++;
+			return message;
+		};
+		const res = await call("/v1/errors");
+		expect(res.status).toBe(503);
+		expect(res.headers.get("Retry-After")).toBe("5");
+		expect(await res.json()).toEqual({
+			error: "The service is temporarily unavailable — please try again in a few seconds.",
+			requestId: res.headers.get("X-Request-Id"),
+		});
+		expect(res.headers.get("X-Request-Id")).toBeTruthy();
+		expect(attempts, "the error handler must not replay a failed operation").toBe(1);
+		expect(rows()).toEqual([expect.objectContaining({
+			source: "transient", level: "warn", status: 503, user_id: "u1", message: `Error: ${message}`,
+		})]);
+	});
+
 	it("a genuine exception is a 500 with its stack, once", async () => {
 		failWhen = (sql) => (sql.startsWith("SELECT id, created_at, user_id, source") ? "no such column: bogus" : null);
-		expect((await call("/v1/errors")).status).toBe(500);
+		const res = await call("/v1/errors");
+		expect(res.status).toBe(500);
+		expect(res.headers.has("Retry-After")).toBe(false);
 		expect(rows("unhandled")).toEqual([expect.objectContaining({ level: "error", status: 500, user_id: "u1" })]);
 		expect(JSON.parse(String(rows("unhandled")[0].context)).stack).toMatch(/no such column/);
 	});

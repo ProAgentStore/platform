@@ -335,7 +335,10 @@ app.onError(async (err, c) => {
 	// log or tell a transient blip from a real bug.
 	const requestId = currentRequestId();
 	// Not a bug, so not a 500 — tell the client to retry. This is what the two "chat → 500" reports were.
-	if (isTransientInfraError(err)) return c.json({ error: "The service is updating — please try again in a moment.", requestId }, 503);
+	if (isTransientInfraError(err)) {
+		c.header("Retry-After", "5");
+		return c.json({ error: "The service is temporarily unavailable — please try again in a few seconds.", requestId }, 503);
+	}
 	if (err instanceof HttpError) return c.json({ error: err.message, requestId }, err.status as 400);
 	return c.json({ error: "Internal server error", requestId }, 500);
 });
