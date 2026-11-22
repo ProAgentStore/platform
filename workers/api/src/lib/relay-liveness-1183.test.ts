@@ -29,6 +29,35 @@ function socket(onPing?: (ws: PingableSocket) => void): PingableSocket & { sent:
 }
 
 describe("a hibernated DO still knows each socket's last round trip", () => {
+	it("frequent status polls cannot extend an unanswered ping's grace period, even across hibernation", () => {
+		const frozen = socket();
+		expect(new RunnerLiveness().observe([frozen], 1_000)).toBe(true);
+		for (let elapsed = 500; elapsed <= PONG_STALE_MS + 1_000; elapsed += 500) {
+			expect(new RunnerLiveness().observe([frozen], 1_000 + elapsed)).toBe(elapsed <= PONG_STALE_MS);
+		}
+	});
+
+	it("a stale socket stays disconnected on the next poll until that socket answers", () => {
+		const frozen = socket();
+		const liveness = new RunnerLiveness();
+		liveness.observe([frozen], 1_000);
+		const staleAt = 1_000 + PONG_STALE_MS + 1;
+		expect(liveness.observe([frozen], staleAt)).toBe(false);
+		expect(liveness.observe([frozen], staleAt + 1)).toBe(false);
+		liveness.pong(frozen, staleAt + 2);
+		expect(liveness.observe([frozen], staleAt + 3)).toBe(true);
+		// Recovery starts a new grace period; a subsequent freeze still expires.
+		expect(liveness.observe([frozen], staleAt + PONG_STALE_MS + 4)).toBe(false);
+	});
+
+	it("a failed dispatch probe cannot renew an unanswered status ping", async () => {
+		const frozen = socket();
+		const liveness = new RunnerLiveness();
+		liveness.observe([frozen], 1_000);
+		expect(await liveness.probe([frozen], { now: 1_000 + PONG_STALE_MS - 1, deadlineMs: 10 })).toBe(false);
+		expect(liveness.observe([frozen], 1_000 + PONG_STALE_MS + 1)).toBe(false);
+	});
+
 	it("a peer that stopped answering before the DO slept is reported gone on the FIRST status after the wake", () => {
 		const frozen = socket();
 		const before = new RunnerLiveness();

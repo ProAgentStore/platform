@@ -55,7 +55,7 @@ export const PONG_DEADLINE_MS = RELAY_PONG_DEADLINE_MS;
 /** How long an unanswered ping must stand before `observe` calls the peer gone. */
 export const PONG_STALE_MS = 2000;
 
-/** One socket's own evidence: when it was last pinged and last answered (ms epoch; 0 = never). */
+/** One socket's own evidence: first unanswered (or latest answered) ping and last pong (ms epoch; 0 = never). */
 interface SocketRecord {
 	pingAt: number;
 	pongAt: number;
@@ -146,7 +146,12 @@ export class RunnerLiveness {
 			try {
 				ws.send("ping");
 				reachable.push(ws);
-				this.write(ws, { pingAt: now, pongAt: Math.max(this.read(ws)?.pongAt ?? 0, this.anonymousPongAt) });
+				const previous = this.read(ws);
+				const pongAt = Math.max(previous?.pongAt ?? 0, this.anonymousPongAt);
+				// Re-pinging is not evidence of life. Preserve the first unanswered ping so frequent
+				// status reads cannot renew a frozen socket's grace window or revive a stale verdict.
+				const pingAt = previous && previous.pingAt > pongAt ? previous.pingAt : now;
+				this.write(ws, { pingAt, pongAt });
 			} catch {
 				try { ws.close(1000, "stale"); } catch { /* already closed */ }
 			}
@@ -198,7 +203,7 @@ export class RunnerLiveness {
 	 * not gone - a pong from one never clears another.
 	 */
 	observe(sockets: readonly PingableSocket[], now: number = Date.now()): boolean {
-		// Each socket's verdict is taken BEFORE this call's ping overwrites its record.
+		// Each socket's verdict is taken BEFORE this call's ping updates its record.
 		const before = new Map(sockets.map((ws) => [ws, this.read(ws)] as const));
 		const reachable = this.ping(sockets, now);
 		if (reachable.length === 0) return false;
@@ -207,7 +212,7 @@ export class RunnerLiveness {
 			// No record at all: unknown, and an unknown is not an outage. This call's ping starts it.
 			if (!rec || rec.pingAt === 0) return true;
 			// A ping standing unanswered longer than the grace window is the evidence, for THIS socket.
-			return !(rec.pongAt < rec.pingAt && now - rec.pingAt > PONG_STALE_MS);
+			return !(Math.max(rec.pongAt, this.anonymousPongAt) < rec.pingAt && now - rec.pingAt > PONG_STALE_MS);
 		});
 	}
 }
