@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -57,6 +58,18 @@ async function ensureInstalled(engine: BrowserEngine): Promise<void> {
 	await pending;
 }
 
+/** Browser helpers can retain profile handles briefly after close, especially on Windows. */
+function ephemeralProfileCleanup(profileDir: string): () => Promise<void> {
+	let pending: Promise<void> | undefined;
+	return () => pending ??= rm(profileDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch((error: unknown) => {
+		// A failed cleanup must never escape a Playwright event listener and crash the runner.
+		// Keep the unique owned directory for inspection; never sweep other sessions or profiles.
+		const code = (error as NodeJS.ErrnoException | null)?.code ?? "unknown";
+		const profileId = createHash("sha256").update(profileDir).digest("hex");
+		console.warn(`[browser] Temporary profile cleanup failed (${code}); profile ${profileId} remains on disk.`);
+	});
+}
+
 /** Runner-owned native contexts for every supported engine; an explicit engine never falls back (#1431). */
 export async function launchRunnerBrowser(options: BrowserLaunchOptions): Promise<{ context: BrowserContext; profileDir: string; receipt: BrowserLaunchReceipt; stop(): Promise<void> }> {
 	const playwright = await import("playwright");
@@ -67,6 +80,7 @@ export async function launchRunnerBrowser(options: BrowserLaunchOptions): Promis
 		const channel = engine === "chrome" || engine === "msedge" || engine === "chromium" ? engine : null;
 		let profileDir: string | undefined;
 		let context: BrowserContext | undefined;
+		let cleanup: (() => Promise<void>) | undefined;
 		let profileSource: BrowserLaunchReceipt["profileSource"] = options.legacy || options.persistentDir ? "legacy-agent" : "managed";
 		try {
 			await ensureInstalled(engine);
@@ -75,6 +89,7 @@ export async function launchRunnerBrowser(options: BrowserLaunchOptions): Promis
 				const root = join(options.profileRoot, "sessions");
 				mkdirSync(root, { recursive: true, mode: 0o700 });
 				profileDir = mkdtempSync(join(root, `${engine}-`));
+				cleanup = ephemeralProfileCleanup(profileDir);
 			} else if (options.legacy) {
 				seedAgentBrowserProfiles(options.legacy.rootDir, options.legacy.instanceDir);
 				const real = engine === "chrome" ? resolveRealChromeProfileDir() : null;
@@ -97,13 +112,13 @@ export async function launchRunnerBrowser(options: BrowserLaunchOptions): Promis
 			const receipt: BrowserLaunchReceipt = { engine, requestedEngine: options.engine ?? null, fallbackReason: launchErrorSummary(lastError), browserType, channel, version: context.browser()?.version() ?? "unknown", executable: engine === "chrome" || engine === "msedge" ? null : playwright[browserType].executablePath(), mode: options.headless ? "headless" : "headed", profilePolicy: options.profilePolicy, profileSource, profileId: createHash("sha256").update(profileDir).digest("hex"), transport: "playwright", launchedAt: new Date().toISOString(), active: true };
 			const ownedDir = profileDir;
 			const ownedContext = context;
-			context.on("close", () => { receipt.active = false; if (options.profilePolicy === "ephemeral") rmSync(ownedDir, { recursive: true, force: true }); });
+			context.on("close", () => { receipt.active = false; void cleanup?.(); });
 			let stopping: Promise<void> | undefined;
 			options.onLaunch?.(receipt);
-			return { context: ownedContext, profileDir: ownedDir, receipt, stop: () => stopping ??= (async () => { try { await ownedContext.close(); } finally { receipt.active = false; if (options.profilePolicy === "ephemeral") rmSync(ownedDir, { recursive: true, force: true }); } })() };
+			return { context: ownedContext, profileDir: ownedDir, receipt, stop: () => stopping ??= (async () => { try { await ownedContext.close(); } finally { receipt.active = false; await cleanup?.(); } })() };
 		} catch (error) {
 			await context?.close().catch(() => undefined);
-			if (options.profilePolicy === "ephemeral" && profileDir) rmSync(profileDir, { recursive: true, force: true });
+			await cleanup?.();
 			lastError = error;
 			if (options.engine) throw new Error(`Could not launch selected ${engine} browser in ${options.headless ? "headless" : "headed"} mode. ${error instanceof Error ? error.message : String(error)}`);
 		}
