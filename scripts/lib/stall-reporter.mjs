@@ -37,6 +37,13 @@ function killWorkers() {
 
 export default class StallReporter {
 	running = new Map();
+	/**
+	 * Modules that have ended (#1690). Vitest handles each batch of worker events in its own async call, so a test's
+	 * "ready" from one batch can be delivered after the module's "end" from the next. That re-added a finished file,
+	 * nothing removed it again, and the watchdog failed the run five minutes later. Keyed by the module object, so a
+	 * re-run in watch mode (a new module object) is watched afresh.
+	 */
+	ended = new WeakSet();
 	limitMs = Number(process.env.VITEST_STALL_MS) || DEFAULT_STALL_MS;
 
 	onInit() {
@@ -45,6 +52,7 @@ export default class StallReporter {
 	}
 
 	touch(testModule, lastTest) {
+		if (this.ended.has(testModule)) return;
 		const file = relative(process.cwd(), testModule.moduleId);
 		this.running.set(file, { lastEventAt: Date.now(), lastTest: lastTest ?? this.running.get(file)?.lastTest });
 	}
@@ -70,6 +78,7 @@ export default class StallReporter {
 	}
 
 	onTestModuleEnd(testModule) {
+		this.ended.add(testModule);
 		this.running.delete(relative(process.cwd(), testModule.moduleId));
 	}
 

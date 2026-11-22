@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_STALL_MS, findStalled, stallMessage } from "./stall-reporter.mjs";
+import { join } from "node:path";
+import StallReporter, { DEFAULT_STALL_MS, findStalled, stallMessage } from "./stall-reporter.mjs";
 
 describe("stall reporter (#1665)", () => {
 	const running = new Map([
@@ -22,5 +23,21 @@ describe("stall reporter (#1665)", () => {
 
 	it("says where to look when no test had started", () => {
 		expect(stallMessage({ file: "b.test.ts", lastTest: undefined, silentMs: 300_000 })).toContain("first tests or a beforeAll");
+	});
+
+	it("an event delivered after its module ended does not put the finished file back (#1690)", () => {
+		const reporter = new StallReporter();
+		const module = { moduleId: join(process.cwd(), "a.test.ts") };
+		reporter.onTestModuleStart(module);
+		reporter.onTestCaseReady({ module, fullName: "suite > first" });
+		expect([...reporter.running.keys()]).toEqual(["a.test.ts"]);
+		reporter.onTestModuleEnd(module);
+		reporter.onTestCaseReady({ module, fullName: "suite > late" });
+		reporter.onTestCaseResult({ module });
+		reporter.onTestSuiteResult({ module });
+		expect(reporter.running.size).toBe(0);
+		// The same file run again (watch mode) is a new module object, and is watched.
+		reporter.onTestModuleStart({ moduleId: module.moduleId });
+		expect([...reporter.running.keys()]).toEqual(["a.test.ts"]);
 	});
 });
