@@ -329,6 +329,35 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 		},
 	);
 
+	// The console's Needs you page (#1640). list_notifications is a feed that empties when READ; this is
+	// what is still WAITING, which empties only when the item is resolved where it lives.
+	server.tool(
+		"inbox",
+		"What is waiting on YOU, across every instance: secure inputs, website access and permission requests, browser takeovers, MCP input requests, coder questions, held approvals, board tasks needing a person or approval, applications awaiting review, and runs parked on a person. Each item has `id` (`<kind>:<sourceId>`), `kind`, `instanceId`, `instanceName`, `title`, `summary` (never a secret or page text), `createdAt`, `expiresAt` when it gives up, `urgency` (`blocking` = something live is held) and `route` (the console path where it is answered). `counts` describe the whole waiting set, not the filtered view. An item leaves only when it is resolved at its source; reading changes nothing. `complete: false` means a source failed or was capped: check `sources` before saying nothing is waiting. Read-only: it answers nothing. Answer with the item's own tool (answer_instance_input, answer_instance_website_request, approve_instance_task, approve_application, ...). For the read/unread feed of what agents told you, use list_notifications.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			kind: z.array(z.enum(["secure_input", "website_access", "permission", "takeover", "mcp_input", "coder_question", "approval", "task", "application", "run_parked"])).optional().describe("Only these kinds. Omit for all."),
+			instance_id: z.string().optional().describe("Only items of this instance (an id from my_instances)."),
+			agent: z.string().optional().describe("Only items of instances of this agent slug."),
+			urgency: z.enum(["blocking", "normal", "low"]).optional().describe("Only this urgency."),
+			sort: z.enum(["urgency", "newest", "oldest", "expiring"]).optional().describe("Order (default urgency: blocking first)."),
+			limit: z.coerce.number().int().min(1).max(500).optional().describe("How many items to return (default 200, max 500). `total` is the full filtered count."),
+		},
+		async ({ token, kind, instance_id, agent, urgency, sort, limit }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const qs = new URLSearchParams();
+			if (kind?.length) qs.set("kind", kind.join(","));
+			if (instance_id) qs.set("instance", instance_id);
+			if (agent) qs.set("agent", agent);
+			if (urgency) qs.set("urgency", urgency);
+			if (sort) qs.set("sort", sort);
+			if (limit !== undefined) qs.set("limit", String(limit));
+			const query = qs.toString();
+			return jsonText(await authedCall(`/v1/inbox${query ? `?${query}` : ""}`, sessionToken, {}, env));
+		},
+	);
+
 	server.tool(
 		"mark_notification_read",
 		"Mark ONE notification read, by the `id` list_notifications returned. Fails with `Notification not found` for an id that is not one of yours — it never reports success for something it did not clear. Marking an already-read notification succeeds. Read-state only: it dismisses nothing the agent is waiting on, and answers no `alert`.",

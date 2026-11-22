@@ -461,6 +461,7 @@ const TABLE: Record<string, Row> = {
 	list_instance_triggers: ["triggers", "read", null, null, "instance_id,offset,token"],
 	get_instance_pipeline: ["observability", "none", null, null, "instance_id,pipeline,token"],
 	list_feedback: ["observability", "none", null, null, "instance_id,limit,status,token"],
+	inbox: ["account", "none", null, null, "agent,instance_id,kind,limit,sort,token,urgency"],
 	list_notifications: ["account", "none", null, null, "limit,offset,token,unread_only"],
 	mark_all_notifications_read: ["account", "write", null, "envelope", "dry_run,token"],
 	mark_notification_read: ["account", "write", null, "envelope", "dry_run,notification_id,token"],

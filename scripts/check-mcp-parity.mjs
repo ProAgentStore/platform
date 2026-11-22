@@ -80,6 +80,11 @@ const END = "<!-- END generated: mcp-exclusions -->";
 // ─────────────────────────────────────────────────────────────────────────────
 const EXCLUSIONS = [
 	{
+		label: "The Needs you nav badge count (#1640)",
+		why: "A number for the console's nav badge, polled by the layout. The MCP `inbox` tool returns the same waiting set with `counts.total` and the per-kind counts beside the items, so a second tool for the bare number would add nothing.",
+		match: /^GET \/v1\/inbox\/count$/,
+	},
+	{
 		label: "Deciding or withdrawing an account approval (#1268)",
 		why: "Approving or denying a change the account approval gate is holding is the OWNER's act, at the console or from the push link. An MCP tool for it would let the agent that asked for a change approve its own request with the owner's token, which is exactly what the gate exists to prevent; the API also refuses an approve or deny that arrives with MCP's client marker. MCP follows a held change with `approval_status` and changes the gate's settings with `set_approval_gate` (weakening an enabled gate is itself held).",
 		match: /^POST \/v1\/approvals\/\{\}\/\{\}$/,
@@ -225,11 +230,6 @@ const KNOWN_GAPS = [
 		label: "Original Finder budget, scope and queue (#1616)",
 		why: "Settings -> Agent sets the Finder's daily research budget and scope, and Activity -> History lists its queue. MCP has no tool for either yet (the routes landed in #1608 REST-only); file one when an agent needs to read or change them.",
 		match: /^(GET \/v1\/instances\/\{\}\/original-finder|PUT \/v1\/instances\/\{\}\/original-finder\/settings)$/,
-	},
-	{
-		label: "Needs you inbox (#1640)",
-		why: "The console's Needs you page and nav badge read GET /v1/inbox and /v1/inbox/count. The read-only MCP `inbox` tool is the remaining acceptance item on #1640 (a published-surface change: version bump, surface-lock hash, docs); the REST API landed first.",
-		match: /^GET \/v1\/inbox(\/count)?$/,
 	},
 ];
 

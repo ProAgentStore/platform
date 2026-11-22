@@ -343,6 +343,22 @@ describe("read proxies", () => {
 		expect(url.searchParams.has("limit")).toBe(false);
 	});
 
+	it("inbox reads GET /v1/inbox with only the filters given, and relays the reply including a failed source (#1640)", async () => {
+		const h = setup();
+		const reply = { items: [{ id: "task:t1", kind: "task" }], total: 1, counts: { total: 3 }, sources: [{ kind: "takeover", ok: false, error: "D1" }], complete: false };
+		h.fetchStub.respond((u) => u.includes("/v1/inbox"), { body: reply });
+		const res = await h.tools.get("inbox")!.handler({ kind: ["task", "application"], instance_id: "i1", sort: "expiring" });
+		const url = new URL(h.fetchStub.calls[0].url);
+		expect(url.pathname).toBe("/v1/inbox");
+		expect(Object.fromEntries(url.searchParams)).toEqual({ kind: "task,application", instance: "i1", sort: "expiring" });
+		expect(JSON.parse(res.content[0].text)).toEqual(reply);
+
+		const bare = setup();
+		bare.fetchStub.respond((u) => u.includes("/v1/inbox"), { body: { items: [] } });
+		await bare.tools.get("inbox")!.handler({});
+		expect(new URL(bare.fetchStub.calls[0].url).search).toBe("");
+	});
+
 	it("list_errors defaults to your own scope (no scope param) when scope=me", async () => {
 		const h = setup();
 		h.fetchStub.respond((u) => u.includes("/v1/errors"), { body: { errors: [] } });
