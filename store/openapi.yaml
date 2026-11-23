@@ -5958,6 +5958,67 @@ paths:
 
   # ── Instances: board ──────────────────────────────────────────────────────
 
+  /v1/instances/{instanceId}/board/projection:
+    get:
+      summary: Read the instance's cards of actual execution, in four lanes
+      description: |
+        The shared projection (#1698): one card per resumable coding session (`csess-<sessionId>`) or real application / scan
+        attempt (`app-attempt-<fill|tailor>-<runId>`, `scan-<runId>`), plus each accepted objective that has no session yet
+        (`objective:<entryId>`), until a session exists and replaces it. A GitHub issue or job is never part of a card's identity,
+        lane or status.
+
+        Every card is in one lane: `queued`, `in_progress`, `blocked` or `done`. Waiting a turn or awaiting a first session is
+        `queued`; only an actual blocker is `blocked`, with `blocker.what` and `blocker.nextOwner` (`owner`, `run`, `platform`).
+        `needsYou` is a badge (the owner inbox's own rule), not a lane. `waitingToResume` marks a recorded answer the run has not
+        applied yet: waiting on the run, so `needsYou` is false. `outcome` (`succeeded`, `failed`, `stopped`) is separate from the
+        Done lane, and `native` keeps the record's own status and ids. Owner- and instance-scoped; read-only.
+      operationId: getInstanceBoardProjection
+      tags: [Board]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200":
+          description: The lanes and the cards
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [lanes, cards]
+                properties:
+                  lanes:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, title]
+                      properties:
+                        id: { type: string, enum: [queued, in_progress, blocked, done] }
+                        title: { type: string }
+                  cards:
+                    type: array
+                    items:
+                      type: object
+                      required: [cardId, kind, lane, needsYou, waitingToResume, nativeStatus, instanceId, title, updatedAt, native]
+                      properties:
+                        cardId: { type: string }
+                        kind: { type: string, enum: [coding-session, scan, application-attempt, queued-objective] }
+                        lane: { type: string, enum: [queued, in_progress, blocked, done] }
+                        needsYou: { type: boolean }
+                        waitingToResume: { type: boolean }
+                        blocker:
+                          type: object
+                          properties:
+                            what: { type: string }
+                            nextOwner: { type: string, enum: [owner, run, platform] }
+                        outcome: { type: string, enum: [succeeded, failed, stopped] }
+                        nativeStatus: { type: string }
+                        instanceId: { type: string }
+                        attempts: { type: array, items: { type: string } }
+                        linkedSessionCardId: { type: string }
+                        title: { type: string }
+                        updatedAt: { type: integer, description: ms epoch }
+                        native: { type: object, additionalProperties: true }
+        "404": { description: The instance is not yours }
+
   /v1/instances/{instanceId}/board:
     get:
       summary: Read the instance work board

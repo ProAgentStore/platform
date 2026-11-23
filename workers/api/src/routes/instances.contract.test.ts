@@ -67,6 +67,7 @@ import { registerKnowledgeRoutes } from "./instances-knowledge.js";
 import { registerTaskRoutes } from "./instances-tasks.js";
 import { registerTaskActionRoutes } from "./instances-task-actions.js";
 import { registerBoardOrderRoutes } from "./board-order-routes.js";
+import { registerBoardProjectionRoutes } from "./board-projection-routes.js";
 import { registerRuntimeBuilderRoutes } from "./instances-site-builder.js";
 import { registerDeployStatusRoutes } from "./instances-deploy.js";
 import { registerConnectorBindingRoutes } from "./instances-terminal.js";
@@ -446,6 +447,8 @@ const ROUTES = [
 	"GET /:instanceId/tasks/:taskId/actions",
 	// Board order is run order (#1097) — `board-order-routes.ts`, registered right after the tasks group.
 	"POST /:instanceId/board/order",
+	// The shared card projection (#1698) — `board-projection-routes.ts`, registered right after board order.
+	"GET /:instanceId/board/projection",
 	"POST /:instanceId/site-builder/run",
 	"GET /:instanceId/site-builder/:runId",
 	"POST /:instanceId/site-builder/:runId/cancel",
@@ -518,6 +521,7 @@ const HELPERS: Record<string, (app: Hono<{ Bindings: Env }>) => void> = {
 	"instances-tasks.ts": registerTaskRoutes,
 	"instances-task-actions.ts": registerTaskActionRoutes,
 	"board-order-routes.ts": registerBoardOrderRoutes,
+	"board-projection-routes.ts": registerBoardProjectionRoutes,
 	"instances-site-builder.ts": registerRuntimeBuilderRoutes,
 	"instances-deploy.ts": registerDeployStatusRoutes,
 	"instances-identity.ts": registerIdentityResyncRoutes,
@@ -712,6 +716,7 @@ const OWNERSHIP: Record<string, string[]> = {
 		"GET /:instanceId/task-events",
 	],
 	"board-order-routes.ts": ["POST /:instanceId/board/order"],
+	"board-projection-routes.ts": ["GET /:instanceId/board/projection"],
 	"instances-deploy.ts": [
 		"GET /:instanceId/deploy-status",
 		"GET /:instanceId/deploy-history",
@@ -1046,6 +1051,7 @@ const GATES: Record<string, [number, number]> = {
 	"POST /:instanceId/board/issues/sync": [401, 404],
 	"POST /:instanceId/board/status": [401, 404],
 	"POST /:instanceId/board/order": [401, 404],
+	"GET /:instanceId/board/projection": [401, 404],
 	"GET /:instanceId/board-config": [401, 404],
 	"PUT /:instanceId/board-config": [401, 404],
 	// GitHub issue link/unlink (#682). Owner-only: linking a card to an issue is a
