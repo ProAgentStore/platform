@@ -3169,6 +3169,8 @@ paths:
         - { name: agent, in: query, required: false, schema: { type: string }, description: Filter by agent slug. }
         - { name: urgency, in: query, required: false, schema: { type: string, enum: [blocking, normal, low] } }
         - { name: sort, in: query, required: false, schema: { type: string, enum: [newest, oldest, urgency, expiring], default: urgency } }
+        - { name: triage, in: query, required: false, schema: { type: string, enum: [new, discussed, deferred, all] }, description: "Owner triage of coder questions and parked runs (#1697). Default: unanswered New items plus every source that is not triaged. A deferral whose defer-until has passed counts as New." }
+        - { name: needs_computer, in: query, required: false, schema: { type: boolean }, description: "Only items the owner marked as needing a computer. Spans every triage status unless triage is given." }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 200 } }
       responses:
         "200":
@@ -3214,6 +3216,47 @@ paths:
                         ok: { type: boolean }
                         truncated: { type: boolean, description: More are waiting than were listed for this source. }
                         error: { type: string }
+  /v1/inbox/triage:
+    put:
+      summary: Triage one coder question or parked run in my inbox
+      description: |
+        The owner's own bookkeeping (#1697): `status` new / discussed / deferred, an optional future `defer_until`
+        (implies deferred; the item is New again once it passes) and a `needs_computer` marker. It answers, resumes,
+        expires and hides nothing: the run stays parked, the question unanswered and the item stays in `/v1/inbox`
+        (filter with `triage` / `needs_computer`) and in the nav count. Keyed to the specific question or run, so a
+        new question in the same session starts New. 404 when the item is not currently waiting on the caller.
+      operationId: triageInboxItem
+      tags: [Instances]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [item_id]
+              properties:
+                item_id: { type: string, description: "`coder_question:<id>` or `run_parked:<id>` from GET /v1/inbox." }
+                status: { type: string, enum: [new, discussed, deferred] }
+                defer_until: { type: string, format: date-time, nullable: true }
+                needs_computer: { type: boolean }
+      responses:
+        "200":
+          description: The item's triage after the change
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  itemId: { type: string }
+                  triage:
+                    type: object
+                    properties:
+                      status: { type: string, enum: [new, discussed, deferred] }
+                      needsComputer: { type: boolean }
+                      deferUntil: { type: string, nullable: true }
+                      updatedAt: { type: string }
+        "400": { description: Not a triageable item, or an invalid status or date }
+        "404": { description: That item is not waiting on you }
   /v1/inbox/count:
     get:
       summary: How many items are waiting on me (the nav badge)

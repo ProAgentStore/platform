@@ -341,9 +341,11 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 			agent: z.string().optional().describe("Only items of instances of this agent slug."),
 			urgency: z.enum(["blocking", "normal", "low"]).optional().describe("Only this urgency."),
 			sort: z.enum(["urgency", "newest", "oldest", "expiring"]).optional().describe("Order (default urgency: blocking first)."),
+			triage: z.enum(["new", "discussed", "deferred", "all"]).optional().describe("Owner triage of coder questions and parked runs (set with inbox_triage). Default: unanswered New items only, plus every source that is not triaged. `all` shows every status."),
+			needs_computer: z.boolean().optional().describe("Only items the owner marked as needing a computer (a desktop). Spans every triage status unless `triage` is given."),
 			limit: z.coerce.number().int().min(1).max(500).optional().describe("How many items to return (default 200, max 500). `total` is the full filtered count."),
 		},
-		async ({ token, kind, instance_id, agent, urgency, sort, limit }) => {
+		async ({ token, kind, instance_id, agent, urgency, sort, triage, needs_computer, limit }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const qs = new URLSearchParams();
@@ -352,9 +354,37 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 			if (agent) qs.set("agent", agent);
 			if (urgency) qs.set("urgency", urgency);
 			if (sort) qs.set("sort", sort);
+			if (triage) qs.set("triage", triage);
+			if (needs_computer) qs.set("needs_computer", "1");
 			if (limit !== undefined) qs.set("limit", String(limit));
 			const query = qs.toString();
 			return jsonText(await authedCall(`/v1/inbox${query ? `?${query}` : ""}`, sessionToken, {}, env));
+		},
+	);
+
+	// #1697: the owner's own triage of a coder question or parked run, shared by the Needs you page and voice.
+	server.tool(
+		"inbox_triage",
+		"Triage ONE coder question or parked run from `inbox` (item ids `coder_question:<id>` and `run_parked:<id>`): set `status` new | discussed | deferred, optionally `defer_until` (an ISO date; the item is New again after it), and mark or unmark `needs_computer` (it needs a desktop, e.g. an OAuth sign-in). Your own bookkeeping only: the run stays parked and the question unanswered, nothing is answered, resumed, expired or hidden from `inbox` (use `triage:\"all\"` or `needs_computer:true` to list triaged items), and run deadlines and GitHub are untouched. Set `status:\"new\"` to undo. A new question in the same session starts New. Fails with 404 for an item that is not waiting on you.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			item_id: z.string().describe("The `id` of a coder_question or run_parked item from inbox, copied exactly."),
+			status: z.enum(["new", "discussed", "deferred"]).optional().describe("New (the default), Discussed, or Deferred."),
+			defer_until: z.string().nullable().optional().describe("ISO date in the future; implies status deferred. null clears the date."),
+			needs_computer: z.boolean().optional().describe("Mark (true) or unmark (false) the item as needing a computer."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, item_id, status, defer_until, needs_computer, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const body = { item_id, status, defer_until, needs_computer };
+			const denied = await requirePermission(safetyFor(token), "write", "inbox_triage", body);
+			if (denied) return denied;
+			const endpoint = "/v1/inbox/triage";
+			if (dry_run) return dryRun(safetyFor(token), "inbox_triage", "triage one inbox item", body, { endpoint, method: "PUT", body });
+			const data = await authedCall(endpoint, sessionToken, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }, env);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "inbox_triage", action: "completed", input: body, result: { ok: true } });
+			return jsonText(data);
 		},
 	);
 

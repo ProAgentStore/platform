@@ -20,10 +20,10 @@
  */
 
 /** Every tool the server can register, with all surfaces gated on. */
-export const MCP_TOOL_COUNT = 436;
+export const MCP_TOOL_COUNT = 437;
 
 /** Registered for every connection, whatever the user is subscribed to. */
-export const MCP_TOOL_ALWAYS_ON = 407;
+export const MCP_TOOL_ALWAYS_ON = 408;
 
 /** Registered only when the user has an agent with the matching console surface
  *  (`apply`, `repo`, `coding`) — so a Repo Chat user never sees `apply_to_job`. */
@@ -71,4 +71,5 @@ export const TOOL_COUNT_CEILINGS: ReadonlyArray<{ count: number; issue: string; 
 	{ count: 434, issue: "#1633", date: "2026-11-11", reason: "list_discord_members / get_discord_channel_access / set_discord_channel_member_access: the owner's bot finds a server member, shows who can see a channel, and gives or removes one member's access. The #1625 tools create channels but cannot let anyone into one, so 17 private check-in channels were made that no intern could see." },
 	{ count: 435, issue: "#1640", date: "2026-11-22", reason: "inbox: everything waiting on the owner across every instance, the read the console Needs you page already has. Always on, read-only." },
 	{ count: 436, issue: "#1702", date: "2026-11-24", reason: "sort_discord_category: the owner's bot sorts a category's channels by name. update_discord_channel moves a channel between categories but cannot set its position, so the FAS check-in channels could only be ordered by dragging them by hand." },
+	{ count: 437, issue: "#1697", date: "2026-11-25", reason: "inbox_triage: the owner marks a coder question or parked run New, Discussed or Deferred and as needing a computer, shared with the console Needs you page. inbox is read-only and every other tool answers or changes the item itself; none records the owner's own triage of it." },
 ];

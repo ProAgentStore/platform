@@ -16,6 +16,7 @@ import { applicationCardLabel } from "./applications/application-board.js";
 import { ANSWER_PENDING_SQL } from "./coder-question-store.js";
 import { accountApprovalLink, applicationLink, browserTakeoverLink, codingSessionLink, instanceLink, instancePermissionsLink, instanceRunLink, websiteAccessRequestLink } from "./console-links.js";
 import { instanceListName } from "./instance-config.js";
+import { isTriageItem, readTriage, DEFAULT_TRIAGE, type Triage, type TriageStatus } from "./inbox-triage.js";
 import type { Env } from "../types.js";
 
 export const INBOX_KINDS = ["secure_input", "website_access", "permission", "takeover", "mcp_input", "coder_question", "approval", "task", "application", "run_parked"] as const;
@@ -43,6 +44,8 @@ export interface InboxItem {
 	urgency: InboxUrgency;
 	/** The console route (no basename) where it is answered. */
 	route: string;
+	/** The owner's own triage (#1697); present only on coder questions and parked runs. */
+	triage?: Triage;
 }
 
 /** Per-source outcome, so a source that could not be read is never reported as "nothing waiting". */
@@ -319,6 +322,14 @@ export async function readInbox(env: Env, uid: string, now = Date.now()): Promis
 		items.push(...res.value.items);
 		return res.value.truncated ? { kind, ok: true, truncated: true } : { kind, ok: true };
 	});
+	// Triage rides beside the item and is read once for the whole set; a failed read leaves every item New.
+	const ids = items.filter((it) => isTriageItem(it.id)).map((it) => it.id);
+	try {
+		const triage = await readTriage(env, uid, ids, now);
+		for (const it of items) if (isTriageItem(it.id)) it.triage = triage.get(it.id) ?? DEFAULT_TRIAGE;
+	} catch {
+		for (const it of items) if (isTriageItem(it.id)) it.triage = DEFAULT_TRIAGE;
+	}
 	return { items, sources };
 }
 
@@ -347,9 +358,23 @@ export interface InboxQuery {
 	agent: string | null;
 	urgency: InboxUrgency | null;
 	sort: InboxSort;
+	/**
+	 * `review` (default): unanswered New items, plus the sources that are not triaged. A status shows just that
+	 * status; `all` shows everything (#1697).
+	 */
+	triage?: TriageStatus | "review" | "all";
+	/** Only items the owner marked as needing a computer. Spans every status unless `triage` is given. */
+	needsComputer?: boolean;
 }
 
 const URGENCY_RANK: Record<InboxUrgency, number> = { blocking: 0, normal: 1, low: 2 };
+
+function triageMatches(it: InboxItem, q: InboxQuery): boolean {
+	const want = q.triage ?? (q.needsComputer ? "all" : "review");
+	if (want === "all") return true;
+	if (want === "review") return !it.triage || it.triage.status === "new";
+	return it.triage?.status === want;
+}
 
 /** Filter + sort. Pure. Ties always break by newest, then id, so the order is stable between polls. */
 export function applyInboxQuery(items: InboxItem[], q: InboxQuery): InboxItem[] {
@@ -358,7 +383,9 @@ export function applyInboxQuery(items: InboxItem[], q: InboxQuery): InboxItem[] 
 			(!q.kinds.length || q.kinds.includes(it.kind)) &&
 			(!q.instances.length || (it.instanceId !== null && q.instances.includes(it.instanceId))) &&
 			(!q.agent || it.agentSlug === q.agent) &&
-			(!q.urgency || it.urgency === q.urgency),
+			(!q.urgency || it.urgency === q.urgency) &&
+			(!q.needsComputer || it.triage?.needsComputer === true) &&
+			triageMatches(it, q),
 	);
 	const newest = (a: InboxItem, b: InboxItem) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || a.id.localeCompare(b.id);
 	const cmp: Record<InboxSort, (a: InboxItem, b: InboxItem) => number> = {
@@ -377,6 +404,8 @@ export interface InboxCounts {
 	byInstance: Array<{ instanceId: string; name: string | null; count: number }>;
 	byAgent: Array<{ slug: string; count: number }>;
 	byUrgency: Partial<Record<InboxUrgency, number>>;
+	/** Triaged items by status, plus those marked as needing a computer (#1697). */
+	byTriage: Record<TriageStatus, number> & { needsComputer: number };
 }
 
 /** Counts over the whole waiting set (not the filtered view), so every chip shows what it would add. */
@@ -385,7 +414,12 @@ export function inboxCounts(items: InboxItem[]): InboxCounts {
 	const byUrgency: InboxCounts["byUrgency"] = {};
 	const inst = new Map<string, { instanceId: string; name: string | null; count: number }>();
 	const agents = new Map<string, number>();
+	const byTriage: InboxCounts["byTriage"] = { new: 0, discussed: 0, deferred: 0, needsComputer: 0 };
 	for (const it of items) {
+		if (it.triage) {
+			byTriage[it.triage.status]++;
+			if (it.triage.needsComputer) byTriage.needsComputer++;
+		}
 		byKind[it.kind] = (byKind[it.kind] ?? 0) + 1;
 		byUrgency[it.urgency] = (byUrgency[it.urgency] ?? 0) + 1;
 		if (it.instanceId) {
@@ -401,5 +435,6 @@ export function inboxCounts(items: InboxItem[]): InboxCounts {
 		byInstance: [...inst.values()].sort((a, b) => b.count - a.count || a.instanceId.localeCompare(b.instanceId)),
 		byAgent: [...agents].map(([slug, count]) => ({ slug, count })).sort((a, b) => b.count - a.count || a.slug.localeCompare(b.slug)),
 		byUrgency,
+		byTriage,
 	};
 }

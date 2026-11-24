@@ -756,6 +756,10 @@ const READBACK: Record<string, string | null> = {
 	"update_discord_channel.category": "list_discord_channels",
 	"update_discord_channel.category_id": "list_discord_channels",
 	"delete_discord_channel.channel_id": "list_discord_channels",
+	// #1697: an item's triage reads back as `triage` on the item in inbox (filter with triage / needs_computer).
+	"inbox_triage.item_id": "inbox",
+	"inbox_triage.defer_until": "inbox",
+	"inbox_triage.needs_computer": "inbox",
 	// #1702: the new order reads back from list_discord_channels, which lists channels in position order.
 	"sort_discord_category.guild_id": "list_discord_channels",
 	"sort_discord_category.category": "list_discord_channels",

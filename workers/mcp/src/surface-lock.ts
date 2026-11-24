@@ -1292,4 +1292,5 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.223": "sha256:9a5ba2b5e1cb5b1d5aa7feee5beb014a99db2f22d9e9d7456af16f57a2b71d38", // #1612: get_console_link target mcp-connection + endpoint
 	"0.1.224": "sha256:7cb2d1a189b976c6e326600c7988e04f0a5a23b9848e1c27d33f769e49925f04", // #1640: inbox reads everything waiting on the owner across every instance (read-only, always on).
 	"0.1.225": "sha256:150ea8884da5a790af360f4c127c7d43a3fa52ef07ea1546ad0b526814bf403c", // #1702: sort_discord_category lets the owner's bot sort a category's channels by name.
+	"0.1.226": "sha256:37f02ec64c7b630eab366e397bc5519704349602b163bd960f378fa0ab2539f6", // #1697: inbox_triage lets the owner mark a coder question or parked run New/Discussed/Deferred and needs-computer; inbox gains triage and needs_computer filters.
 };

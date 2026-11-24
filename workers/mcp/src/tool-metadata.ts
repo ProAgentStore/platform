@@ -209,6 +209,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	list_errors: "read",
 	list_feedback: "read",
 	inbox: "read",
+	inbox_triage: "write",
 	list_notifications: "read",
 	list_instance_collections: "read",
 	list_instance_connector_grants: "read",

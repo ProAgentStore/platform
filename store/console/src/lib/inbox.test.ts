@@ -6,13 +6,19 @@ const parse = (qs: string) => parseFilters(new URLSearchParams(qs));
 describe("inbox filters in the URL", () => {
 	it("round-trips kinds, instances, agent, urgency and sort", () => {
 		const f = parse("kind=takeover&kind=task&instance=i1&agent=coder-repo&urgency=blocking&sort=expiring");
-		expect(f).toEqual({ kinds: ["takeover", "task"], instances: ["i1"], agent: "coder-repo", urgency: "blocking", sort: "expiring" });
+		expect(f).toEqual({ kinds: ["takeover", "task"], instances: ["i1"], agent: "coder-repo", urgency: "blocking", sort: "expiring", triage: "review", needsComputer: false });
 		expect(parse(filtersToQuery(f).toString())).toEqual(f);
 	});
 	it("drops unknown values and defaults the sort, leaving the default out of the URL", () => {
 		const f = parse("kind=bogus&urgency=huge&sort=sideways");
-		expect(f).toEqual({ kinds: [], instances: [], agent: null, urgency: null, sort: "urgency" });
+		expect(f).toEqual({ kinds: [], instances: [], agent: null, urgency: null, sort: "urgency", triage: "review", needsComputer: false });
 		expect(filtersToQuery(f).toString()).toBe("");
+	});
+	it("keeps the triage view and the needs-computer filter in the URL (#1697)", () => {
+		const f = parse("triage=deferred&needs_computer=1&triage2=x");
+		expect(f).toMatchObject({ triage: "deferred", needsComputer: true });
+		expect(filtersToQuery(f).toString()).toBe("triage=deferred&needs_computer=1");
+		expect(parse("triage=bogus").triage).toBe("review");
 	});
 	it("toggles a multi-select value on and off", () => {
 		expect(toggled(["task"], "takeover")).toEqual(["task", "takeover"]);

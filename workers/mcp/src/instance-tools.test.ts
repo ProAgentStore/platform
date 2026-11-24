@@ -359,6 +359,26 @@ describe("read proxies", () => {
 		expect(new URL(bare.fetchStub.calls[0].url).search).toBe("");
 	});
 
+	it("inbox passes the triage and needs-computer filters; inbox_triage PUTs the owner's own mark and dry-runs without calling (#1697)", async () => {
+		const h = setup();
+		h.fetchStub.respond((u) => u.includes("/v1/inbox"), { body: { items: [] } });
+		await h.tools.get("inbox")!.handler({ triage: "deferred", needs_computer: true });
+		expect(Object.fromEntries(new URL(h.fetchStub.calls[0].url).searchParams)).toEqual({ triage: "deferred", needs_computer: "1" });
+
+		const t = setup();
+		t.fetchStub.respond((u) => u.includes("/v1/inbox/triage"), { body: { itemId: "coder_question:q1", triage: { status: "discussed" } } });
+		await t.tools.get("inbox_triage")!.handler({ item_id: "coder_question:q1", status: "discussed", needs_computer: true });
+		expect(t.fetchStub.calls).toHaveLength(1);
+		const call = t.fetchStub.calls[0];
+		expect(new URL(call.url).pathname).toBe("/v1/inbox/triage");
+		expect(call.method).toBe("PUT");
+		expect(JSON.parse(call.body!)).toEqual({ item_id: "coder_question:q1", status: "discussed", needs_computer: true });
+
+		const d = setup();
+		await d.tools.get("inbox_triage")!.handler({ item_id: "run_parked:r1", status: "new", dry_run: true });
+		expect(d.fetchStub.calls).toHaveLength(0);
+	});
+
 	it("list_errors defaults to your own scope (no scope param) when scope=me", async () => {
 		const h = setup();
 		h.fetchStub.respond((u) => u.includes("/v1/errors"), { body: { errors: [] } });

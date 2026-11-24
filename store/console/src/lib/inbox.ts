@@ -13,6 +13,21 @@ export type InboxUrgency = (typeof INBOX_URGENCIES)[number];
 export const INBOX_SORTS = ["urgency", "newest", "oldest", "expiring"] as const;
 export type InboxSort = (typeof INBOX_SORTS)[number];
 
+export const TRIAGE_STATUSES = ["new", "discussed", "deferred"] as const;
+export type TriageStatus = (typeof TRIAGE_STATUSES)[number];
+/** `review` is the default: unanswered New items (and every source that is not triaged). */
+export const TRIAGE_VIEWS = ["review", "discussed", "deferred", "all"] as const;
+export type TriageView = (typeof TRIAGE_VIEWS)[number];
+export const TRIAGE_VIEW_LABEL: Record<TriageView, string> = { review: "To review", discussed: "Discussed", deferred: "Deferred", all: "All" };
+
+/** The owner's own triage of a coder question or parked run (#1697). */
+export interface InboxTriage {
+	status: TriageStatus;
+	needsComputer: boolean;
+	deferUntil: string | null;
+	updatedAt: string;
+}
+
 export interface InboxItem {
 	id: string;
 	kind: InboxKind;
@@ -25,6 +40,8 @@ export interface InboxItem {
 	expiresAt: string | null;
 	urgency: InboxUrgency;
 	route: string;
+	/** Only on coder questions and parked runs. */
+	triage?: InboxTriage;
 }
 
 export interface InboxSourceStatus {
@@ -44,6 +61,7 @@ export interface InboxResponse {
 		byInstance: Array<{ instanceId: string; name: string | null; count: number }>;
 		byAgent: Array<{ slug: string; count: number }>;
 		byUrgency: Partial<Record<InboxUrgency, number>>;
+		byTriage: Record<TriageStatus, number> & { needsComputer: number };
 	};
 	sources: InboxSourceStatus[];
 	complete: boolean;
@@ -61,6 +79,8 @@ export interface InboxFilters {
 	agent: string | null;
 	urgency: InboxUrgency | null;
 	sort: InboxSort;
+	triage: TriageView;
+	needsComputer: boolean;
 }
 
 export const KIND_LABEL: Record<InboxKind, string> = {
@@ -84,12 +104,15 @@ const isIn = <T extends string>(all: readonly T[], v: string): v is T => (all as
 export function parseFilters(search: URLSearchParams): InboxFilters {
 	const urgency = search.get("urgency") ?? "";
 	const sort = search.get("sort") ?? "";
+	const triage = search.get("triage") ?? "";
 	return {
 		kinds: search.getAll("kind").filter((k): k is InboxKind => isIn(INBOX_KINDS, k)),
 		instances: search.getAll("instance").filter(Boolean),
 		agent: search.get("agent") || null,
 		urgency: isIn(INBOX_URGENCIES, urgency) ? urgency : null,
 		sort: isIn(INBOX_SORTS, sort) ? sort : "urgency",
+		triage: isIn(TRIAGE_VIEWS, triage) ? triage : "review",
+		needsComputer: search.get("needs_computer") === "1",
 	};
 }
 
@@ -101,6 +124,8 @@ export function filtersToQuery(f: InboxFilters): URLSearchParams {
 	if (f.agent) q.set("agent", f.agent);
 	if (f.urgency) q.set("urgency", f.urgency);
 	if (f.sort !== "urgency") q.set("sort", f.sort);
+	if (f.triage !== "review") q.set("triage", f.triage);
+	if (f.needsComputer) q.set("needs_computer", "1");
 	return q;
 }
 
@@ -116,6 +141,16 @@ export function ageLabel(iso: string, now: number): string {
 	if (s < 3600) return `${Math.floor(s / 60)}m`;
 	if (s < 86400) return `${Math.floor(s / 3600)}h`;
 	return `${Math.floor(s / 86400)}d`;
+}
+
+/** "Deferred until 3d" / "Deferred": how a deferred item reads (its own date, beside any expiry the item has). */
+export function deferLabel(t: InboxTriage, now: number): string {
+	if (t.status !== "deferred") return "";
+	if (!t.deferUntil) return "Deferred";
+	const s = Math.round((Date.parse(t.deferUntil) - now) / 1000);
+	if (s < 3600) return "Deferred until soon";
+	if (s < 86400) return `Deferred for ${Math.floor(s / 3600)}h`;
+	return `Deferred for ${Math.floor(s / 86400)}d`;
 }
 
 /** "gives up in 12m", or null when the item never expires. */
