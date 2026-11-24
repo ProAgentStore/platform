@@ -15,13 +15,14 @@ import { CardActionLog } from "../components/ActionLog";
 import ApplicationRunFace, { APPLICATION_CONFIRM, ApplicationRunControls, type ApplicationRunFields } from "../components/ApplicationRunFace";
 import ScanRunFace, { type ScanRunFields } from "../components/ScanRunFace";
 import { BoardLanesView, IssueControls, IssuesViewButton } from "../components/BoardLanes";
+import { ExecutionLanesView, LanesViewButton } from "../components/ExecutionLanes";
 import { type BoardIssueSyncResult, issueRepos } from "../lib/boardLanes";
 import { type CardOrder, CardOrderBar, useBoardOrder } from "../components/BoardOrder";
 import type { RunQueueMarker } from "../lib/boardOrder";
 
 /** `issues` (#895) is this tab's own: the lanes a coder's GitHub issues stand in. Not persisted —
  *  the server's `boardView` is kanban | list, and an apply agent's board has no issues to lane. */
-type BoardView = "kanban" | "list" | "issues";
+type BoardView = "kanban" | "list" | "issues" | "lanes";
 
 // The single, agent-configurable work board. The server (lib/board.ts) is the ONE
 // place the board shape is defined: it groups runtime-task retries into one card
@@ -112,7 +113,7 @@ export default function BoardTab({ instanceId, apply }: { instanceId: string; ap
 	const changeView = useCallback(async (v: BoardView) => {
 		setView(v);
 		viewInit.current = true;
-		if (v === "issues") return;
+		if (v === "issues" || v === "lanes") return; // client-only views: never saved as the server's kanban | list
 		try { await api(`/v1/instances/${instanceId}/board-config`, { method: "PUT", body: JSON.stringify({ view: v }) }); } catch { /* non-fatal */ }
 	}, [instanceId]);
 
@@ -353,6 +354,7 @@ export default function BoardTab({ instanceId, apply }: { instanceId: string; ap
 						<button type="button" onClick={() => changeView("kanban")} title="Board view" aria-pressed={view === "kanban"} className={`flex items-center gap-1 px-2 py-1.5 text-xs font-bold ${view === "kanban" ? "bg-accent-soft text-accent" : "text-muted hover:bg-panel-hover"}`}><LayoutGrid size={13} /><span className="hidden sm:inline">Board</span></button>
 						<button type="button" onClick={() => changeView("list")} title="List view" aria-pressed={view === "list"} className={`flex items-center gap-1 px-2 py-1.5 text-xs font-bold ${view === "list" ? "bg-accent-soft text-accent" : "text-muted hover:bg-panel-hover"}`}><List size={13} /><span className="hidden sm:inline">List</span></button>
 						{hasIssues && <IssuesViewButton active={view === "issues"} onClick={() => changeView("issues")} />}
+						<LanesViewButton active={view === "lanes"} onClick={() => changeView("lanes")} />
 					</div>
 					{hasIssues && <IssueControls repos={repos} repo={repo} onRepo={setRepo} onSync={syncIssues} />}
 					<Button size="md" onClick={() => setEditingCols(true)} title="Customize columns">
@@ -385,7 +387,9 @@ export default function BoardTab({ instanceId, apply }: { instanceId: string; ap
 			)}
 
 			{syncMsg && <p className="mb-3 text-xs text-muted">{syncMsg}</p>}
-			{view === "issues" ? (
+			{view === "lanes" ? (
+				<ExecutionLanesView instanceId={instanceId} />
+			) : view === "issues" ? (
 				<BoardLanesView items={items} renderCard={(item) => <ItemCard key={item.jobKey} {...itemProps(item)} />} />
 			) : view === "kanban" ? (
 				<div className="grid grid-cols-[repeat(auto-fit,minmax(210px,1fr))] gap-3 items-start mb-4">
