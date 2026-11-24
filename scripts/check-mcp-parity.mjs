@@ -227,6 +227,11 @@ const KNOWN_GAPS = [
 		match: /^GET \/v1\/instances\/\{\}\/collections\/\{\}\/records\/\{\}$/,
 	},
 	{
+		label: "Board lanes projection (#1698)",
+		why: "The board's Lanes view reads the shared four-lane projection (`GET /v1/instances/:id/board/projection`: one card per resumable session or real application / scan attempt, plus accepted objectives with no session yet, each classified by one function). MCP's `instance_board` still reads the older board (columns and job-keyed cards), so an agent cannot yet read the lanes. Giving MCP the same read is the next cutover step; it adds a tool, which moves the pinned tool count and its docs, so it is its own change rather than part of the console view.",
+		match: /^GET \/v1\/instances\/\{\}\/board\/projection$/,
+	},
+	{
 		label: "Original Finder budget, scope and queue (#1616)",
 		why: "Settings -> Agent sets the Finder's daily research budget and scope, and Activity -> History lists its queue. MCP has no tool for either yet (the routes landed in #1608 REST-only); file one when an agent needs to read or change them.",
 		match: /^(GET \/v1\/instances\/\{\}\/original-finder|PUT \/v1\/instances\/\{\}\/original-finder\/settings)$/,

@@ -14,7 +14,7 @@ export function ExecutionCardView({ instanceId, card }: { instanceId: string; ca
 		<div className="border border-line rounded-lg bg-panel p-2.5 text-sm flex flex-col gap-1.5" data-testid="execution-card" data-card-id={card.cardId}>
 			<div className="flex items-center gap-1.5 flex-wrap text-2xs font-bold text-muted">
 				<span>{kindLabel(card)}</span>
-				{card.needsYou && <span className="text-warning border border-warning/40 rounded-full px-1.5 py-0.5" data-testid="badge-needs-you">Needs you</span>}
+				{card.needsYou && <span className="text-warning border border-warning-line rounded-full px-1.5 py-0.5" data-testid="badge-needs-you">Needs you</span>}
 				{card.waitingToResume && <span className="border border-line rounded-full px-1.5 py-0.5" data-testid="badge-waiting-to-resume">Waiting to resume</span>}
 				{card.outcome && <span className="border border-line rounded-full px-1.5 py-0.5" data-testid="badge-outcome">{OUTCOME_LABEL[card.outcome]}</span>}
 			</div>
