@@ -238,6 +238,7 @@ export async function completeFlow(env: Env, flow: McpOauthFlow, code: string, f
 		expiresAt: tok.expiresAt,
 		refreshToken: tok.refreshToken,
 		tokenEndpoint: flow.tokenEndpoint,
+		accountLabel: tok.identity,
 	});
 	return tok;
 }
@@ -295,6 +296,7 @@ export async function ensureMcpAccessToken(
 			expiresAt: tok.expiresAt,
 			scopes: tok.scope,
 			refreshToken: tok.refreshToken,
+			accountLabel: tok.identity,
 		});
 		return { status: "ok", token: tok.accessToken, authMode: "oauth", expiresAt: tok.expiresAt };
 	} catch {

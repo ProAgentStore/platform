@@ -62,6 +62,8 @@ function fakeDb() {
 					// disagree with SQLite by the machine's UTC offset.
 					for (const [id, f] of flows) if (sqlTimeMs(String(f.expires_at)) <= Date.now()) flows.delete(id);
 				} else if (sql.includes("INSERT INTO mcp_credentials")) {
+					// Mirrors `COALESCE(mcp_credentials.account_label, excluded.account_label)`.
+					const priorLabel = creds.get(kCred(a[0], a[1], a[2]))?.account_label ?? null;
 					creds.set(kCred(a[0], a[1], a[2]), {
 						user_id: a[0],
 						endpoint: a[1],
@@ -73,7 +75,7 @@ function fakeDb() {
 						key_ciphertext: a[7],
 						dek_wrapped: a[8],
 						iv: a[9],
-						account_label: a[10],
+						account_label: priorLabel ?? a[10] ?? null,
 						token_endpoint: a[11],
 						refresh_ciphertext: a[12],
 						refresh_dek_wrapped: a[13],
@@ -90,6 +92,7 @@ function fakeDb() {
 						row.expires_at = a[6];
 						// Mirrors the COALESCE in the statement: only overwrite when a new value came back.
 						if (a[7] != null) row.scopes = a[7];
+						if (row.account_label == null && a[11] != null) row.account_label = a[11];
 						if (a[8] != null) {
 							row.refresh_ciphertext = a[8];
 							row.refresh_dek_wrapped = a[9];
@@ -221,6 +224,39 @@ describe("in-flight authorizations", () => {
 		expect(body).toContain("code=the-code");
 		expect(body).toContain("code_verifier=verifier-value");
 		expect(body).toContain(`resource=${encodeURIComponent(ENDPOINT)}`);
+	});
+
+	const idToken = (claims: Record<string, unknown>) => `h.${btoa(JSON.stringify(claims)).replace(/=+$/, "")}.s`;
+
+	it("records the id_token's email as the account label (#1685)", async () => {
+		const { db, creds } = fakeDb();
+		await saveFlow(envFor(db), flow);
+		const claimed = await claimFlow(envFor(db), "f1", "u1");
+		const fetchImpl = vi.fn(async () => tokenRes({ access_token: "at-1", id_token: idToken({ email: "a@b.example" }) }));
+		await completeFlow(envFor(db), claimed!, "c", fetchImpl);
+		expect(creds.get(`u1 ${ENDPOINT} `)?.account_label).toBe("a@b.example");
+	});
+
+	it("leaves the label empty when the server gives no identity", async () => {
+		const { db, creds } = fakeDb();
+		await saveFlow(envFor(db), flow);
+		const claimed = await claimFlow(envFor(db), "f1", "u1");
+		await completeFlow(envFor(db), claimed!, "c", vi.fn(async () => tokenRes({ access_token: "at-1" })));
+		expect(creds.get(`u1 ${ENDPOINT} `)?.account_label).toBeNull();
+	});
+
+	it("a reconnect never replaces an owner-set label", async () => {
+		const { db, creds } = fakeDb();
+		await saveMcpCredential(envFor(db), { userId: "u1", endpoint: ENDPOINT, token: "old", accountLabel: "My work login" });
+		await saveFlow(envFor(db), flow);
+		const claimed = await claimFlow(envFor(db), "f1", "u1");
+		await completeFlow(envFor(db), claimed!, "c", vi.fn(async () => tokenRes({ access_token: "at-1", id_token: idToken({ email: "a@b.example" }) })));
+		expect(creds.get(`u1 ${ENDPOINT} `)?.account_label).toBe("My work login");
+		// and a reconnect that carries no identity does not clear it either
+		await saveFlow(envFor(db), flow);
+		const again = await claimFlow(envFor(db), "f1", "u1");
+		await completeFlow(envFor(db), again!, "c", vi.fn(async () => tokenRes({ access_token: "at-2" })));
+		expect(creds.get(`u1 ${ENDPOINT} `)?.account_label).toBe("My work login");
 	});
 });
 

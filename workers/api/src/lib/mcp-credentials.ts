@@ -296,6 +296,10 @@ export async function renameMcpAccount(env: Env, userId: string, endpoint: strin
  * the credential for this server", so a pasted bearer clears leftover refresh material rather
  * than leaving a refresh token that would silently resurrect a revoked authorization. The
  * rotate-in-place path is `updateMcpAccessToken`, which is the one that preserves it.
+ *
+ * The one exception is `account_label`: it names the slot (the owner may have renamed it, #1267),
+ * not the token, so a reconnect never clears or replaces an existing label — it only fills a
+ * missing one.
  */
 export async function saveMcpCredential(env: Env, input: SaveMcpCredentialInput): Promise<void> {
 	if (!env.KEY_ENCRYPTION_KEY) throw new HttpError(500, "Key encryption not configured");
@@ -315,7 +319,7 @@ export async function saveMcpCredential(env: Env, input: SaveMcpCredentialInput)
 		   key_ciphertext = excluded.key_ciphertext,
 		   dek_wrapped = excluded.dek_wrapped,
 		   iv = excluded.iv,
-		   account_label = excluded.account_label,
+		   account_label = COALESCE(mcp_credentials.account_label, excluded.account_label),
 		   token_endpoint = excluded.token_endpoint,
 		   refresh_ciphertext = excluded.refresh_ciphertext,
 		   refresh_dek_wrapped = excluded.refresh_dek_wrapped,
@@ -412,6 +416,8 @@ export async function updateMcpAccessToken(
 		expiresAt: string | null;
 		scopes?: string | null;
 		refreshToken?: string | null;
+		/** Backfills a missing label only; an existing one is never overwritten. */
+		accountLabel?: string | null;
 	},
 ): Promise<void> {
 	if (!env.KEY_ENCRYPTION_KEY) throw new HttpError(500, "Key encryption not configured");
@@ -427,6 +433,7 @@ export async function updateMcpAccessToken(
 		   refresh_ciphertext = COALESCE(?9, refresh_ciphertext),
 		   refresh_dek_wrapped = COALESCE(?10, refresh_dek_wrapped),
 		   refresh_iv = COALESCE(?11, refresh_iv),
+		   account_label = COALESCE(account_label, ?12),
 		   updated_at = datetime('now')
 		 WHERE user_id = ?1 AND endpoint = ?2 AND account_id = ?3`,
 	)
@@ -442,6 +449,7 @@ export async function updateMcpAccessToken(
 			refresh?.ciphertext ?? null,
 			refresh?.dekWrapped ?? null,
 			refresh?.iv ?? null,
+			input.accountLabel ?? null,
 		)
 		.run();
 }

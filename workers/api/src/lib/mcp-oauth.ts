@@ -169,6 +169,33 @@ export interface TokenResponse {
 	/** ISO-8601, or null when the server states no lifetime (then nothing expires on our side). */
 	expiresAt: string | null;
 	scope: string | null;
+	/** A display identity (email / login) from the `id_token`, when the server issued one. The MCP
+	 *  authorization spec defines no identity endpoint, so an OIDC `id_token` is the only source
+	 *  that needs no extra request and no server-specific knowledge. Null otherwise — never guessed. */
+	identity: string | null;
+}
+
+/**
+ * Read a display label out of an OIDC `id_token`. The signature is NOT verified, deliberately:
+ * the token came straight from the token endpoint over TLS and the result is shown to the owner
+ * as a label — it is never an authorization decision.
+ */
+export function identityFromIdToken(idToken: unknown): string | null {
+	if (typeof idToken !== "string") return null;
+	const part = idToken.split(".")[1];
+	if (!part) return null;
+	try {
+		const b64 = part.replace(/-/g, "+").replace(/_/g, "/");
+		const json = new TextDecoder().decode(Uint8Array.from(atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4)), (c) => c.charCodeAt(0)));
+		const claims = JSON.parse(json) as Record<string, unknown>;
+		for (const k of ["email", "preferred_username", "name"]) {
+			const v = claims[k];
+			if (typeof v === "string" && v.trim()) return v.trim().slice(0, 200);
+		}
+	} catch {
+		// a malformed id_token is no identity, not a failed connection
+	}
+	return null;
 }
 
 /** Turn `expires_in` seconds into the absolute instant we store. Non-numeric/absurd values are
@@ -190,6 +217,7 @@ export function parseTokenResponse(raw: unknown, now: number = Date.now()): Toke
 		refreshToken: typeof r.refresh_token === "string" && r.refresh_token.trim() ? r.refresh_token.trim() : null,
 		expiresAt: expiresAtFrom(r.expires_in, now),
 		scope: typeof r.scope === "string" && r.scope.trim() ? r.scope.trim().slice(0, 500) : null,
+		identity: identityFromIdToken(r.id_token),
 	};
 }
 

@@ -151,7 +151,16 @@ describe("token responses", () => {
 			refreshToken: "rt",
 			expiresAt: "2026-01-01T01:00:00.000Z",
 			scope: "read",
+			identity: null,
 		});
+	});
+
+	it("reads a display identity from an id_token, and ignores a malformed one", () => {
+		const tok = (c: object) => `h.${btoa(JSON.stringify(c)).replace(/=+$/, "")}.s`;
+		expect(parseTokenResponse({ access_token: "at", id_token: tok({ email: "a@b.example", name: "A" }) })?.identity).toBe("a@b.example");
+		expect(parseTokenResponse({ access_token: "at", id_token: tok({ preferred_username: "alice" }) })?.identity).toBe("alice");
+		expect(parseTokenResponse({ access_token: "at", id_token: "garbage" })?.identity).toBeNull();
+		expect(parseTokenResponse({ access_token: "at", id_token: tok({ sub: "1" }) })?.identity).toBeNull();
 	});
 
 	it("rejects a response with no access token", () => {
