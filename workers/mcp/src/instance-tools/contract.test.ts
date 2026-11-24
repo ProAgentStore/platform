@@ -37,6 +37,7 @@ import { registerRuntimeTools } from "./runtime.js";
 import { registerEmailWorkerTools } from "./email-worker.js";
 import { registerGmailIdentityTools } from "./gmail-identity.js";
 import { registerApprovalTools } from "./approvals.js";
+import { registerBranchTools } from "./branch-tools.js";
 import { registerMachineControlTools } from "./machine-control.js";
 import { registerSecureInputTools } from "./secure-input.js";
 import { registerSettingsTools } from "./settings.js";
@@ -621,6 +622,9 @@ const TABLE: Record<string, Row> = {
 	runner_restart: ["machineControl", "runtime", null, "envelope", "confirm,dry_run,force,runner_node,token"],
 	runner_update_status: ["machineControl", "read", null, null, "runner_node,token"],
 	stash_checkout: ["machineControl", "runtime", null, "envelope", "dry_run,instance_id,label,pull,repo_id,runner_node,token"],
+	coding_branches: ["branchTools", "read", null, null, "base,branch,compare,instance_id,preview,repo_id,runner_node,token"],
+	coding_branch_integrate: ["branchTools", "destructive", "coding_branch_integrate", "envelope", "branch,confirm,dry_run,expected_tip,instance_id,repo_id,runner_node,token"],
+	coding_branch_delete: ["branchTools", "destructive", "coding_branch_delete", "envelope", "branch,confirm,dry_run,expected_tip,instance_id,repo_id,runner_node,scope,token"],
 	discard_checkout: ["machineControl", "destructive", "discard_checkout", "envelope", "confirm,dry_run,instance_id,label,pull,repo_id,runner_node,token"],
 	set_auto_stash: ["machineControl", "write", null, "envelope", "dry_run,enabled,instance_id,token"],
 	actions_runner_setup: ["machineControl", "runtime", null, "envelope", "action,dry_run,instance_id,runner_group,scope,service_mode,token"],
@@ -782,6 +786,7 @@ const REGISTRARS: Record<string, (s: unknown, c: InstanceToolsCtx) => void> = {
 	knowledge: registerKnowledgeTools as any,
 	fileRead: registerFileReadTools as any,
 	machineControl: registerMachineControlTools as any,
+	branchTools: registerBranchTools as any,
 	emailWorker: registerEmailWorkerTools as any,
 	gmailIdentity: registerGmailIdentityTools as any,
 	approvals: registerApprovalTools as any,

@@ -16,6 +16,7 @@ import { registerApplicationTools } from "./applications.js";
 import { registerApplyTools } from "./apply.js";
 import { registerBaseTools } from "./base.js";
 import { registerBoardTools } from "./board.js";
+import { registerBranchTools } from "./branch-tools.js";
 import { registerCodingTools } from "./coding.js";
 import { registerCompositionTools } from "./composition.js";
 import { registerConnectorAccountTools, registerConnectorGrantTools } from "./connectors.js";
@@ -65,6 +66,8 @@ export function registerInstanceTools(
 	registerBaseTools(server, ctx);
 	registerRuntimeTools(server, ctx);
 	registerMachineControlTools(server, ctx);
+	// Branches in a repo's checkout on the machine that holds it (#1700): inventory, preview, integrate, delete.
+	registerBranchTools(server, ctx);
 	registerKnowledgeTools(server, ctx);
 	registerFileReadTools(server, ctx);
 	registerObservabilityTools(server, ctx);

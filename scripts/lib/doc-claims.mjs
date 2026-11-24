@@ -418,13 +418,13 @@ export function parseConfirmProse(src, knownTools) {
 			// Confirm-gate counts are deliberately worded so they cannot be mistaken for the MCP
 			// surface total. Once the list reached 26 at #613, the old one-word vocabulary could
 			// only report 20 and 6 as two separate counts. Accept ordinary hyphenated twenties —
-			// and thirties, which the list reached at #1032.
-			if (word === "thirty") {
-				stated.push(30);
+			// thirties (the list reached at #1032) and forties (#1700).
+			if (word === "thirty" || word === "forty") {
+				stated.push(word === "thirty" ? 30 : 40);
 				continue;
 			}
-			const compound = word.match(/^(twenty|thirty)-(one|two|three|four|five|six|seven|eight|nine)$/);
-			if (compound) stated.push((compound[1] === "twenty" ? 20 : 30) + NUMBER_WORDS.indexOf(compound[2]));
+			const compound = word.match(/^(twenty|thirty|forty)-(one|two|three|four|five|six|seven|eight|nine)$/);
+			if (compound) stated.push({ twenty: 20, thirty: 30, forty: 40 }[compound[1]] + NUMBER_WORDS.indexOf(compound[2]));
 		}
 	}
 	return { tools, stated, lines };

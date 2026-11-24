@@ -6,6 +6,7 @@ import { registerReauthRoutes } from "./coding-reauth.js";
 import { registerDriveRoutes } from "./coding-drive.js";
 import { registerFeedRoutes } from "./coding-feed.js";
 import { registerPullRoutes } from "./coding-pulls.js";
+import { registerBranchActionRoutes } from "./coding-branch-actions.js";
 import { registerCheckoutActionRoutes } from "./coding-checkout-actions.js";
 import { registerRepoRoutes } from "./coding-repos.js";
 import { registerSessionOpenRoutes } from "./coding-sessions-open.js";
@@ -44,6 +45,7 @@ export const codingRoutes = new Hono<{ Bindings: Env }>();
 // ── Repos ────────────────────────────────────────────────────────────────
 registerRepoRoutes(codingRoutes);
 registerCheckoutActionRoutes(codingRoutes);
+registerBranchActionRoutes(codingRoutes);
 
 // ── Pull requests (#401) ─────────────────────────────────────────────────
 // Registered here, directly after the repo block, because that is where the surface it belongs to

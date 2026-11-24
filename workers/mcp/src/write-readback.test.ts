@@ -397,6 +397,13 @@ const READBACK: Record<string, string | null> = {
 	"discard_checkout.label": null,
 	"discard_checkout.pull": null,
 	"discard_checkout.runner_node": "list_runner_nodes",
+	// #1700: the branch tools act on a ref that coding_branches reads back; the tip is the guard, not stored content, and the receipt reads the remote itself.
+	"coding_branch_integrate.runner_node": "list_runner_nodes",
+	"coding_branch_integrate.branch": "coding_branches",
+	"coding_branch_integrate.expected_tip": "coding_branches",
+	"coding_branch_delete.runner_node": "list_runner_nodes",
+	"coding_branch_delete.branch": "coding_branches",
+	"coding_branch_delete.expected_tip": "coding_branches",
 	// The approval is read back with GET /coding/auto-stash and on the run timeline; the MCP surface returns it from the write itself.
 	"set_auto_stash.enabled": null,
 	// #613: terminal-tab selection is durable instance state, not ephemeral client state. The

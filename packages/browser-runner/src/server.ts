@@ -1,6 +1,7 @@
 import { browserObservation } from "./browser-observation-routes.js";
 import { websiteAccessFromRequest } from "./website-access-request.js";
 import { withBrowserRequest } from "./browser-request.js";
+import { handleBranchRoute } from "./coding/branch-routes.js";
 import { handleCleanupRoute } from "./coding/cleanup-routes.js";
 import { readRecordAck } from "./coding/record-cursor.js";
 import { outgoing, redactPanesOf, secureTerminalRoute } from "./coding/pane-redact.js";
@@ -395,6 +396,13 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	// Post-run cleanup (#1265): the CLI relays the platform's per-machine policy here and reads the status back.
 	const cleanup = await handleCleanupRoute(req.method ?? "GET", path, runner.coding, () => readJson<Record<string, unknown>>(req));
 	if (cleanup) return json(res, 200, cleanup.body);
+	// Branch and stash inventory, integration and removal (#1700, #1701): refusals are values, bad input a 400, an older runner a 404.
+	try {
+		const branches = await handleBranchRoute(req.method ?? "GET", path, (i) => runner.coding.repoWorkDir(i), () => readJson<Record<string, unknown>>(req));
+		if (branches) return json(res, 200, branches.body);
+	} catch (e: unknown) {
+		return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
+	}
 	// Per-session CPU and memory, for the heartbeat (#924): which agent is loading this machine.
 	if (req.method === "GET" && path === "/coding/resources") {
 		const { readSessionResources } = await import("./coding/session-resources.js");

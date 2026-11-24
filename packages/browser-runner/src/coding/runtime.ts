@@ -372,7 +372,7 @@ export class CodingRuntime {
 		// and every snapshot lists the accepted ids, so a retry after a lost reply can be reconciled.
 		// `.v3` renders the owner's constraints in force with the objective; `coding.engine-identity`: every snapshot
 		// names its input ledger and engine process, and an id is deduplicated together with its content (input-ledger.ts).
-		return ["coding.sessions", "coding.stream", "human.takeover", "coding.inspect", "coding.repo-write", "coding.run-objective", "coding.run-objective.v2", "coding.run-objective.v3", "coding.input-idempotent", "coding.engine-identity", "coding.checkout-clean", "coding.capture-ack"];
+		return ["coding.sessions", "coding.stream", "human.takeover", "coding.inspect", "coding.repo-write", "coding.run-objective", "coding.run-objective.v2", "coding.run-objective.v3", "coding.input-idempotent", "coding.engine-identity", "coding.checkout-clean", "coding.capture-ack", "coding.branches"];
 	}
 
 	/**
@@ -405,6 +405,11 @@ export class CodingRuntime {
 	/** Set a parked run's work aside on its own ref (#1077); only a verified `owned` list is read from the wire — unknown ownership leaves a dirty checkout untouched (#1547). */
 	parkSnapshot(input: { workDir?: string; repoId?: string; runId: string; owned?: string[] }) {
 		return parkSnapshot(this.parkWorkDir(input), input.runId, Array.isArray(input.owned) && input.owned.every((p) => typeof p === "string") ? { owned: input.owned } : {});
+	}
+
+	/** The confined checkout folder for a repo-scoped call that has no session (#1700, #1701). */
+	repoWorkDir(input: { workDir?: string; repoId?: string }): string {
+		return this.parkWorkDir(input);
 	}
 
 	/** Stash or discard a checkout's local changes with a backup, then optionally fast-forward it (#1324, `checkout-clean.ts`). */

@@ -213,6 +213,9 @@ const ROUTES = [
 	"POST /:instanceId/coding/repos/:repoId/checkout/:action",
 	"GET /:instanceId/coding/auto-stash",
 	"PUT /:instanceId/coding/auto-stash",
+	"GET /:instanceId/coding/repos/:repoId/branches",
+	"POST /:instanceId/coding/repos/:repoId/branches/integrate",
+	"POST /:instanceId/coding/repos/:repoId/branches/delete",
 	"GET /:instanceId/coding/repos/:repoId/pulls",
 	"GET /:instanceId/coding/repos/:repoId/pulls/:number",
 	"GET /:instanceId/coding/timeline",
@@ -329,6 +332,12 @@ const OWNERSHIP: Record<string, string[]> = {
 		"GET /:instanceId/coding/auto-stash",
 		"PUT /:instanceId/coding/auto-stash",
 	],
+	// Branch and stash inventory, integration and removal on the machine that holds the repo (#1700).
+	"coding-branch-actions.ts": [
+		"GET /:instanceId/coding/repos/:repoId/branches",
+			"POST /:instanceId/coding/repos/:repoId/branches/integrate",
+		"POST /:instanceId/coding/repos/:repoId/branches/delete",
+		],
 	// The PR surface (#401) — the two routes that read pull requests and attribute them to agent
 	// runs. Its own module for the same reason the others are: one answerable question per file.
 	"coding-pulls.ts": [

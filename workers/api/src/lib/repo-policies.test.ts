@@ -370,6 +370,9 @@ describe("promotion is a human action", () => {
 		// Spelled by concatenation so the literal is not itself a template placeholder — biome reads
 		// `${…}` inside a plain string as a mistake, and here it is the exact text being asserted.
 		expect([...paths].sort()).toEqual([
+			// #1700 `coding_branches` / `coding_branch_integrate` / `coding_branch_delete`: GET and POST to the branches sub-routes, whose
+			// parameters are a branch name, a tip, a scope and a machine — they cannot carry a policy (the routes never read one).
+			`/v1/instances/$\{encodeURIComponent(instance_id)}/coding/repos/$\{encodeURIComponent(repo_id)}/$\{sub}`,
 			// #1324 `stash_checkout` / `discard_checkout`: POST to the checkout sub-route, whose body is a label, a pull flag and a machine
 			// name — it cannot carry a policy (the route never reads one).
 			`/v1/instances/$\{encodeURIComponent(instance_id)}/coding/repos/$\{encodeURIComponent(repo_id)}/checkout/$\{action}`,

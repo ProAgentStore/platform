@@ -70,10 +70,15 @@ export const RUNNER_ROUTES: Readonly<Record<string, RunnerRoute>> = {
 	"/coding/github-repos": readSlow(),
 	"/coding/github-search": readSlow(),
 	"/coding/github-repo-detail": readSlow(),
+	// Branch inventory (#1700): live `ls-remote`, so slow-read; a repeat changes nothing.
+	"/coding/branches": readSlow(),
 
 	// ── writes to the checkout: a repeat may do it twice ──
 	"/coding/git-write": once(),
 	"/coding/checkout-clean": once(),
+	// Integrate or delete a branch (#1700): a repeat after an unknown outcome is the CALLER's call, after a readback.
+	"/coding/branch-integrate": once(),
+	"/coding/branch-delete": once(),
 	"/coding/park-snapshot": once(),
 	"/coding/park-restore": once(),
 	"/coding/clone": once(),

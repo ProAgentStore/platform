@@ -1293,4 +1293,5 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.224": "sha256:7cb2d1a189b976c6e326600c7988e04f0a5a23b9848e1c27d33f769e49925f04", // #1640: inbox reads everything waiting on the owner across every instance (read-only, always on).
 	"0.1.225": "sha256:150ea8884da5a790af360f4c127c7d43a3fa52ef07ea1546ad0b526814bf403c", // #1702: sort_discord_category lets the owner's bot sort a category's channels by name.
 	"0.1.226": "sha256:37f02ec64c7b630eab366e397bc5519704349602b163bd960f378fa0ab2539f6", // #1697: inbox_triage lets the owner mark a coder question or parked run New/Discussed/Deferred and needs-computer; inbox gains triage and needs_computer filters.
+	"0.1.227": "sha256:a3fcf666d1e5218a829a673a56326ed451103449a0b24d60721eddf54a5741b0", // #1700: coding_branches, coding_branch_integrate and coding_branch_delete: branch inventory, preview, fast-forward integration and exact-tip deletion on the machine that holds the checkout.
 };
