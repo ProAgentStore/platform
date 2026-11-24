@@ -15,7 +15,7 @@ import { connectorRefusalFor } from "../lib/instance-connector-access.js";
 import { safeFetch } from "../lib/ssrf.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
-import type { DiscordBot, DiscordBotConnectResponse, DiscordBotDisconnectResponse, DiscordBotStatusResponse, DiscordChannel, DiscordChannelDeleteResponse, DiscordChannelListResponse, DiscordGrantListResponse, DiscordGrantResponse, DiscordGuild, DiscordGuildListResponse, DiscordManagedChannel, DiscordManagedChannelResponse, DiscordChannelAccessEntry, DiscordChannelAccessResponse, DiscordMember, DiscordMemberAccessResponse, DiscordMemberListResponse } from "../agent-types.js";
+import type { DiscordBot, DiscordBotConnectResponse, DiscordBotDisconnectResponse, DiscordBotStatusResponse, DiscordChannel, DiscordCategorySortResponse, DiscordChannelDeleteResponse, DiscordChannelListResponse, DiscordGrantListResponse, DiscordGrantResponse, DiscordGuild, DiscordGuildListResponse, DiscordManagedChannel, DiscordManagedChannelResponse, DiscordChannelAccessEntry, DiscordChannelAccessResponse, DiscordMember, DiscordMemberAccessResponse, DiscordMemberListResponse } from "../agent-types.js";
 
 export const discordRoutes = new Hono<{ Bindings: Env }>();
 
@@ -143,13 +143,13 @@ discordRoutes.get("/guilds/:guildId/channels", async (c) => {
 	const session = await requireUser(c);
 	const guildId = requireSnowflake(c.req.param("guildId"), "guildId");
 	const data = await discordJson(await botToken(c.env, session.uid), `/guilds/${guildId}/channels`);
-	const rows = (Array.isArray(data) ? data : []).filter((channel): channel is { id?: unknown; name?: unknown; type?: unknown; guild_id?: unknown; parent_id?: unknown } => !!channel && typeof channel === "object");
+	const rows = (Array.isArray(data) ? data : []).filter((channel): channel is { id?: unknown; name?: unknown; type?: unknown; guild_id?: unknown; parent_id?: unknown; position?: unknown } => !!channel && typeof channel === "object");
 	// #1413: same-named channels (#ideas under several categories) are told apart by their category.
 	const categories = new Map(rows.flatMap((row) => (row.type === CATEGORY_CHANNEL_TYPE && typeof row.id === "string" && typeof row.name === "string" ? [[row.id, row.name] as const] : [])));
 	const channels: DiscordChannel[] = rows.flatMap((row) => {
 		if (!(typeof row.id === "string" && typeof row.name === "string" && typeof row.type === "number" && TEXT_CHANNEL_TYPES.has(row.type))) return [];
 		const category = typeof row.parent_id === "string" ? categories.get(row.parent_id) : undefined;
-		return [{ id: row.id, name: row.name, type: row.type, guildId: typeof row.guild_id === "string" ? row.guild_id : guildId, ...(category ? { category } : {}) }];
+		return [{ id: row.id, name: row.name, type: row.type, guildId: typeof row.guild_id === "string" ? row.guild_id : guildId, ...(category ? { category } : {}), ...(typeof row.position === "number" ? { position: row.position } : {}) }];
 	});
 	return c.json({ channels } satisfies DiscordChannelListResponse);
 });
@@ -281,6 +281,37 @@ discordRoutes.delete("/channels/:channelId", async (c) => {
 	const revokedGrants = await revokeUserConnectorResourceGrants(c.env, session.uid, "discord", channelId);
 	await audit(c.env, session.uid, "discord.channel_delete", `Deleted Discord channel #${channel.name}`, { guildId: channel.guildId, channelId, revokedGrants });
 	return c.json({ deleted: true, channel, revokedGrants } satisfies DiscordChannelDeleteResponse);
+});
+
+/** Case-insensitive natural order, so check-in-2 sorts before check-in-10. */
+const NAME_ORDER = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
+
+/**
+ * Sort one category's text and announcement channels by name (#1702), in one bulk position update. Only positions
+ * change; a category that is already in order is left alone. Voice channels are not touched (Discord lists them
+ * after the text channels whatever their position).
+ */
+discordRoutes.post("/guilds/:guildId/categories/sort", async (c) => {
+	const session = await requireUser(c);
+	const guildId = requireSnowflake(c.req.param("guildId"), "guildId");
+	const body = (await c.req.json().catch(() => ({}))) as { categoryId?: unknown; category?: unknown };
+	const token = await botToken(c.env, session.uid);
+	const categoryId = await resolveCategory(token, guildId, body);
+	if (!categoryId) throw new HttpError(400, "Pass the category to sort: category (its name) or categoryId.");
+	const rows = await discordJson(token, `/guilds/${guildId}/channels`);
+	const channels = (Array.isArray(rows) ? rows : [])
+		.filter((r): r is { id: string; name: string; type: number; position: number; parent_id: string } => !!r && typeof r === "object" && (r as { parent_id?: unknown }).parent_id === categoryId && TEXT_CHANNEL_TYPES.has((r as { type: number }).type) && typeof (r as { name?: unknown }).name === "string" && typeof (r as { position?: unknown }).position === "number")
+		.sort((a, b) => a.position - b.position);
+	const before = channels.map((ch) => ch.name);
+	const sorted = [...channels].sort((a, b) => NAME_ORDER.compare(a.name, b.name));
+	const after = sorted.map((ch) => ch.name);
+	const changed = before.some((name, i) => name !== after[i]);
+	if (changed) {
+		const base = channels[0].position;
+		await manageJson(token, `/guilds/${guildId}/channels`, { method: "PATCH", reason: "ProAgentStore: sort_discord_category", body: sorted.map((ch, i) => ({ id: ch.id, position: base + i })) });
+		await audit(c.env, session.uid, "discord.category_sort", `Sorted ${channels.length} Discord channels by name`, { guildId, categoryId, channels: channels.length });
+	}
+	return c.json({ guildId, categoryId, changed, before, after } satisfies DiscordCategorySortResponse);
 });
 
 // ── Members and who can see a channel (#1633) ───────────────────────────────────────────────────────────────

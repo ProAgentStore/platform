@@ -194,6 +194,30 @@ export function registerDiscordTools(server: McpServer, ctx: InstanceToolsCtx): 
 		},
 	);
 
+	server.tool(
+		"sort_discord_category",
+		"Sort the text and announcement channels inside one category by name with your bot (case-insensitive, numbers in natural order, so check-in-2 comes before check-in-10). Only the channels' positions change; voice channels are left alone; a category already in order is not touched (`changed: false`). The result lists the channel names `before` and `after`. The bot needs Manage Channels. WRITE. Call with dry_run first; list_discord_channels shows the current order.",
+		{
+			token: tokenArg,
+			guild_id: z.string().describe("Server id from list_discord_guilds."),
+			category: z.string().min(1).optional().describe("Category NAME, case-insensitive (the `category` field of list_discord_channels). Refused when no or several categories have that name."),
+			category_id: z.string().min(1).optional().describe("Category id instead of a name."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, guild_id, category, category_id, dry_run }) => {
+			const session = tokenFor(token);
+			if (!session) return authRequired();
+			const input = { guild_id, ...categoryBody(category, category_id) };
+			const denied = await requirePermission(safetyFor(token), "write", "sort_discord_category", input);
+			if (denied) return denied;
+			if (dry_run) return dryRun(safetyFor(token), "sort_discord_category", "sort a Discord category's channels by name", input, { endpoint: `/v1/discord/guilds/${encodeURIComponent(guild_id)}/categories/sort`, method: "POST" });
+			const data = await authedCall(`/v1/discord/guilds/${encodeURIComponent(guild_id)}/categories/sort`, session, { method: "POST", body: JSON.stringify(categoryBody(category, category_id)) }, env);
+			if (err(data)) return text(`Error: ${err(data)}`);
+			await audit(safetyFor(token), { tool: "sort_discord_category", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
 	// ── #1633: server members, and who can see a channel ──
 	server.tool(
 		"list_discord_members",

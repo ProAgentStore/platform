@@ -20,10 +20,10 @@
  */
 
 /** Every tool the server can register, with all surfaces gated on. */
-export const MCP_TOOL_COUNT = 435;
+export const MCP_TOOL_COUNT = 436;
 
 /** Registered for every connection, whatever the user is subscribed to. */
-export const MCP_TOOL_ALWAYS_ON = 406;
+export const MCP_TOOL_ALWAYS_ON = 407;
 
 /** Registered only when the user has an agent with the matching console surface
  *  (`apply`, `repo`, `coding`) — so a Repo Chat user never sees `apply_to_job`. */
@@ -70,4 +70,5 @@ export const TOOL_COUNT_CEILINGS: ReadonlyArray<{ count: number; issue: string; 
 	{ count: 431, issue: "#1625", date: "2026-11-10", reason: "create_discord_channel / update_discord_channel / delete_discord_channel: the owner's bot creates, renames, moves and deletes Discord channels. The existing Discord tools only list servers and channels and grant/revoke an instance's access to a channel; none reaches Discord's channel create, modify or delete endpoints, so check-in channels had to be made by hand." },
 	{ count: 434, issue: "#1633", date: "2026-11-11", reason: "list_discord_members / get_discord_channel_access / set_discord_channel_member_access: the owner's bot finds a server member, shows who can see a channel, and gives or removes one member's access. The #1625 tools create channels but cannot let anyone into one, so 17 private check-in channels were made that no intern could see." },
 	{ count: 435, issue: "#1640", date: "2026-11-22", reason: "inbox: everything waiting on the owner across every instance, the read the console Needs you page already has. Always on, read-only." },
+	{ count: 436, issue: "#1702", date: "2026-11-24", reason: "sort_discord_category: the owner's bot sorts a category's channels by name. update_discord_channel moves a channel between categories but cannot set its position, so the FAS check-in channels could only be ordered by dragging them by hand." },
 ];

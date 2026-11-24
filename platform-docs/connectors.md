@@ -115,6 +115,11 @@ View Channel, Send Messages, Read Message History, Add Reactions, Attach Files a
 member's own overwrite. Setting access needs the bot's Manage Roles permission, and writes a
 `discord.member_access_*` audit event.
 
+`sort_discord_category` sorts the text and announcement channels inside one category by name (#1702): case-insensitive,
+with numbers in natural order, so `check-in-2` comes before `check-in-10`. Only positions change, in one bulk call;
+voice channels are left alone, and a category already in order is not touched. It needs Manage Channels and writes a
+`discord.category_sort` audit event. `list_discord_channels` now carries each channel's `position`.
+
 ### Release notes and Slack (#1216, #1217)
 
 When a coder run ships to a repository's default branch, the platform posts **one release note per

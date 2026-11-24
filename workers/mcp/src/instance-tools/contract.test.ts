@@ -727,6 +727,7 @@ const TABLE: Record<string, Row> = {
 	revoke_instance_discord_grant: ["discord", "destructive", "revoke_instance_discord_grant", "envelope", "confirm,dry_run,grant_id,instance_id,token"],
 	create_discord_channel: ["discord", "write", null, "envelope", "category,category_id,dry_run,guild_id,name,token,topic,type"],
 	update_discord_channel: ["discord", "write", null, "envelope", "category,category_id,channel_id,dry_run,name,token,topic"],
+	sort_discord_category: ["discord", "write", null, "envelope", "category,category_id,dry_run,guild_id,token"],
 	delete_discord_channel: ["discord", "destructive", "delete_discord_channel", "envelope", "channel_id,confirm,dry_run,token"],
 	list_discord_members: ["discord", "read", null, null, "after,guild_id,limit,query,token"],
 	get_discord_channel_access: ["discord", "read", null, null, "channel_id,token"],

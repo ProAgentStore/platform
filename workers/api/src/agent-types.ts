@@ -259,6 +259,8 @@ export interface DiscordChannel {
 	name: string;
 	/** Name of the category the channel sits under, when it has one (#1413). */
 	category?: string;
+	/** Its position among its siblings; channels in one category display in ascending position (#1702). */
+	position?: number;
 }
 
 /** One owner-approved Discord channel for one private agent instance. */
@@ -314,6 +316,16 @@ export interface DiscordChannelDeleteResponse {
 	channel: DiscordManagedChannel;
 	/** How many of the owner's instance grants of this channel were revoked with it. */
 	revokedGrants: number;
+}
+
+/** POST /v1/discord/guilds/:guildId/categories/sort (#1702): a category's text channels by position, before and after. */
+export interface DiscordCategorySortResponse {
+	guildId: string;
+	categoryId: string;
+	/** False when the category was already in name order and nothing was sent to Discord. */
+	changed: boolean;
+	before: string[];
+	after: string[];
 }
 
 /** A member of a server the owner's bot is in (#1633). `globalName` is the account's display name, `nick` the server nickname. */

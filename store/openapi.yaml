@@ -18923,6 +18923,35 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "502": { $ref: "#/components/responses/BadGateway" }
 
+  /v1/discord/guilds/{guildId}/categories/sort:
+    post:
+      summary: Sort a Discord category's channels by name with my bot
+      description: Sorts the category's text and announcement channels by name (case-insensitive, natural number order) in one bulk position update. Only positions change; voice channels are left alone; a category already in order is not touched. The bot needs Manage Channels (#1702).
+      operationId: sortDiscordCategory
+      tags: [Connectors]
+      parameters:
+        - { name: guildId, in: path, required: true, schema: { type: string }, description: Discord server snowflake. }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                categoryId: { type: string, description: Category snowflake. }
+                category: { type: string, description: Category name, case-insensitive. }
+      responses:
+        "200":
+          description: The channel names in their order before and after
+          content:
+            application/json:
+              schema: { type: object, properties: { guildId: { type: string }, categoryId: { type: string }, changed: { type: boolean }, before: { type: array, items: { type: string } }, after: { type: array, items: { type: string } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "502": { $ref: "#/components/responses/BadGateway" }
   /v1/discord/channels/{channelId}:
     patch:
       summary: Rename, re-topic or move a Discord channel with my bot

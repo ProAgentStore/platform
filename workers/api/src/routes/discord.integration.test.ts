@@ -37,12 +37,14 @@ const CH_VOICE = "666666666666666666";
 const ANA = "131313131313131313";
 const STRANGER = "141414141414141414";
 const ROLE_STAFF = "151515151515151515";
+const SORT_GUILD = "161616161616161616";
 const DISCORD_TOOLS = ["discord_list_granted_channels", "discord_read_messages", "discord_read_reactions", "discord_send_message", "discord_add_reaction"];
 
 let d1: RealSchemaD1;
 let env: Env;
 let sent: Array<{ path: string; method: string; auth: string | null; body: string | null }>;
 let revokedTokens: Set<string>;
+let sortRefused: boolean;
 
 const app = new Hono<{ Bindings: Env }>();
 app.route("/v1/discord", discordRoutes);
@@ -81,6 +83,20 @@ function discord(path: string, method: string, auth: string | null): Response {
 	if (path === `/channels/${CH_ALERTS}`) return json({ id: CH_ALERTS, name: "alerts", type: 0, guild_id: GUILD });
 	if (path === `/channels/${CH_VOICE}`) return json({ id: CH_VOICE, name: "lounge", type: 2, guild_id: GUILD });
 	if (path === `/channels/${CH_PRIVATE}`) return json({ id: CH_PRIVATE, name: "private", type: 0, guild_id: GUILD, permission_overwrites: [{ id: GUILD, type: 0, allow: "0", deny: "1024" }, { id: ROLE_STAFF, type: 0, allow: "1024", deny: "0" }, { id: ANA, type: 1, allow: "117824", deny: "0" }] });
+	// #1702: a server with an unsorted check-in category, an already-sorted one, and a voice channel among them.
+	if (path === `/guilds/${SORT_GUILD}/channels` && method === "GET") {
+		return json([
+			{ id: "171717171717171701", name: "CHECK-INS", type: 4, guild_id: SORT_GUILD, position: 0 },
+			{ id: "171717171717171702", name: "DONE", type: 4, guild_id: SORT_GUILD, position: 1 },
+			{ id: "171717171717171711", name: "check-in-10", type: 0, guild_id: SORT_GUILD, parent_id: "171717171717171701", position: 3 },
+			{ id: "171717171717171712", name: "Check-in-2", type: 0, guild_id: SORT_GUILD, parent_id: "171717171717171701", position: 4 },
+			{ id: "171717171717171713", name: "check-in-ana", type: 5, guild_id: SORT_GUILD, parent_id: "171717171717171701", position: 5 },
+			{ id: "171717171717171714", name: "a-voice-room", type: 2, guild_id: SORT_GUILD, parent_id: "171717171717171701", position: 6 },
+			{ id: "171717171717171721", name: "alpha", type: 0, guild_id: SORT_GUILD, parent_id: "171717171717171702", position: 0 },
+			{ id: "171717171717171722", name: "beta", type: 0, guild_id: SORT_GUILD, parent_id: "171717171717171702", position: 1 },
+		]);
+	}
+	if (path === `/guilds/${SORT_GUILD}/channels` && method === "PATCH") return sortRefused ? json({ message: "Missing Permissions", code: 50013 }, 403) : new Response(null, { status: 204 });
 	// #1274: one message with its reaction counts, and who reacted with each emoji.
 	if (path === `/channels/${CH_ALERTS}/messages/888888888888888888` && method === "GET") return json({ id: "888888888888888888", reactions: [{ count: 2, me: false, emoji: { id: null, name: "👍" } }, { count: 1, me: true, emoji: { id: "123123123123123123", name: "pags" } }] });
 	if (path === `/channels/${CH_ALERTS}/messages/888888888888888888/reactions/${encodeURIComponent("👍")}` && method === "GET") return json([{ id: "111111111111111110", username: "ana", email: "never-passed-on@example.com" }, { id: "111111111111111111", username: "bo", bot: true }]);
@@ -98,6 +114,7 @@ beforeEach(() => {
 	env = { DB: d1.DB, KEY_ENCRYPTION_KEY: "a".repeat(64), SESSION_SIGNING_KEY: "s".repeat(64) } as unknown as Env;
 	sent = [];
 	revokedTokens = new Set();
+	sortRefused = false;
 	vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = new URL(String(input instanceof Request ? input.url : input));
 		const auth = new Headers(init?.headers).get("Authorization");
@@ -473,6 +490,56 @@ describe("the owner's bot manages channels (#1625)", () => {
 		expect(res.status).toBe(403);
 		expect(res.json.error).toMatch(/Manage Channels/);
 		expect(((await call("GET", `/v1/discord/instances/${INSTANCE}/grants`)).json.grants as unknown[]).length).toBe(1);
+	});
+});
+
+describe("the owner's bot sorts a category's channels by name (#1702)", () => {
+	const sentTo = (method: string, path: string) => sent.filter((r) => r.method === method && r.path === path);
+
+	it("sorts text and announcement channels in natural order in one bulk call, leaving voice alone, and audits it", async () => {
+		await call("PUT", "/v1/discord/bot", { token: TOKEN_A });
+		const res = await call("POST", `/v1/discord/guilds/${SORT_GUILD}/categories/sort`, { category: "check-ins" });
+		expect(res.status).toBe(200);
+		expect(res.json).toEqual({ guildId: SORT_GUILD, categoryId: "171717171717171701", changed: true, before: ["check-in-10", "Check-in-2", "check-in-ana"], after: ["Check-in-2", "check-in-10", "check-in-ana"] });
+		const patches = sentTo("PATCH", `/guilds/${SORT_GUILD}/channels`);
+		expect(patches).toHaveLength(1);
+		expect(JSON.parse(patches[0].body ?? "[]")).toEqual([
+			{ id: "171717171717171712", position: 3 },
+			{ id: "171717171717171711", position: 4 },
+			{ id: "171717171717171713", position: 5 },
+		]);
+		expect(events().map((e) => e.event)).toContain("discord.category_sort");
+	});
+
+	it("a category already in order is left alone: nothing is sent and nothing is audited", async () => {
+		await call("PUT", "/v1/discord/bot", { token: TOKEN_A });
+		const res = await call("POST", `/v1/discord/guilds/${SORT_GUILD}/categories/sort`, { categoryId: "171717171717171702" });
+		expect(res.json).toMatchObject({ changed: false, before: ["alpha", "beta"], after: ["alpha", "beta"] });
+		expect(sentTo("PATCH", `/guilds/${SORT_GUILD}/channels`)).toEqual([]);
+		expect(events().map((e) => e.event)).not.toContain("discord.category_sort");
+	});
+
+	it("refuses without a category, and an unknown category, before anything is sent", async () => {
+		await call("PUT", "/v1/discord/bot", { token: TOKEN_A });
+		expect((await call("POST", `/v1/discord/guilds/${SORT_GUILD}/categories/sort`, {})).status).toBe(400);
+		expect((await call("POST", `/v1/discord/guilds/${SORT_GUILD}/categories/sort`, { category: "" })).status).toBe(400);
+		expect((await call("POST", `/v1/discord/guilds/${SORT_GUILD}/categories/sort`, { category: "Nope" })).status).toBe(404);
+		expect(sentTo("PATCH", `/guilds/${SORT_GUILD}/channels`)).toEqual([]);
+	});
+
+	it("a missing Manage Channels permission says so, and nothing is audited", async () => {
+		await call("PUT", "/v1/discord/bot", { token: TOKEN_A });
+		sortRefused = true;
+		const res = await call("POST", `/v1/discord/guilds/${SORT_GUILD}/categories/sort`, { category: "check-ins" });
+		expect(res.status).toBe(403);
+		expect(res.json.error).toMatch(/Manage Channels/);
+		expect(events().map((e) => e.event)).not.toContain("discord.category_sort");
+	});
+
+	it("list_discord_channels carries each channel's position, so the new order reads back", async () => {
+		await call("PUT", "/v1/discord/bot", { token: TOKEN_A });
+		const channels = (await call("GET", `/v1/discord/guilds/${SORT_GUILD}/channels`)).json.channels as Array<{ name: string; position: number }>;
+		expect(channels.find((c) => c.name === "check-in-10")?.position).toBe(3);
 	});
 });
 

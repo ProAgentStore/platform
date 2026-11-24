@@ -756,6 +756,10 @@ const READBACK: Record<string, string | null> = {
 	"update_discord_channel.category": "list_discord_channels",
 	"update_discord_channel.category_id": "list_discord_channels",
 	"delete_discord_channel.channel_id": "list_discord_channels",
+	// #1702: the new order reads back from list_discord_channels, which lists channels in position order.
+	"sort_discord_category.guild_id": "list_discord_channels",
+	"sort_discord_category.category": "list_discord_channels",
+	"sort_discord_category.category_id": "list_discord_channels",
 	// #1633: a member's access reads back from the channel's overwrites.
 	"set_discord_channel_member_access.channel_id": "get_discord_channel_access",
 	"set_discord_channel_member_access.user_id": "get_discord_channel_access",

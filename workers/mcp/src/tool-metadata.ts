@@ -482,6 +482,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	grant_instance_discord_channel: "write",
 	create_discord_channel: "write",
 	update_discord_channel: "write",
+	sort_discord_category: "write",
 	set_discord_channel_member_access: "write",
 	// #1217: who receives release notes, a test note to one granted channel, and the Slack bot + its grants — reversible owner state.
 	set_instance_release_notes: "write",

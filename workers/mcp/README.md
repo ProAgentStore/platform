@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**435 tool registrations.** 406 are always registered; 29 are gated to the console
+**436 tool registrations.** 407 are always registered; 29 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -639,6 +639,7 @@ immediately instead of a whole transcript.
 | `list_discord_members` | Members of one server (id, username, display name, nickname), searched by name; needs the Server Members Intent (#1633) | read | | |
 | `get_discord_channel_access` | Who can see a channel: its overwrites for @everyone, roles and members, with names (#1633) | read | | |
 | `set_discord_channel_member_access` | Give one member access to a channel, or remove their own access; needs Manage Roles (#1633) | write | yes | |
+| `sort_discord_category` | Sort a category's text channels by name (natural order); only positions change, voice channels are left alone; needs Manage Channels (#1702) | write | yes | |
 | `get_instance_release_notes` | Who receives an instance's release notes: its own setting, the account default, and each granted Discord/Slack channel marked `selected` (#1217) | read | | |
 | `set_instance_release_notes` | Turn an instance's release notes on/off (null = follow the account) and choose which granted channels receive them; an ungranted grant id is refused (#1217) | write | yes | |
 | `send_test_release_note` | Post a test release note to one channel granted to the instance (#1217) | write | yes | |

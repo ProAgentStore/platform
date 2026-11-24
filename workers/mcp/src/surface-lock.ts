@@ -1291,4 +1291,5 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.222": "sha256:ac80797d904e3db6bb8f9d05c470efb22a1076bfd9a99beacf19abb71c32c1c4", // #1633: list_discord_members, get_discord_channel_access and set_discord_channel_member_access let the owner's bot find members and give one access to a channel.
 	"0.1.223": "sha256:9a5ba2b5e1cb5b1d5aa7feee5beb014a99db2f22d9e9d7456af16f57a2b71d38", // #1612: get_console_link target mcp-connection + endpoint
 	"0.1.224": "sha256:7cb2d1a189b976c6e326600c7988e04f0a5a23b9848e1c27d33f769e49925f04", // #1640: inbox reads everything waiting on the owner across every instance (read-only, always on).
+	"0.1.225": "sha256:150ea8884da5a790af360f4c127c7d43a3fa52ef07ea1546ad0b526814bf403c", // #1702: sort_discord_category lets the owner's bot sort a category's channels by name.
 };
