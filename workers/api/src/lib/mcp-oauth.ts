@@ -190,7 +190,8 @@ export function identityFromIdToken(idToken: unknown): string | null {
 		const claims = JSON.parse(json) as Record<string, unknown>;
 		for (const k of ["email", "preferred_username", "name"]) {
 			const v = claims[k];
-			if (typeof v === "string" && v.trim()) return v.trim().slice(0, 200);
+			// A label that long is not an email or a login; skip it rather than show half of it.
+			if (typeof v === "string" && v.trim() && v.trim().length <= 200) return v.trim();
 		}
 	} catch {
 		// a malformed id_token is no identity, not a failed connection
