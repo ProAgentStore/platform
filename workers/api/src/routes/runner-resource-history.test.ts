@@ -91,7 +91,9 @@ describe("two-tier resource history (#924)", () => {
 		expect(last.loadAvg[0]).toBe(40); // the spike survives the bucket
 		expect(last.memFreeBytes).toBe(1 * GiB); // and so does the low-water memory
 		expect(last.samples).toBe(10);
-	});
+		// 361 sequential real-database heartbeats: about 25ms each and linear (7-11s alone), but over the 30s default under the
+		// pre-push hook's parallel load (#1665 named this file when the hook stalled). A slow test, not a hang; give it room.
+	}, 120_000);
 
 	it("serves a window of the history across every name the machine has, oldest first", async () => {
 		await heartbeat("i-a", { runnerNode: "Macmini", resources: sample(1, T0) });
