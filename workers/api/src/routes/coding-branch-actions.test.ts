@@ -1,4 +1,4 @@
-/** The branch routes, driven as the owner (#1700): the tenant gate, the exact-mutation contract, and each named failure's status. */
+/** The branch and stash routes, driven as the owner (#1700, #1701): the tenant gate, the exact-mutation contract, and each named failure's status. */
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "../lib/auth.js";
@@ -56,11 +56,13 @@ describe("reads", () => {
 		await call("GET", "/branches?compare=feature&base=main&runner_node=Macmini.modem");
 		expect(callRunner.mock.calls[0][2]).toMatchObject({ compare: "feature", base: "main" });
 		expect(getRunnerConn.mock.calls[0][3]).toBe("Macmini.modem");
+		await call("GET", `/stashes?sha=${TIP}`);
+		expect(callRunner.mock.calls[1][2]).toMatchObject({ workDir: "/w/r", repoId: "r1", sha: TIP });
 	});
 
 	it("an offline machine is a 503 that says nothing was read, never an empty list", async () => {
 		getBoundRunnerConn.mockResolvedValue(null);
-		const res = await build().call("GET", "/branches");
+		const res = await build().call("GET", "/stashes");
 		expect(res.status).toBe(503);
 		expect(await res.json()).toMatchObject({ ok: false, reason: "unreachable", outcome: "not-started" });
 		expect(callRunner).not.toHaveBeenCalled();
@@ -96,9 +98,12 @@ describe("mutations", () => {
 		expect(callRunner.mock.calls[0][2]).toMatchObject({ dryRun: true, branch: "f" });
 		expect((await call("POST", "/branches/integrate", { branch: "f", runner_node: "Macmini.modem", dry_run: false })).status).toBe(400);
 		expect((await call("POST", "/branches/delete", { branch: "f", runner_node: "Macmini.modem" })).status).toBe(400);
+		expect((await call("POST", "/stashes/drop", { runner_node: "Macmini.modem", dry_run: false })).status).toBe(400);
 		callRunner.mockResolvedValue({ ok: true, dryRun: false });
 		expect((await call("POST", "/branches/integrate", { branch: "f", expected_tip: TIP, runner_node: "Macmini.modem", dry_run: false })).status).toBe(200);
 		expect(callRunner.mock.calls.at(-1)?.[2]).toMatchObject({ dryRun: false, expectedTip: TIP });
+		expect((await call("POST", "/stashes/drop", { sha: TIP, runner_node: "Macmini.modem", dry_run: false })).status).toBe(200);
+		expect(callRunner.mock.calls.at(-1)?.[2]).toMatchObject({ dryRun: false, sha: TIP });
 	});
 
 	it("a refusal the runner reports as a value is a 409 carrying the whole answer", async () => {
@@ -110,7 +115,7 @@ describe("mutations", () => {
 
 	it("a machine lost mid-call is 502 with outcome unknown and a readback instruction", async () => {
 		callRunner.mockRejectedValue(new RunnerUnreachableError("the relay has no live socket"));
-		const res = await build().call("POST", "/branches/delete", { branch: "f", scope: "local", expected_tip: TIP, runner_node: "Macmini.modem", dry_run: false });
+		const res = await build().call("POST", "/stashes/drop", { sha: TIP, runner_node: "Macmini.modem", dry_run: false });
 		expect(res.status).toBe(502);
 		expect(await res.json()).toMatchObject({ ok: false, reason: "unconfirmed", outcome: "unknown" });
 	});
@@ -118,7 +123,7 @@ describe("mutations", () => {
 
 describe("runner route classification", () => {
 	it("reads are repeatable, mutations are never re-sent", () => {
-		for (const p of ["/coding/branches"]) expect(RUNNER_ROUTES[p].retry).toBe("safe");
-		for (const p of ["/coding/branch-integrate", "/coding/branch-delete"]) expect(RUNNER_ROUTES[p].retry).toBe("never");
+		for (const p of ["/coding/branches", "/coding/stashes"]) expect(RUNNER_ROUTES[p].retry).toBe("safe");
+		for (const p of ["/coding/branch-integrate", "/coding/branch-delete", "/coding/stash-drop"]) expect(RUNNER_ROUTES[p].retry).toBe("never");
 	});
 });

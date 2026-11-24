@@ -20,10 +20,10 @@
  */
 
 /** Every tool the server can register, with all surfaces gated on. */
-export const MCP_TOOL_COUNT = 440;
+export const MCP_TOOL_COUNT = 442;
 
 /** Registered for every connection, whatever the user is subscribed to. */
-export const MCP_TOOL_ALWAYS_ON = 411;
+export const MCP_TOOL_ALWAYS_ON = 413;
 
 /** Registered only when the user has an agent with the matching console surface
  *  (`apply`, `repo`, `coding`) — so a Repo Chat user never sees `apply_to_job`. */
@@ -73,4 +73,5 @@ export const TOOL_COUNT_CEILINGS: ReadonlyArray<{ count: number; issue: string; 
 	{ count: 436, issue: "#1702", date: "2026-11-24", reason: "sort_discord_category: the owner's bot sorts a category's channels by name. update_discord_channel moves a channel between categories but cannot set its position, so the FAS check-in channels could only be ordered by dragging them by hand." },
 	{ count: 437, issue: "#1697", date: "2026-11-25", reason: "inbox_triage: the owner marks a coder question or parked run New, Discussed or Deferred and as needing a computer, shared with the console Needs you page. inbox is read-only and every other tool answers or changes the item itself; none records the owner's own triage of it." },
 	{ count: 440, issue: "#1700", date: "2026-11-25", reason: "coding_branches / coding_branch_integrate / coding_branch_delete: branch inventory (local, live remote, cached refs), comparison and the preview of each change, a fast-forward integration into the default branch through its checks, and exact-tip branch deletion, on the machine that holds the checkout. No existing tool reaches them: coding_session_message would shell out through a terminal pane and return a truncated screen, and the repo's own read tools see files, not the remote's heads, other work trees or branch protection. Three tools, not one, because the scopes differ: the read is read, the other two are destructive and confirmed." },
+	{ count: 442, issue: "#1701", date: "2026-11-25", reason: "coding_stashes / coding_stash_drop: a repo's stash inventory and inspection on the machine that holds the checkout (immutable SHA, date, message, base, attribution only where the stash's own message says it, changed paths with what the default branch already holds), and dropping one stash by its exact SHA with a preview, destructive gate, readback and receipt. stash_checkout creates stashes and cannot list, inspect or remove one, and a terminal pane would address `stash@{n}`, whose index shifts under concurrent stashes. Two tools because the scopes differ: the read is read, the drop is destructive and confirmed." },
 ];

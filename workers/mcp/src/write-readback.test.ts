@@ -404,6 +404,8 @@ const READBACK: Record<string, string | null> = {
 	"coding_branch_delete.runner_node": "list_runner_nodes",
 	"coding_branch_delete.branch": "coding_branches",
 	"coding_branch_delete.expected_tip": "coding_branches",
+	"coding_stash_drop.runner_node": "list_runner_nodes",
+	"coding_stash_drop.sha": "coding_stashes",
 	// The approval is read back with GET /coding/auto-stash and on the run timeline; the MCP surface returns it from the write itself.
 	"set_auto_stash.enabled": null,
 	// #613: terminal-tab selection is durable instance state, not ephemeral client state. The

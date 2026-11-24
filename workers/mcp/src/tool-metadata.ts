@@ -537,6 +537,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	coding_branches: "read",
 	coding_branch_integrate: "destructive",
 	coding_branch_delete: "destructive",
+	coding_stashes: "read",
+	coding_stash_drop: "destructive",
 	set_auto_stash: "write",
 	// #990: reads one machine's latest update operation. A read, and deliberately so — it answers
 	// the question a lost `runner_update` reply leaves open, and must not need the scope that

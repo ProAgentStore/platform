@@ -1,11 +1,11 @@
 /**
- * Branch inventory, integration and removal on the machine that holds a repo's checkout (#1700).
+ * Branch inventory, integration and removal on the machine that holds a repo's checkout (#1700, #1701).
  *
  * One transport for the runner endpoints (`packages/browser-runner/src/coding/branch-routes.ts`). What
  * it adds over `callRunner` is the part the cloud owns:
  *
  *   * the repo must be this user's, on this instance (`getRepo`), and the machine is the one NAMED — a
- *     mutation never falls back to "whichever machine is bound", because a branch lives in ONE
+ *     mutation never falls back to "whichever machine is bound", because a branch or stash lives in ONE
  *     machine's checkout and the same repo on another machine is a different set of refs;
  *   * every way the machine cannot be reached is a NAMED failure (`unreachable`, `unconfirmed`,
  *     `old_runner`, `refused`, `failed`) — never an empty list, which would read as "no branches";
@@ -22,13 +22,13 @@ import { runnerUpgradeClause } from "./runner-upgrade.js";
 import { isRunnerUnreachable } from "./runner-unreachable.js";
 import type { Env } from "../types.js";
 
-/** The CLI release whose runner serves the branch routes. Named in the refusal. */
-export const BRANCH_TOOLS_MIN_CLI = "0.4.251";
+/** The CLI release whose runner serves the branch and stash routes. Named in the refusal. */
+export const BRANCH_TOOLS_MIN_CLI = "0.4.252";
 
 /** Above the runner's own git timeouts (a live `ls-remote`, a fetch, a push) so a slow remote is reported, not cut off. */
 export const BRANCH_TIMEOUT_MS = 120_000;
 
-export type BranchRunnerPath = "/coding/branches" | "/coding/branch-integrate" | "/coding/branch-delete";
+export type BranchRunnerPath = "/coding/branches" | "/coding/branch-integrate" | "/coding/branch-delete" | "/coding/stashes" | "/coding/stash-drop";
 
 export type BranchFailure = "no_repo" | "unreachable" | "unconfirmed" | "old_runner" | "refused" | "failed";
 
@@ -54,9 +54,9 @@ export async function callBranchRunner<T>(
 		return { ok: true, machine, repo: { id: repo.id, name: repo.name }, result };
 	} catch (e) {
 		const message = e instanceof Error ? e.message : String(e);
-		if (/→ 404|not found/i.test(message)) return { ok: false, reason: "old_runner", machine, error: runnerUpgradeClause({ what: "inspect or change this repo's branches", minCli: BRANCH_TOOLS_MIN_CLI, node: machine }) };
+		if (/→ 404|not found/i.test(message)) return { ok: false, reason: "old_runner", machine, error: runnerUpgradeClause({ what: "inspect or change this repo's branches and stashes", minCli: BRANCH_TOOLS_MIN_CLI, node: machine }) };
 		if (isRunnerUnreachable(e)) {
-			return { ok: false, reason: "unconfirmed", ...(input.mutating ? { outcome: "unknown" as const } : {}), machine, error: `${machine ? `The machine ${machine}` : "The machine"} went away before it answered (${clipMarked(message, 120, { within: true })}).${input.mutating ? " It is NOT known whether the change ran: read the branches again and compare against the receipt you expected before repeating it." : ""}` };
+			return { ok: false, reason: "unconfirmed", ...(input.mutating ? { outcome: "unknown" as const } : {}), machine, error: `${machine ? `The machine ${machine}` : "The machine"} went away before it answered (${clipMarked(message, 120, { within: true })}).${input.mutating ? " It is NOT known whether the change ran: read the branches or stashes again and compare against the receipt you expected before repeating it." : ""}` };
 		}
 		return { ok: false, reason: /→ 400/.test(message) ? "refused" : "failed", machine, error: `The machine declined or failed the request: ${clipMarked(message, 240, { within: true })}` };
 	}

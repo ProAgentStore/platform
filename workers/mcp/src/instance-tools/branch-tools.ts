@@ -5,15 +5,15 @@ import { audit, dryRun, requireConfirmation, requirePermission } from "../safety
 import type { InstanceToolsCtx } from "./shared.js";
 
 /**
- * Branches in a repo's checkout, on the machine that holds it (#1700).
+ * Branches and stashes in a repo's checkout, on the machine that holds it (#1700, #1701).
  *
  * The git is the runner's; the API route is `workers/api/src/routes/coding-branch-actions.ts`. Two shapes:
  *
- *   READS (`coding_branches`): inventory, comparison, inspection, and the PREVIEW of each
+ *   READS (`coding_branches`, `coding_stashes`): inventory, comparison, inspection, and the PREVIEW of each
  *   mutation (`preview`), which asks the machine what the change would do — the unique commits and files, the
  *   tip to pass back, the checks — and changes nothing. They are `read` scope.
  *
- *   MUTATIONS (`coding_branch_integrate`, `coding_branch_delete`): `destructive` scope and
+ *   MUTATIONS (`coding_branch_integrate`, `coding_branch_delete`, `coding_stash_drop`): `destructive` scope and
  *   an exact `confirm`. Each names the machine (`runner_node`) and the tip or SHA the caller read; the machine
  *   re-reads it and refuses a stale one. Their own `dry_run` is the usual no-network description — the preview
  *   that touches the machine is the read tool's `preview`, so a dry run never leaves this Worker.
@@ -21,7 +21,7 @@ import type { InstanceToolsCtx } from "./shared.js";
 export function registerBranchTools(server: McpServer, ctx: InstanceToolsCtx): void {
 	const { env, tokenFor, safetyFor } = ctx;
 	const tokenField = z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in.");
-	const route = (instance_id: string, repo_id: string, sub: "branches" | "branches/integrate" | "branches/delete") => `/v1/instances/${encodeURIComponent(instance_id)}/coding/repos/${encodeURIComponent(repo_id)}/${sub}`;
+	const route = (instance_id: string, repo_id: string, sub: "branches" | "branches/integrate" | "branches/delete" | "stashes" | "stashes/drop") => `/v1/instances/${encodeURIComponent(instance_id)}/coding/repos/${encodeURIComponent(repo_id)}/${sub}`;
 	const common = {
 		token: tokenField,
 		instance_id: z.string().describe("Instance ID or slug"),
@@ -110,6 +110,52 @@ export function registerBranchTools(server: McpServer, ctx: InstanceToolsCtx): v
 			if (unconfirmed) return unconfirmed;
 			const data = (await authedCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify({ runner_node, scope, branch, expected_tip, dry_run: false }) }, env)) as { error?: string };
 			await audit(safetyFor(token), { tool: "coding_branch_delete", action: data.error ? "failed" : "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"coding_stashes",
+		"List a repo's git stashes on the machine that holds its checkout (#1701), or inspect one. Each entry carries its immutable commit `sha` (the only handle that stays valid — `index` shifts whenever any stash is pushed or dropped), date, message, base commit, the branch it was made on, the pins (`refs/pags/*`) pointing at it, the number of changed files, and `attribution`: `run` (a parked run, from its own message), `checkout-stash` (stash_checkout, with its label) or `unknown` — never guessed. With `sha` it inspects that stash: every changed path (tracked and untracked) with `onDefault` marking content the default branch already holds, `uniqueFiles`, how far the default branch has moved since the stash's base, and a diffstat. An unknown sha answers `found: false`. An offline or old machine is named with a `reason`, never an empty list. Nothing is applied or changed. Read-only.",
+		{
+			...common,
+			runner_node: optionalNode,
+			sha: z.string().optional().describe("Full 40-character stash commit SHA to inspect. Omit to list."),
+		},
+		async ({ token, instance_id, repo_id, runner_node, sha }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "coding_stashes", { instance_id, repo_id, runner_node, sha });
+			if (denied) return denied;
+			const q = new URLSearchParams();
+			if (runner_node) q.set("runner_node", runner_node);
+			if (sha) q.set("sha", sha);
+			return jsonText(await authedCall(`${route(instance_id, repo_id, "stashes")}${q.size ? `?${q}` : ""}`, sessionToken, {}, env));
+		},
+	);
+
+	server.tool(
+		"coding_stash_drop",
+		"Drop one git stash, addressed by its immutable commit SHA — never by `stash@{n}` (#1701). Inspect it first with coding_stashes `sha`: that shows every path it holds and which are not on the default branch yet — what you are about to lose. The machine looks the entry up by SHA inside the call, drops exactly it, checks that git dropped that SHA (if the list shifted under it, the wrong entry is put straight back and the call refuses with `index_shifted`), and reads the list back. A SHA already gone answers `alreadyGone: true` and touches nothing. The commit stays recoverable: the receipt carries the `git stash store` line, and any `refs/pags/*` pin to it is left in place and reported. It never applies or pops a stash. Requires `confirm: \"coding_stash_drop\"`, `runner_node` and `sha`. `destructive` scope.",
+		{
+			...common,
+			runner_node: node,
+			sha: z.string().describe("The stash's full 40-character commit SHA from coding_stashes."),
+			confirm: z.string().optional().describe('Must be "coding_stash_drop".'),
+			dry_run: z.boolean().optional().describe("Describe the request without contacting anything. To see what the stash holds use coding_stashes with sha."),
+		},
+		async ({ token, instance_id, repo_id, runner_node, sha, confirm, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, repo_id, runner_node, sha };
+			const denied = await requirePermission(safetyFor(token), "destructive", "coding_stash_drop", input);
+			if (denied) return denied;
+			const endpoint = route(instance_id, repo_id, "stashes/drop");
+			if (dry_run) return dryRun(safetyFor(token), "coding_stash_drop", "drop one stash by its immutable SHA", input, { endpoint, method: "POST", effect: "The machine would find the stash by SHA, drop only that entry, verify git dropped that SHA, and read the list back. Nothing is applied.", reversible: "Yes: `git stash store -m <message> <sha>` in that checkout, given in the receipt." });
+			const unconfirmed = await requireConfirmation(safetyFor(token), "coding_stash_drop", confirm, "coding_stash_drop", input);
+			if (unconfirmed) return unconfirmed;
+			const data = (await authedCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify({ runner_node, sha, dry_run: false }) }, env)) as { error?: string };
+			await audit(safetyFor(token), { tool: "coding_stash_drop", action: data.error ? "failed" : "completed", input, result: data });
 			return jsonText(data);
 		},
 	);

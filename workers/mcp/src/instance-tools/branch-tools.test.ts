@@ -53,7 +53,20 @@ describe("coding_branches", () => {
 	});
 });
 
+describe("coding_stashes", () => {
+	it("lists and inspects with GETs; inspect carries the sha", async () => {
+		const { calls, run } = setup({ scopes: ["read"] });
+		await run("coding_stashes", { instance_id: "i1", repo_id: "r1" });
+		await run("coding_stashes", { ...base, sha: TIP });
+		expect(calls.map((c) => [c.method, c.url])).toEqual([
+			["GET", "https://api.test/v1/instances/i1/coding/repos/r1/stashes"],
+			["GET", `https://api.test/v1/instances/i1/coding/repos/r1/stashes?runner_node=Macmini.modem&sha=${TIP}`],
+		]);
+	});
+});
+
 describe.each([
+	["coding_stash_drop", { sha: TIP }, "stashes/drop"],
 	["coding_branch_integrate", { branch: "feature", expected_tip: TIP }, "branches/integrate"],
 	["coding_branch_delete", { branch: "feature", expected_tip: TIP, scope: "remote" }, "branches/delete"],
 ])("%s", (tool, extra, route) => {
@@ -81,7 +94,7 @@ describe.each([
 		await s.run(tool, { ...args, confirm: tool });
 		expect(s.calls).toHaveLength(1);
 		expect(s.calls[0]).toMatchObject({ method: "POST", url: `https://api.test/v1/instances/i1/coding/repos/r1/${route}` });
-		expect(JSON.parse(s.calls[0].body ?? "{}")).toMatchObject({ runner_node: "Macmini.modem", expected_tip: TIP, dry_run: false });
+		expect(JSON.parse(s.calls[0].body ?? "{}")).toMatchObject({ runner_node: "Macmini.modem", ...("sha" in extra ? { sha: TIP } : { expected_tip: TIP }), dry_run: false });
 		expect(s.events().some((e) => e.tool === tool && e.action === "completed")).toBe(true);
 	});
 

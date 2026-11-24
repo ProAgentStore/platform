@@ -1,11 +1,13 @@
 /**
- * Branch inventory, integration and removal for a repo on the machine that holds it (#1700).
+ * Branch and stash inventory, integration and removal for a repo on the machine that holds it (#1700, #1701).
  *
  *   GET  /:instanceId/coding/repos/:repoId/branches              inventory, or `?compare=<branch>[&base=]` one branch against the default
  *   POST /:instanceId/coding/repos/:repoId/branches/integrate    fast-forward the default branch to a local branch's tip
  *   POST /:instanceId/coding/repos/:repoId/branches/delete       delete one exact local or remote branch
+ *   GET  /:instanceId/coding/repos/:repoId/stashes               inventory, or `?sha=<40-hex>` one stash inspected
+ *   POST /:instanceId/coding/repos/:repoId/stashes/drop          drop one stash by its immutable SHA
  *
- * The git is the runner's (`packages/browser-runner/src/coding/branches.ts`); the transport and
+ * The git is the runner's (`packages/browser-runner/src/coding/branches.ts`, `stashes.ts`); the transport and
  * its named failures are `lib/branch-actions.ts`. This half is auth and the contract that makes a mutation
  * exact: the machine must be NAMED (`runner_node`), execution needs the tip or SHA the caller read, and a
  * mutation previews unless `dry_run` is exactly `false`.
@@ -54,7 +56,9 @@ export function registerBranchActionRoutes(codingRoutes: Hono<{ Bindings: Env }>
 		});
 	});
 
-	const mutation = (action: "branches/integrate" | "branches/delete", path: BranchRunnerPath) =>
+	codingRoutes.get("/:instanceId/coding/repos/:repoId/stashes", (c) => run(c, "/coding/stashes", false, async () => ({ body: { sha: str(c.req.query("sha")) }, node: str(c.req.query("runner_node")) })));
+
+	const mutation = (action: "branches/integrate" | "branches/delete" | "stashes/drop", path: BranchRunnerPath) =>
 		codingRoutes.post(`/:instanceId/coding/repos/:repoId/${action}`, (c) =>
 			run(c, path, true, async () => {
 				const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
@@ -63,12 +67,14 @@ export function registerBranchActionRoutes(codingRoutes: Hono<{ Bindings: Env }>
 				if (!node) throw new HttpError(400, "runner_node is required: name the machine that holds the checkout (list_runner_nodes)");
 				const dryRun = body.dry_run !== false;
 				const tip = str(body.expected_tip);
-				if (!dryRun && !tip) throw new HttpError(400, "expected_tip is required to execute: preview first and pass the tip it returned");
+				const sha = str(body.sha);
+				if (!dryRun && !(tip ?? sha)) throw new HttpError(400, action === "stashes/drop" ? "sha is required to drop: inspect it first and pass the stash's full commit SHA" : "expected_tip is required to execute: preview first and pass the tip it returned");
 				const scope = body.scope === "local" || body.scope === "remote" ? body.scope : undefined;
 				if (action === "branches/delete" && !scope) throw new HttpError(400, 'scope must be "local" or "remote"');
-				return { body: { dryRun, branch: str(body.branch), expectedTip: tip, scope }, node };
+				return { body: { dryRun, branch: str(body.branch), expectedTip: tip, sha, scope }, node };
 			}),
 		);
 	mutation("branches/integrate", "/coding/branch-integrate");
 	mutation("branches/delete", "/coding/branch-delete");
+	mutation("stashes/drop", "/coding/stash-drop");
 }

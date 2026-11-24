@@ -1,9 +1,11 @@
 /**
- * The runner's branch endpoints (#1700), token-gated like the rest of `server.ts`.
+ * The runner's branch and stash endpoints (#1700, #1701), token-gated like the rest of `server.ts`.
  *
  *   POST /coding/branches          inventory (live remote heads, cached tracking refs, local branches), or with `compare` one branch against the default
  *   POST /coding/branch-integrate  fast-forward the default branch to a local branch's tip (`dryRun` previews)
  *   POST /coding/branch-delete     delete one exact local or remote branch (`dryRun` previews)
+ *   POST /coding/stashes           stash inventory, or with `sha` one stash inspected
+ *   POST /coding/stash-drop        drop one stash by its immutable SHA (`dryRun` previews)
  *
  * Every one is addressed by repo (`repoId` / `workDir`), confined to a checkout by the runtime, and answers a
  * refusal as a value (`ok:false` + `reason`) so the cloud can name it; malformed input is a thrown InspectError,
@@ -14,8 +16,9 @@
 import { branchInventory, compareBranch, deleteBranch, integrateBranch } from "./branches.js";
 import { InspectError } from "./inspect.js";
 import { liveGh } from "./merge-gh.js";
+import { dropStash, inspectStash, listStashes } from "./stashes.js";
 
-const PATHS = new Set(["/coding/branches", "/coding/branch-integrate", "/coding/branch-delete"]);
+const PATHS = new Set(["/coding/branches", "/coding/branch-integrate", "/coding/branch-delete", "/coding/stashes", "/coding/stash-drop"]);
 
 export async function handleBranchRoute(
 	method: string,
@@ -40,5 +43,11 @@ export async function handleBranchRoute(
 		if (scope !== "local" && scope !== "remote") throw new InspectError('`scope` must be "local" or "remote"');
 		return { body: await deleteBranch(workDir, { scope, branch: str("branch") ?? "", expectedTip: str("expectedTip"), dryRun }, { gh }) };
 	}
-	return null;
+	if (path === "/coding/stashes") {
+		const sha = str("sha");
+		if (!sha) return { body: listStashes(workDir) };
+		const found = inspectStash(workDir, sha);
+		return { body: found ? { found: true, stash: found } : { found: false, sha } };
+	}
+	return { body: dropStash(workDir, { sha: str("sha") ?? "", dryRun }) };
 }
