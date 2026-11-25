@@ -110,7 +110,9 @@ export function writeSecretFile(input: { path?: unknown; value?: unknown; mode?:
 	} catch (e) {
 		closeSync(fd);
 		rmSync(tmp, { force: true });
-		throw new Error(`Could not write ${path}: ${(e as NodeJS.ErrnoException).code ?? "write failed"}.`);
+		// Only the ACL step's own message is shown: it is built from PowerShell's stderr and never holds the value.
+		const reason = (e as NodeJS.ErrnoException).code ?? (e instanceof Error && e.message.startsWith("ACL protection failed") ? e.message : "write failed");
+		throw new Error(`Could not write ${path}: ${reason}.`);
 	}
 	closeSync(fd);
 	renameSync(tmp, path);

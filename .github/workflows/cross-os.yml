@@ -122,23 +122,3 @@ jobs:
       - name: "#1652 claims seed scanner, tool literals, socket temp dirs"
         if: success() || failure()
         run: pnpm exec vitest run workers/api/src/lib/agent-claims-lint.test.ts store/console/src/lib/toolLiterals.test.ts packages/browser-runner/src/coding/cleanup.test.ts
-      - name: "Diagnose the Windows secret ACL (#1650)"
-        if: failure()
-        shell: pwsh
-        run: |
-          $f = Join-Path $env:RUNNER_TEMP 'acl-probe.txt'
-          Set-Content -LiteralPath $f -Value 'x'
-          $ErrorActionPreference = 'Stop'
-          try {
-            $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-            "sid=$($sid.Value)"
-            $acl = New-Object System.Security.AccessControl.FileSecurity
-            $acl.SetOwner($sid)
-            $acl.SetAccessRuleProtection($true, $false)
-            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, 'Read, Write, Delete, ChangePermissions', 'Allow')
-            $acl.AddAccessRule($rule)
-            Set-Acl -LiteralPath $f -AclObject $acl
-            $actual = Get-Acl -LiteralPath $f
-            "protected=$($actual.AreAccessRulesProtected) owner=$($actual.GetOwner([System.Security.Principal.SecurityIdentifier]).Value)"
-            @($actual.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) | ForEach-Object { "rule $($_.IdentityReference.Value) $($_.AccessControlType) $($_.FileSystemRights) vs wanted $($rule.FileSystemRights)" }
-          } catch { "ACL probe threw: $($_ | Out-String)" }

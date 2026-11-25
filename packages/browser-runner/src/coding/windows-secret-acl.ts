@@ -21,10 +21,18 @@ if (!$actual.AreAccessRulesProtected -or $actual.GetOwner([System.Security.Princ
 
 export function protectWindowsSecretFile(path: string): void {
 	const powershell = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-	const result = execFileSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", PROTECT], {
-		env: { ...process.env, PAGS_SECRET_ACL_PATH: path },
-		encoding: "utf8", timeout: 10_000, windowsHide: true,
-		stdio: ["ignore", "pipe", "pipe"],
-	});
+	let result: string;
+	try {
+		result = execFileSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", PROTECT], {
+			env: { ...process.env, PAGS_SECRET_ACL_PATH: path },
+			encoding: "utf8", timeout: 10_000, windowsHide: true,
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+	} catch (e) {
+		// PowerShell's own message names the failing step; the secret was never passed to it, so it cannot appear there.
+		const detail = String((e as { stderr?: unknown }).stderr ?? "").replace(/\s+/g, " ").trim();
+		const shown = detail.length <= 300 ? detail : `[...truncated...] ${detail.slice(-300)}`;
+		throw new Error(`ACL protection failed${shown ? `: ${shown}` : ""}`);
+	}
 	if (result !== "protected") throw new Error("ACL verification did not complete");
 }
