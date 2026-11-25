@@ -41,6 +41,7 @@ jobs:
           VITEST_ARGS: ${{ inputs.args }}
         # Console output is also kept as an artifact: the JSON report is only written when vitest finishes.
         run: |
+          set -f  # the arguments may carry globs (--exclude); the shell must not expand them
           mkdir -p test-results
           pnpm test:full $VITEST_ARGS 2>&1 | tee test-results/console.log
       - name: Upload the JSON report
