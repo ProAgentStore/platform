@@ -11,6 +11,7 @@
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { analyzeSources, formatDiagnostic, hasErrors } from "./lib/appshell-navigation.mjs";
 
 const SKIP = new Set(["node_modules", "dist", ".git", ".next", ".turbo", ".wrangler", "coverage", "build", "playwright-report", "test-results"]);
@@ -29,7 +30,7 @@ export function run(argv, cwd = process.cwd()) {
 	const json = argv.includes("--json");
 	const files = [];
 	for (const p of args.length ? args : ["."]) collect(resolve(cwd, p), files);
-	const sources = files.map((f) => ({ file: relative(cwd, f), text: readFileSync(f, "utf8") }));
+	const sources = files.map((f) => ({ file: relative(cwd, f).replaceAll("\\", "/"), text: readFileSync(f, "utf8") }));
 	const { shells, diagnostics } = analyzeSources(sources);
 	const failed = hasErrors(diagnostics, strict);
 	const lines = [];
@@ -42,7 +43,7 @@ export function run(argv, cwd = process.cwd()) {
 	return { code: failed ? 1 : 0, output: lines.join("\n") };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
 	const { code, output } = run(process.argv.slice(2));
 	console.log(output);
 	process.exit(code);

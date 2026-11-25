@@ -7,6 +7,9 @@ on:
     branches: [main]
     paths:
       - "packages/browser-runner/src/coding/**"
+      - "scripts/check-appshell-navigation.mjs"
+      - "scripts/lib/appshell-navigation*"
+      - "packages/cli/src/background*"
       - ".github/workflows/cross-os.yml"
   workflow_dispatch:
 
@@ -30,6 +33,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Managed checkout and coding git tests (real git, no network)
         run: pnpm exec vitest run --project integration packages/browser-runner/src/coding/run-worktree.test.ts packages/browser-runner/src/coding/run-worktree-paths.test.ts packages/browser-runner/src/coding/worktree-routes.test.ts packages/browser-runner/src/coding/git-guard.test.ts packages/browser-runner/src/coding/gh-guard.test.ts packages/browser-runner/src/coding/stashes.test.ts packages/browser-runner/src/coding/branches.test.ts
+      - name: AppShell CLI entry point and CLI background paths (#1653)
+        run: pnpm exec vitest run scripts/lib/appshell-navigation.test.mjs packages/cli/src/background.test.ts
 
   windows:
     runs-on: windows-2022  # pinned, never -latest (#1266; scripts/check-workflow-runner.mjs reads this line, so no matrix)
@@ -44,3 +49,5 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Managed checkout and coding git tests (real git, no network)
         run: pnpm exec vitest run --project integration packages/browser-runner/src/coding/run-worktree.test.ts packages/browser-runner/src/coding/run-worktree-paths.test.ts packages/browser-runner/src/coding/worktree-routes.test.ts packages/browser-runner/src/coding/git-guard.test.ts packages/browser-runner/src/coding/gh-guard.test.ts packages/browser-runner/src/coding/stashes.test.ts packages/browser-runner/src/coding/branches.test.ts
+      - name: AppShell CLI entry point and CLI background paths (#1653)
+        run: pnpm exec vitest run scripts/lib/appshell-navigation.test.mjs packages/cli/src/background.test.ts
