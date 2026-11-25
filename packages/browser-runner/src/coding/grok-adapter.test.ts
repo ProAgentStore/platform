@@ -9,6 +9,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { engineAdapterFor, type NormalizedEngineEvent } from "./engine-adapter.js";
 import { createGrokEngineAdapter, grokStructuredArgs } from "./grok-adapter.js";
@@ -118,7 +119,7 @@ describe("a Grok session renders its calls into the pane the evidence check read
 			});
 	};
 	const session = (id: string, log: string, env: Record<string, string> = {}) =>
-		new HeadlessSession({ id, workDir: dir, clientType: "grok", command: "grok --permission-mode bypassPermissions -p", bin, statePath: defaultStatePath(join(dir, `state-${id}`)), env: { GROK_FAKE_LOG: log, GROK_FAKE_STREAM: FIXTURE.pathname, ...env } });
+		new HeadlessSession({ id, workDir: dir, clientType: "grok", command: "grok --permission-mode bypassPermissions -p", bin, statePath: defaultStatePath(join(dir, `state-${id}`)), env: { GROK_FAKE_LOG: log, GROK_FAKE_STREAM: fileURLToPath(FIXTURE), ...env } });
 
 	it("the old saved preset runs structured, and both commands land in the pane as Bash calls with their outcomes", async () => {
 		const log = join(dir, "stream.jsonl");

@@ -141,6 +141,12 @@ export function quoteCmdArg(arg: string): string {
 	return a.replace(CMD_META, "^$1").replace(CMD_META, "^$1");
 }
 
+/** The name an engine goes by in the pane and in errors: its file name, without a Windows directory or the `.exe`/`.cmd` that launches it ("grok", not "C:\bin\grok.cmd"). */
+export function engineDisplayName(bin: string, platform: NodeJS.Platform = process.platform): string {
+	if (platform !== "win32") return bin.split("/").pop() || bin;
+	return (bin.split(/[\\/]/).pop() || bin).replace(/\.(exe|cmd|bat|com)$/i, "");
+}
+
 export function resolveEngineSpawn(requested: string, args: string[], deps: EngineSpawnDeps = {}): EngineSpawn {
 	const bin = officialEngineBinary(requested, deps) ?? requested;
 	const windows = (deps.platform ?? process.platform) === "win32";

@@ -14,7 +14,7 @@ import { appendTurnTail, type EngineTurnReport, turnReportFromExit, turnReportFr
 import { renderToolResult, shortInput, stripAnsi } from "./transcript-lines.js";
 import { authoredTurn, authorTag, type TurnAuthor } from "./turn-author.js";
 import { engineSpawnEnv, mergeEnv, writeGuardReport } from "./engine-env.js";
-import { resolveEngineSpawn } from "./engine-spawn.js";
+import { engineDisplayName, resolveEngineSpawn } from "./engine-spawn.js";
 import type { GhGuardReport } from "./gh-guard.js";
 
 import { type ClientType, handlerFor } from "./handlers.js";
@@ -446,7 +446,7 @@ export class HeadlessSession {
 		// so an engine that found its own conversation drops it unread rather than being handed a
 		// summary of the conversation it is already in.
 		this.pendingSeed = this.resumedConversation ? null : config.seed?.trim() || null;
-		this.binName = (this.cmdBin.split("/").pop() || this.cmdBin) || "cli";
+		this.binName = engineDisplayName(this.cmdBin) || "cli";
 	}
 
 	/**

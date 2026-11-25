@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { checkEngine } from "./engine-check.js";
-import { quoteCmdArg, resolveBinary, resolveEngineSpawn, shimTarget } from "./engine-spawn.js";
+import { engineDisplayName, quoteCmdArg, resolveBinary, resolveEngineSpawn, shimTarget } from "./engine-spawn.js";
 
 /**
  * Engine binary resolution on Windows (#1044). Run on any host: the platform, PATH, the file system
@@ -158,5 +158,15 @@ describe("xAI's Grok CLI for a bare `grok` (#1156)", () => {
 		const isExecutable = (p: string) => p === `${HOME}/.grok/bin/grok` || p === "/opt/my/grok";
 		expect(resolveEngineSpawn("/opt/my/grok", [], { env: { PATH: "" }, platform: "linux", home: HOME, isExecutable }).binaryPath).toBe("/opt/my/grok");
 		expect(resolveEngineSpawn("codex", [], { env: { PATH: "" }, platform: "linux", home: HOME, isExecutable }).binaryPath).toBeNull();
+	});
+});
+
+describe("engineDisplayName (#1724)", () => {
+	it("is the file name: no Windows directory, no launcher extension", () => {
+		expect(engineDisplayName("C:\\Users\\me\\AppData\\bin\\grok.cmd", "win32")).toBe("grok");
+		expect(engineDisplayName("C:/tools/codex.EXE", "win32")).toBe("codex");
+		expect(engineDisplayName("grok", "win32")).toBe("grok");
+		expect(engineDisplayName("/usr/local/bin/grok", "linux")).toBe("grok");
+		expect(engineDisplayName("/opt/tool.cmd", "linux")).toBe("tool.cmd");
 	});
 });

@@ -1396,7 +1396,8 @@ process.on("SIGTERM", () => {
 });
 `;
 
-describe("HeadlessSession — a replaced process cannot speak for its replacement (#1019)", () => {
+// The fake engine answers late from a SIGTERM handler; Windows has no signal delivery to a handler (kill() ends the process outright), so there is no late answer to test.
+describe.skipIf(process.platform === "win32")("HeadlessSession — a replaced process cannot speak for its replacement (#1019)", () => {
 	let dir: string;
 	let bin: string;
 
