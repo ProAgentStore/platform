@@ -1296,4 +1296,5 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.227": "sha256:a3fcf666d1e5218a829a673a56326ed451103449a0b24d60721eddf54a5741b0", // #1700: coding_branches, coding_branch_integrate and coding_branch_delete: branch inventory, preview, fast-forward integration and exact-tip deletion on the machine that holds the checkout.
 	"0.1.228": "sha256:ec71749eefbdf147f35c39206b129f7956d4ef3a17c4e5b0a8786564ae6c4d22", // #1701: coding_stashes and coding_stash_drop list, inspect and drop a repo's stashes by immutable SHA on the machine that holds the checkout.
 	"0.1.229": "sha256:cbadc50d9c3900e6731bda937aa44828316417140e4e172a33a1f65cb1383c62", // #1692: get_instance_instructions takes repo_id and reads the effective Repo Coder playbook (template + instance + repo layers, with provenance).
+	"0.1.230": "sha256:e21532474838e64e984b9df69197c0577bdea6f99e2f98f3b6eea6531009c434", // #1712: coding_engine_set takes fallback_id and coding_engine_get returns each engine's fallbackId.
 };
