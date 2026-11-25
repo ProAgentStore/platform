@@ -705,6 +705,7 @@ const READBACK: Record<string, string | null> = {
 	"retarget_repository_binding.destination": "coding_repos_list",
 	"coding_engine_set.engine_id": "coding_engine_get",
 	"coding_engine_set.model": "coding_engine_get",
+	"coding_engine_set.fallback_id": "coding_engine_get",
 	// #881: which engine a relay signs in is the relay record `coding_diagnostics` returns
 	// (`engineReauth.clientType`). The rest are COMMANDS to a live login CLI, never stored — and `text`
 	// is a one-time sign-in code, which no reader may ever return.
