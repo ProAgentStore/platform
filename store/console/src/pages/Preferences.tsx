@@ -268,7 +268,7 @@ export default function Preferences() {
 					id="account-release-notes"
 					value={releaseNotes === undefined ? "" : releaseNotes ? "on" : "off"}
 					onChange={(e) => void saveReleaseNotesDefault(e.target.value as "" | "on" | "off")}
-					className="text-sm bg-paper border border-line rounded-lg px-3 py-2 block w-full sm:w-56"
+					className="text-sm bg-paper border border-line rounded-lg px-3 py-2 block w-full max-w-full sm:w-56"
 				>
 					<option value="">Platform default (on)</option>
 					<option value="on">On</option>
@@ -283,14 +283,14 @@ export default function Preferences() {
 					Used when a coder opens a new session and that agent has not selected its own engine. Running work keeps the CLI it started with.
 				</p>
 				<div className="flex flex-col sm:flex-row sm:items-end gap-2 sm:gap-3">
-					<div>
+					<div className="min-w-0">
 						<label htmlFor="account-coding-engine" className="text-xs text-muted block mb-1">Engine</label>
 						<select
 							id="account-coding-engine"
 							value={pendingEngine ?? (coding.defaultEngineId || "")}
 							disabled={pendingEngine !== null}
 							onChange={(e) => void saveCodingDefault(e.target.value)}
-							className="text-sm bg-paper border border-line rounded-lg px-3 py-2 block w-full sm:w-56"
+							className="text-sm bg-paper border border-line rounded-lg px-3 py-2 block w-full max-w-full sm:w-56"
 						>
 							<option value="">Platform default</option>
 							{codingEngineOptions.map((e) => (
@@ -311,8 +311,8 @@ export default function Preferences() {
 
 			<Card className="mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-2">Appearance</h3>
-				<div className="flex justify-between items-center py-2.5 text-sm">
-					<span className="text-muted font-medium">Text size</span>
+				<div className="flex flex-wrap justify-between items-center gap-x-3 gap-y-2 py-2.5 text-sm">
+					<span className="text-muted font-medium min-w-0">Text size</span>
 					<div className="inline-flex border border-line rounded-lg overflow-hidden">
 						{[{ s: 0.9, l: "A-" }, { s: 1, l: "A" }, { s: 1.15, l: "A+" }, { s: 1.3, l: "A++" }].map(({ s, l }) => (
 							<button
@@ -345,7 +345,7 @@ export default function Preferences() {
 						aria-label="Your timezone"
 						value={timezone || ""}
 						onChange={(e) => void saveTimezone(e.target.value)}
-						className="text-sm bg-paper border border-line rounded-lg px-3 py-2 sm:max-w-[60%]"
+						className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full min-w-0 sm:w-auto sm:max-w-[60%]"
 					>
 						<option value="">Not set — agents will say UTC</option>
 						{timeZoneOptions(timezone).map((tz) => (

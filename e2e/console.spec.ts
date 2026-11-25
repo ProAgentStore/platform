@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { devices, expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import { notificationsResponse, NOTIFICATION_VOCABULARY } from "./notification-fixtures";
 import { BROWSER_INSTANCE, installHistoryRoutes, LOCAL_BROWSER_INSTANCE } from "./activity-history-mock";
@@ -4675,6 +4675,114 @@ test.describe("mobile — Preferences in WebKit (#384)", () => {
 			`focusing the select changed no pixels — the indicator computes but does not paint: ${JSON.stringify(style)}`,
 		).toBe(false);
 	});
+});
+
+/**
+ * Preferences on a phone at every width the owner named and at the largest text size (#1706).
+ *
+ * #333 and #384 measured 320–390 at normal text; #723 added one 320 / 1.3x case. The report here is
+ * an iPhone panning sideways on the account Preferences page, so this block takes the cross
+ * product rather than a sample: 320, 375, 390 and 430 px, at the default scale and at the largest
+ * the Appearance row offers (A++, 1.3, persisted as `pags:textScale`).
+ *
+ * The fixtures are the long ones: a connected account with an address long enough to need
+ * wrapping, and a timezone pinned to the longest zone name the engines agree on (see #384 for why
+ * the zone is pinned rather than inherited from the host).
+ *
+ * Besides the shared `measureOverflow` guards this asserts the thing the issue states directly:
+ * every input, select and button is inside the viewport, and the text-size buttons are all
+ * reachable. No overflow clipping is accepted as a pass — `wide` and `escapes` see clipped boxes.
+ *
+ * Titled `mobile — ` so the WebKit project runs it. Physical iPhones and iOS Dynamic Type are NOT
+ * covered: this is Playwright WebKit at phone viewports.
+ */
+test.describe("mobile — Preferences at every phone width and the largest text size (#1706)", () => {
+	// A touch, `isMobile` iPhone context: the layout viewport, `pointer: coarse` and the meta
+	// viewport behave as on a phone, which the desktop-Safari project's default does not. The
+	// browser type stays whatever the project is, so this runs in both engines.
+	const { defaultBrowserType: _browser, viewport: _viewport, ...phone } = devices["iPhone 13"];
+	test.use({ ...phone, timezoneId: "America/North_Dakota/New_Salem" });
+
+	const LONG_ENGINE_ID = "local-long";
+	const LONG_ENGINE_LABEL = "Local model via Ollama on the office workstation (llama3.1:70b-instruct-q4_K_M, 128k context)";
+	const longAccount = "a.very.long.mailbox.name.for.layout.testing+console@subdomain.example-organisation.co.uk";
+	const connected = {
+		user: { githubLinked: "owner-login-dev" },
+		connectors: DEFAULT_CONNECTORS.map((c) => (c.account ? { ...c, account: longAccount } : c)),
+	};
+
+	for (const scale of [1, 1.3]) {
+		for (const width of [320, 375, 390, 430]) {
+			test(`no overflow at ${width}px, text ${scale}x — /console/preferences`, async ({ page }) => {
+				await page.addInitScript((s) => window.localStorage.setItem("pags:textScale", String(s)), scale);
+				await page.setViewportSize({ width, height: 812 });
+				await mockSignedInConsole(page, connected);
+				// The shared mock serves NO engine options and no language beyond two short ones, so
+				// the engine select and the language pickers have only ever been measured with their
+				// shortest content. Real accounts carry long labels; serve some, and select the longest.
+				await page.route("**/v1/preferences", async (route) => {
+					if (route.request().method() !== "GET") return route.fallback();
+					await route.fulfill({
+						contentType: "application/json",
+						body: JSON.stringify({
+							preferences: { voice: { speed: 130, sttMode: "openai" }, coding: { defaultEngineId: LONG_ENGINE_ID } },
+							codingEngineOptions: [
+								{ id: "claude", label: "Claude Code" },
+								{ id: LONG_ENGINE_ID, label: LONG_ENGINE_LABEL },
+							],
+							languages: [
+								{ name: "Chinese (Simplified, Mainland China, using the Pinyin input method)", tag: "zh-CN" },
+								{ name: "English", tag: "en-US" },
+							],
+							notificationTypes: DEFAULT_NOTIFICATION_TYPES,
+						}),
+					});
+				});
+				await page.goto("/console/preferences");
+				await page.waitForLoadState("networkidle");
+				await page.locator("main").waitFor();
+				await page.waitForTimeout(300);
+				await expect(page.locator("#account-coding-engine")).toHaveValue(LONG_ENGINE_ID);
+
+				// The scale really applied, and the sections the guard is about really rendered.
+				expect(await page.evaluate(() => document.documentElement.style.fontSize)).toBe(`${scale * 100}%`);
+				await expect(page.getByRole("heading", { name: "Connections" })).toBeVisible();
+				await expect(page.getByRole("heading", { name: "Appearance" })).toBeVisible();
+				await expect(page.getByRole("heading", { name: "Timezone" })).toBeVisible();
+				await expect(page.getByRole("heading", { name: "Default coding engine" })).toBeVisible();
+				await expect(page.getByLabel("Your timezone")).toHaveValue("America/North_Dakota/New_Salem");
+
+				const { mainOv, docOv, navOv, scrollers, wide, escapes } = await measureOverflow(page);
+				expect(wide, `content past the right edge at ${width}w / ${scale}x: ${wide.join(", ")}`).toEqual([]);
+				expect(escapes, `a box past its own container at ${width}w / ${scale}x: ${escapes.join(", ")}`).toEqual([]);
+				expect(mainOv, `<main> pans by ${mainOv}px at ${width}w / ${scale}x`).toBeLessThanOrEqual(1);
+				expect(docOv, `page overflows by ${docOv}px at ${width}w / ${scale}x`).toBeLessThanOrEqual(1);
+				expect(navOv, `primary nav pans by ${navOv}px at ${width}w / ${scale}x`).toBeLessThanOrEqual(1);
+				expect(scrollers, `unexpected horizontal scrollers at ${width}w / ${scale}x: ${scrollers.join(", ")}`).toEqual([]);
+
+				// Every control sits inside the viewport, measured by its own box.
+				const outside = await page.evaluate(() => {
+					const vw = document.documentElement.clientWidth;
+					const bad: string[] = [];
+					for (const el of Array.from(document.querySelectorAll<HTMLElement>("main input, main select, main textarea, main button"))) {
+						const r = el.getBoundingClientRect();
+						if (r.width === 0 && r.height === 0) continue;
+						if (r.left < -0.5 || r.right > vw + 0.5) {
+							bad.push(`${el.tagName.toLowerCase()}[${el.getAttribute("aria-label") || el.id || (el.textContent || "").trim().slice(0, 24)}] ${Math.round(r.left)}..${Math.round(r.right)} of ${vw}`);
+						}
+					}
+					return bad;
+				});
+				expect(outside, `controls outside the viewport at ${width}w / ${scale}x: ${outside.join(", ")}`).toEqual([]);
+
+				// Still usable: all four text-size buttons are on screen, and the select is editable.
+				for (const label of ["A-", "A", "A+", "A++"]) {
+					await expect(page.getByRole("button", { name: label, exact: true })).toBeVisible();
+				}
+				await expect(page.getByLabel("Your timezone")).toBeEnabled();
+			});
+		}
+	}
 });
 
 /**

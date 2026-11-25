@@ -158,7 +158,9 @@ function buildShell(dir, { title, description, name }) {
 	// `--emptyOutDir` because the target is outside the project root, where Vite otherwise
 	// declines to clear it and prints a warning instead. execFile, not a shell string: the temp
 	// path comes from the OS and must not be re-parsed by a shell.
-	execFileSync("npx", ["vite", "build", "--outDir", distDir, "--emptyOutDir"], { cwd: dir, stdio: "inherit" });
+	// Windows resolves `npx` only as npx.cmd, which execFile cannot spawn without a shell; the
+	// temp path has no spaces there, so the shell does not re-parse anything.
+	execFileSync("npx", ["vite", "build", "--outDir", distDir, "--emptyOutDir"], { cwd: dir, stdio: "inherit", shell: process.platform === "win32" });
 	const bundleJs = readArtifact(join(distDir, "assets", "bundle.js"), name);
 	const bundleCss = readArtifact(join(distDir, "assets", "index.css"), name);
 	return `<!DOCTYPE html>
