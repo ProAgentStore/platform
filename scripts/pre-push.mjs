@@ -28,9 +28,18 @@ const git = (...args) => spawnSync("git", args, { encoding: "utf8" });
 /** A backstop, not a budget: the slowest step measured is about 40s, and a hung test is named sooner by the stall reporter (#1665). */
 const STEP_TIMEOUT_MS = 20 * 60_000;
 
+/**
+ * Git runs a hook with GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE pointing at THIS repository. A test that builds a fixture repo in a
+ * temp dir and inherits them operates on the real one instead: it commits "fixture base" over the pushing branch, rewrites the index,
+ * creates `wip/recovery`, and writes `core.bare=true` and a fixture identity into the shared config (scripts/lib/fail-before.test.mjs
+ * did exactly that during a push). Every step runs from the repo root, so none of them needs the variables.
+ */
+const REPO_LOCATION_VARS = ["GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_PREFIX", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE"];
+const stepEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !REPO_LOCATION_VARS.includes(k)));
+
 function run(cmd, args) {
 	console.log(`[pre-push] ${cmd} ${args.join(" ")}`);
-	const r = spawnPortableSync(cmd, args, { stdio: "inherit", timeout: STEP_TIMEOUT_MS });
+	const r = spawnPortableSync(cmd, args, { stdio: "inherit", timeout: STEP_TIMEOUT_MS, env: stepEnv() });
 	if (r.error?.code === "ETIMEDOUT") {
 		console.error(`[pre-push] TIMED OUT after ${STEP_TIMEOUT_MS / 60_000} minutes: ${cmd} ${args.slice(0, 6).join(" ")}. The step never finished; nothing was pushed.`);
 		// The timeout kills only the process it started; on Windows its children outlive it.
