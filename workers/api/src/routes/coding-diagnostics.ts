@@ -35,6 +35,7 @@ import { getLiveRuntime, getRuntimeNode, updateRuntimeStatus } from "./instances
 import { getDefaultRunnerConn, requireOwned } from "./coding-shared.js";
 import { logDirectResponse } from "../lib/on-error.js";
 import { MAX_SSH_HOSTS, httpsLoginFrom, sshHostGroups, sshIdentityIssues } from "../lib/ssh-identity.js";
+import { retainedWorktrees } from "../lib/isolated-run.js";
 import { type HttpsPushCapabilityProbe, pushCapabilityIssues, pushCapabilityRepos } from "../lib/push-identity.js";
 import type { Env } from "../types.js";
 
@@ -772,6 +773,8 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		// a repo this session is otherwise correctly bound to and in scope for.
 		issues.push(...pushCapabilityIssues(pushCapability, httpsLogin));
 
+		// #1714: worktrees the machine is holding for isolated repositories (edits kept, never deleted), attributed to their runs.
+		const isolatedWorktrees = conn && runnerReachable ? await retainedWorktrees(conn, dbRepos) : [];
 		const activeSessions = sessions.filter((s) => s.status === "active");
 		// "Healthy" has to mean able to work, not merely running (#593). A session whose run is
 		// parked on the engine's own usage limit was counted here, so the summary read
@@ -829,6 +832,7 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 			// The owner's provider account, as last observed (#773). `no_failure_recorded` is not
 			// "healthy" — it is "nothing on record"; `verify` is how to get a live answer.
 			providerAccount,
+			isolatedWorktrees,
 			issues,
 		});
 	});

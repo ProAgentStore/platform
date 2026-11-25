@@ -16,6 +16,7 @@ import { ApiCodingRefused } from "./coding-api-policy.js";
 import { logError } from "./error-log.js";
 import { recordWorkdirResolution } from "./coding-workdir-resolution.js";
 import { strategyForRunner } from "./checkout-strategy.js";
+import { notIsolatedRefusal, sharedAdmissionRefusal } from "./isolated-run.js";
 import { createSession, endSession, getActiveSessionForRepo, getLastFinishedSessionForRepo, getRepo, reassignSessionNode, updateRepoClone } from "./coding-store.js";
 import { effectiveWorkdir, getCheckout, machineIdForNode, upsertCheckout } from "./coding-repo-checkouts.js";
 import { seedBriefForRepo } from "./coding-seed-brief.js";
@@ -227,6 +228,11 @@ export async function startSessionOnRunner(
 		 * on every terminal reconnect. A runner too old to answer is launched on exactly as before.
 		 */
 		preflightEngine?: boolean;
+		/**
+		 * This start creates a NEW session (#1714), never a re-attach to a running one. Only then is a shared checkout asked whether it is
+		 * clean, and only then is an isolated repository's runner expected to answer with a worktree; a warm re-attach holds its own edits.
+		 */
+		freshOpen?: boolean;
 	},
 ): Promise<StartOnRunnerResult> {
 	// IGNORING LIVENESS, deliberately (#532) — the reclaim immediately below is what acts on a dead
@@ -308,6 +314,11 @@ export async function startSessionOnRunner(
 			return { conn: null, resumed: false, seeded: false, startError: preflight.message, engineUnavailable: true, engineState: preflight.state };
 		}
 	}
+	// #1714: an explicitly shared checkout must be clean to start a run; the refusal names the paths and touches none of them.
+	if (opts?.freshOpen) {
+		const blocked = await sharedAdmissionRefusal(conn, repo);
+		if (blocked) return { conn: null, resumed: false, seeded: false, startError: blocked };
+	}
 	const credential = await resolveCloneCredential(env, uid, repo);
 	let engineEnv: Awaited<ReturnType<typeof resolveEngineEnv>>;
 	try {
@@ -325,7 +336,7 @@ export async function startSessionOnRunner(
 	// cold is the trade ADR 0005 makes.
 	const seed = opts?.cleanSlate ? "" : await seedBriefForRepo(env, { instanceId, userId: uid, repoId: repo.id, repoName: repo.name });
 	try {
-		const started = await callRunner<{ resumed?: unknown; seeded?: unknown; workDirResolution?: { path?: unknown; via?: unknown } }>(conn, "/coding/start", {
+		const started = await callRunner<{ resumed?: unknown; seeded?: unknown; checkout?: unknown; workDirResolution?: { path?: unknown; via?: unknown } }>(conn, "/coding/start", {
 			sessionId: session.id,
 			repoId: repo.id,
 			// Local checkout → run in that dir (no clone). Else clone to a managed dir. Use the
@@ -366,6 +377,12 @@ export async function startSessionOnRunner(
 			env: engineEnv,
 			strategy: strategyForRunner(repo.strategy), // #1708: isolated repos only; nothing new is sent for shared/direct
 		});
+		// #1714: an isolated repository whose runner did not isolate is said so and stopped, not silently run in the shared checkout.
+		const notIsolated = opts?.freshOpen ? notIsolatedRefusal(repo, started, conn.runnerNode) : null;
+		if (notIsolated) {
+			await callRunner(conn, "/coding/end", { sessionId: session.id }).catch(() => undefined);
+			return { conn: null, resumed: false, seeded: false, startError: notIsolated };
+		}
 		// #1379: how this machine expanded the stored folder, kept beside it. Best-effort — a debugging line, never a reason to fail a start.
 		const res = started?.workDirResolution;
 		if (res && typeof res.path === "string" && typeof res.via === "string") await recordWorkdirResolution(env, repo.id, { path: res.path, via: res.via }).catch((e: unknown) => logError(env, { source: "coding", message: `workdir resolution not recorded: ${e instanceof Error ? e.message : String(e)}`, level: "warn" }));
@@ -573,7 +590,7 @@ export async function ensureActiveSession(
 	// (`getLastFinishedSessionForRepo` only reads finished rows, but the ordering makes that a fact
 	// rather than a coincidence), and BEFORE the launch, because the runner needs the answer.
 	const continuity = await continuityForNewSession(env, instanceId, userId, repo.id, clientType);
-	const started = await startSessionOnRunner(env, instanceId, userId, session, repo, { resumeFrom: continuity.resumeFrom, cleanSlate: continuity.seed === null, preflightEngine: true });
+	const started = await startSessionOnRunner(env, instanceId, userId, session, repo, { resumeFrom: continuity.resumeFrom, cleanSlate: continuity.seed === null, preflightEngine: true, freshOpen: true });
 	if (!started.conn) {
 		// A session row whose engine never launched is worse than none: `getActiveSessionForRepo`
 		// would hand it to every later attempt, so the repo would be permanently stuck behind a

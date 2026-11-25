@@ -1,3 +1,4 @@
+import { editedPathFromToolUse } from "./edited-paths.js";
 import { InputLedger } from "./input-ledger.js";
 import { type RecordAck, RecordBuffer, type RecordCursor } from "./record-cursor.js";
 import type { CleanupManager } from "./cleanup.js";
@@ -264,6 +265,8 @@ export class HeadlessSession {
 	private structuredOutputRejected = false;
 	/** Measured engine spend not yet handed to the cloud (#267). Drained by {@link takeUsage}. */
 	private readonly records = new RecordBuffer<EngineUsageRecord, EngineActRecord>();
+	/** Repo-relative files the Engine itself wrote this session (#1714): the ownership evidence a shared-checkout park accepts. */
+	readonly editedPaths = new Set<string>();
 	/**
 	 * Acts whose `tool_result` has not come back yet, keyed by the engine's `tool_use` id.
 	 *
@@ -1058,6 +1061,7 @@ export class HeadlessSession {
 				// remembered here and read back in `settleAct`'s sibling branch below.
 				if (ev.id) this.toolNames.set(ev.id, ev.name);
 				this.noteAct(ev.block);
+				this.noteEdit(ev.name, ev.input);
 				break;
 			case "tool_result": {
 				// `""` when the call was not seen (a pane that began mid-turn, a runner restart):
@@ -1115,6 +1119,11 @@ export class HeadlessSession {
 
 	private push(line: string): void {
 		this.transcript.push(line);
+	}
+
+	private noteEdit(name: string, input: unknown): void {
+		const path = editedPathFromToolUse(name, input, this.config.workDir);
+		if (path) this.editedPaths.add(path);
 	}
 
 	/**

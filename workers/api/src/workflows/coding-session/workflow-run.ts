@@ -22,6 +22,7 @@ import { decideTurnRecovery, describeTurnRecovery, recoveryInstruction, turnReco
 import { activeConstraints, constraintLines, constraintSources, type ScopeConstraint } from "../../lib/coding-scope-constraints.js";
 import { refreshGoalConstraints } from "../../lib/coding-standing-constraints.js";
 import { postReleaseNotes } from "../../lib/release-notes.js";
+import { publishIsolatedRun } from "../../lib/isolated-run.js";
 import { endSession, getRepo, reassignSessionNode, releaseSessionDriver, touchSessionDriver } from "../../lib/coding-store.js";
 import { shouldEndSessionAfterRun } from "../../lib/coding-session-lifecycle.js";
 import { setCodingSessionCardStatus } from "../../lib/coding-board.js";
@@ -1074,6 +1075,12 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 				// a Pilot finishing after a `--force` takeover elsewhere left the row suspended
 				// forever with nothing to close it.
 				await endSession(env, instanceId, userId, sessionId, status);
+				// #1713: a run that finished in an isolated worktree publishes it and removes the worktree once the publication reads back. Inside this
+				// step, so no durable step name changes (#1359); null for a repository that is not isolated or an older runner, and it never throws.
+				if (runSucceeded(result.outcome)) {
+					const repo = await getRepo(env, instanceId, userId, repoId).catch(() => null);
+					if (repo) await publishIsolatedRun(env, conn, { instanceId, userId, sessionId, repo, objective: goal.objective, runId: event.payload.loopRunId ?? null });
+				}
 			} else if (event.payload.driverId) {
 				// The session survives, so `endSession` — which is what normally frees the
 				// single-flight claim — never runs. Release it here or the repo is locked out

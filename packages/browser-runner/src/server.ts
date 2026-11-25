@@ -3,6 +3,7 @@ import { websiteAccessFromRequest } from "./website-access-request.js";
 import { withBrowserRequest } from "./browser-request.js";
 import { handleBranchRoute } from "./coding/branch-routes.js";
 import { handleWorktreeRoute } from "./coding/worktree-routes.js";
+import { handleIsolatedRoute } from "./coding/isolated-routes.js";
 import { handleCleanupRoute } from "./coding/cleanup-routes.js";
 import { readRecordAck } from "./coding/record-cursor.js";
 import { outgoing, redactPanesOf, secureTerminalRoute } from "./coding/pane-redact.js";
@@ -89,6 +90,7 @@ export async function startRunnerServer(config: RunnerConfig): Promise<{
 	const address = server.address() as AddressInfo;
 	const actualPort = address.port;
 	runner.selfUrl = `http://${config.host}:${actualPort}`;
+	runner.coding.reconcileWorktrees(); // #1714: leftovers of runs that ended while the runner was down
 	return {
 		runner,
 		url: `http://${config.host}:${actualPort}`,
@@ -406,6 +408,13 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	} catch (e: unknown) {
 		return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
 	}
+	// Shared-checkout admission, managed worktrees, publish and clean-up of an isolated run (#1714, #1713); an older runner 404s all of them.
+	try {
+		const isolated = await handleIsolatedRoute(req.method ?? "GET", path, runner.coding.isolatedRouteDeps(), () => readJson<Record<string, unknown>>(req));
+		if (isolated) return json(res, 200, isolated.body);
+	} catch (e: unknown) {
+		return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
+	}
 	// Per-session CPU and memory, for the heartbeat (#924): which agent is loading this machine.
 	if (req.method === "GET" && path === "/coding/resources") {
 		const { readSessionResources } = await import("./coding/session-resources.js");
@@ -608,7 +617,7 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	// A parked run's checkout, set aside and put back (#1077, `coding/park-snapshot.ts`). An older runner
 	// 404s these, and the cloud then keeps the checkout held — exactly what happened before them.
 	if (req.method === "POST" && (path === "/coding/park-snapshot" || path === "/coding/park-restore")) {
-		const b = await readJson<{ workDir?: string; repoId?: string; runId: string; snapshot?: string; fetch?: boolean }>(req);
+		const b = await readJson<{ workDir?: string; repoId?: string; runId: string; snapshot?: string; fetch?: boolean; owned?: string[]; sessionId?: string }>(req);
 		try {
 			return json(res, 200, path === "/coding/park-snapshot" ? runner.coding.parkSnapshot(b) : runner.coding.parkRestore({ ...b, snapshot: String(b.snapshot ?? "") }));
 		} catch (e: unknown) {

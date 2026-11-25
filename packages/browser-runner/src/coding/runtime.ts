@@ -26,7 +26,8 @@ import { defaultReceiptStorePath } from "./clone-receipt-store.js";
 import { asTurnAuthor, type TurnAuthor } from "./turn-author.js";
 import type { GhGuardReport } from "./gh-guard.js";
 import { CleanupManager } from "./cleanup.js";
-import { type IsolatedCheckout, startIsolatedCheckout, worktreeRootFor } from "./isolated-start.js";
+import { reconcileAllWorktrees } from "./isolated-routes.js";
+import { type IsolatedCheckout, runIdForSession, startIsolatedCheckout, worktreeRootFor } from "./isolated-start.js";
 
 /**
  * The coding runtime: the local "hands" that hold live coding-engine sessions — CLI child
@@ -347,6 +348,8 @@ export class CodingRuntime {
 	private cleanupManager: CleanupManager | null = null;
 	/** Sessions running in a managed worktree (#1708), by session id. */
 	private isolated = new Map<string, IsolatedCheckout>();
+	/** Files the engine of an ENDED session wrote (#1714), newest last and bounded: a run parks AFTER its engine stops, and resumes in a new process. */
+	private endedEdits = new Map<string, Set<string>>();
 	get cleanup(): CleanupManager {
 		this.cleanupManager ??= new CleanupManager({ baseDir: join(this.reposBaseDir, ".."), reposBaseDir: this.reposBaseDir });
 		return this.cleanupManager;
@@ -382,7 +385,7 @@ export class CodingRuntime {
 		// and every snapshot lists the accepted ids, so a retry after a lost reply can be reconciled.
 		// `.v3` renders the owner's constraints in force with the objective; `coding.engine-identity`: every snapshot
 		// names its input ledger and engine process, and an id is deduplicated together with its content (input-ledger.ts).
-		return ["coding.sessions", "coding.stream", "human.takeover", "coding.inspect", "coding.repo-write", "coding.run-objective", "coding.run-objective.v2", "coding.run-objective.v3", "coding.input-idempotent", "coding.engine-identity", "coding.checkout-clean", "coding.capture-ack", "coding.branches"];
+		return ["coding.sessions", "coding.stream", "human.takeover", "coding.inspect", "coding.repo-write", "coding.run-objective", "coding.run-objective.v2", "coding.run-objective.v3", "coding.input-idempotent", "coding.engine-identity", "coding.checkout-clean", "coding.capture-ack", "coding.branches", "coding.worktrees"];
 	}
 
 	/**
@@ -413,8 +416,26 @@ export class CodingRuntime {
 	}
 
 	/** Set a parked run's work aside on its own ref (#1077); only a verified `owned` list is read from the wire — unknown ownership leaves a dirty checkout untouched (#1547). */
-	parkSnapshot(input: { workDir?: string; repoId?: string; runId: string; owned?: string[] }) {
-		return parkSnapshot(this.parkWorkDir(input), input.runId, Array.isArray(input.owned) && input.owned.every((p) => typeof p === "string") ? { owned: input.owned } : {});
+	parkSnapshot(input: { workDir?: string; repoId?: string; runId: string; owned?: string[]; sessionId?: string }) {
+		// #1714: for a shared checkout the cloud may name the SESSION instead of a list; the paths ownership rests on are then the ones this
+		// runner watched the engine write (`editedPaths`). Unknown session, or a raw engine that reports none, leaves a dirty tree untouched.
+		const owned = Array.isArray(input.owned) && input.owned.every((p) => typeof p === "string") ? input.owned : input.sessionId ? [...(this.sessions.get(input.sessionId)?.editedPaths ?? this.endedEdits.get(input.sessionId) ?? [])] : undefined;
+		return parkSnapshot(this.parkWorkDir(input), input.runId, owned ? { owned } : {});
+	}
+
+	/** The deps the checkout-strategy routes (`isolated-routes.ts`) run on (#1714, #1713). */
+	isolatedRouteDeps() {
+		return {
+			resolveWorkDir: (i: { workDir?: string; repoId?: string }) => this.parkWorkDir(i),
+			root: worktreeRootFor(this.reposBaseDir),
+			liveRunIds: () => new Set([...this.sessions.keys()].map((id) => runIdForSession(id)).filter((r): r is string => !!r)),
+		};
+	}
+
+	/** Runner start (#1714): clean, published worktrees of runs that are gone are removed; every other leftover is kept and reported. */
+	reconcileWorktrees() {
+		const d = this.isolatedRouteDeps();
+		return reconcileAllWorktrees(d.root, d.liveRunIds());
 	}
 
 	/** The confined checkout folder for a repo-scoped call that has no session (#1700, #1701). */
@@ -582,6 +603,7 @@ export class CodingRuntime {
 				bin: input.bin,
 				cleanup: this.cleanup,
 			});
+			for (const p of this.endedEdits.get(input.sessionId) ?? []) session.editedPaths.add(p);
 			this.sessions.set(input.sessionId, session);
 		}
 		// Read BEFORE `start()`: a bad `--resume` can kill the process on spawn, and the engine
@@ -731,6 +753,9 @@ export class CodingRuntime {
 			session.stop();
 			this.sessions.delete(sessionId);
 			this.runLeases.delete(sessionId);
+			this.endedEdits.delete(sessionId);
+			if (session.editedPaths?.size) this.endedEdits.set(sessionId, new Set(session.editedPaths)); // `?.`: test doubles carry no engine
+			for (const old of [...this.endedEdits.keys()].slice(0, Math.max(0, this.endedEdits.size - 64))) this.endedEdits.delete(old);
 			this.isolated.delete(sessionId); // the worktree itself is kept: ending a session never deletes work (#1708)
 			// What the run left behind: its leftovers, browsers, temp folder and worktrees (#1265).
 			// After the delete, so this session is no longer "live" to its own sweep. Never blocks the answer.

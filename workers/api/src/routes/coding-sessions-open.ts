@@ -205,7 +205,7 @@ export function registerSessionOpenRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		// which end a session and open another in the same breath. Without the flag the policy would
 		// resume the session they just ended — the one the user is trying to get away from.
 		const continuity = await continuityForNewSession(c.env, instanceId, uid, repoId, clientType, { forceFresh: body.fresh === true });
-		const started = await startSessionOnRunner(c.env, instanceId, uid, session, repo, { resumeFrom: continuity.resumeFrom, cleanSlate: continuity.seed === null, preflightEngine: true });
+		const started = await startSessionOnRunner(c.env, instanceId, uid, session, repo, { resumeFrom: continuity.resumeFrom, cleanSlate: continuity.seed === null, preflightEngine: true, freshOpen: true });
 		if (started.engineUnavailable) {
 			// The machine cannot run this engine (#879). Close the row rather than leave an active
 			// session no engine will ever answer in, and say which engine and what to do.

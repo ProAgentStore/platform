@@ -23,6 +23,7 @@
 import type { Env } from "../types.js";
 import { RESUME_WINDOW_MS, describeAge } from "./coding-session-continuity.js";
 import { startSessionOnRunnerConn, type RelaunchInput } from "./coding-session-relaunch.js";
+import { strategyForRunner } from "./checkout-strategy.js";
 import { seedBriefForRepo } from "./coding-seed-brief.js";
 import { claimSessionDriver, getRepo, reassignSessionNode } from "./coding-store.js";
 import { describeOwner, describeRepoHolder, releaseStaleActiveSessions, repoFreeForRun, runnerEngineProbe } from "./coding-ownership.js";
@@ -257,10 +258,19 @@ export async function wakeRunsParkedOnMachine(env: Pick<Env, "DB" | "CODING_SESS
 export async function releaseCheckout(env: Env, conn: RunnerConn, scope: ParkScope, now = Date.now()): Promise<{ released: boolean; line: string; onStop?: string }> {
 	const repo = await getRepo(env, scope.instanceId, scope.userId, scope.repoId).catch(() => null);
 	let saved: { snapshot: string | null; files: number; clean: boolean; ref: string | null; pushed?: boolean | null; pushError?: string; unowned?: string[]; conflict?: string };
-	try {
-		saved = await callRunner(conn, "/coding/park-snapshot", { workDir: repo?.workdir || undefined, repoId: scope.repoId, runId: scope.runId });
-	} catch (e) {
-		return { released: false, line: `The checkout stays held while it waits: its work could not be set aside on the machine (${e instanceof Error ? e.message : String(e)}; set-aside needs CLI 0.4.140 or later).` };
+	// #1714: a run in its own worktree holds its edits THERE, isolated and attributable; the shared checkout is not its to set aside, so
+	// nothing is stashed and nothing is moved — the checkout is released and the worktree is simply kept for the resume.
+	const isolated = Boolean(strategyForRunner(repo?.strategy));
+	if (isolated) {
+		saved = { snapshot: null, files: 0, clean: true, ref: null };
+	} else {
+		try {
+			// #1714: an explicit shared-direct names the session so the runner can prove which dirty paths the engine itself wrote; no stored
+			// preset sends exactly what it always did (and leaves a dirty checkout untouched).
+			saved = await callRunner(conn, "/coding/park-snapshot", { workDir: repo?.workdir || undefined, repoId: scope.repoId, runId: scope.runId, ...(repo?.strategy === "shared-direct" ? { sessionId: scope.sessionId } : {}) });
+		} catch (e) {
+			return { released: false, line: `The checkout stays held while it waits: its work could not be set aside on the machine (${e instanceof Error ? e.message : String(e)}; set-aside needs CLI 0.4.140 or later).` };
+		}
 	}
 	// #1547: dirty paths nobody could show are this run's are never swept up. The runner touched nothing; say so, and name them.
 	if (saved?.conflict === "ownership_unknown" || (!saved?.clean && saved?.unowned?.length)) {
@@ -273,6 +283,7 @@ export async function releaseCheckout(env: Env, conn: RunnerConn, scope: ParkSco
 	await env.DB.prepare("UPDATE coding_sessions SET status = 'suspended', driver_id = NULL, driver_at = NULL, updated_at = datetime('now') WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3 AND status = 'active'")
 		.bind(scope.sessionId, scope.instanceId, scope.userId)
 		.run();
+	if (isolated) return { released: true, line: "Its checkout is released for other work while it waits: it works in its own worktree, so its edits stay there untouched and it resumes in the same one." };
 	if (!saved.snapshot) return { released: true, line: "Its checkout is released for other work while it waits (it had no uncommitted changes)." };
 	const id = saved.snapshot;
 	const where = conn.runnerNode ? ` on ${conn.runnerNode}` : "";
@@ -325,14 +336,14 @@ export async function takeBackCheckout(env: Env, scope: ParkScope): Promise<{ ok
 export async function putBackWork(env: Env, conn: RunnerConn, scope: ParkScope, snapshot: string | null): Promise<{ ok: true } | { blocked: string }> {
 	if (snapshot) {
 		const repo = await getRepo(env, scope.instanceId, scope.userId, scope.repoId).catch(() => null);
-		let restored: { restored?: boolean; refused?: string; conflicts?: string[]; missing?: boolean };
+		let restored: { restored?: boolean; refused?: string; conflicts?: string[]; blocking?: string[]; missing?: boolean };
 		try {
 			restored = await callRunner(conn, "/coding/park-restore", { workDir: repo?.workdir || undefined, repoId: scope.repoId, runId: scope.runId, snapshot });
 		} catch (e) {
 			restored = { restored: false, refused: `the coding runner could not put it back (${e instanceof Error ? e.message : String(e)})` };
 		}
 		if (!restored.restored) {
-			const files = restored.conflicts?.length ? ` Conflicting files: ${restored.conflicts.map((f) => `\`${f}\``).join(", ")}.` : "";
+			const files = restored.conflicts?.length ? ` Conflicting files: ${restored.conflicts.map((f) => `\`${f}\``).join(", ")}.` : restored.blocking?.length ? ` Blocking uncommitted paths: ${nameFiles(restored.blocking)} — left exactly as they were.` : "";
 			// #1242: "still set aside" is said only of work the runner just found in this checkout. Missing, the
 			// sentence says where it WAS set aside, and whether a copy reached origin — the facts on record.
 			if (restored.missing) {

@@ -73,6 +73,9 @@ export const RUNNER_ROUTES: Readonly<Record<string, RunnerRoute>> = {
 	// Branch and stash inventory (#1700, #1701): live `ls-remote`, so slow-read; a repeat changes nothing.
 	"/coding/branches": readSlow(),
 	"/coding/stashes": readSlow(),
+	// Shared-checkout admission and the managed-worktree inventory (#1714): reads, a repeat changes nothing.
+	"/coding/admit-checkout": readSlow(),
+	"/coding/worktrees": readSlow(),
 
 	// ── writes to the checkout: a repeat may do it twice ──
 	"/coding/git-write": once(),
@@ -83,6 +86,9 @@ export const RUNNER_ROUTES: Readonly<Record<string, RunnerRoute>> = {
 	"/coding/stash-drop": once(),
 	// The owner's discard of one run's isolated worktree (#1709): destructive, so a repeat after an unknown outcome is the caller's call.
 	"/coding/worktree-discard": once(),
+	// Publish an isolated run's work, then remove its worktree (#1713): a push and a removal, so never re-sent blind — the caller reads back.
+	"/coding/worktree-publish": once(),
+	"/coding/worktree-finish": once(),
 	"/coding/park-snapshot": once(),
 	"/coding/park-restore": once(),
 	"/coding/clone": once(),

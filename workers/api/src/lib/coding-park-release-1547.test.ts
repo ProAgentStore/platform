@@ -104,4 +104,29 @@ describe("releaseCheckout when the runner could not show the dirty paths are the
 		expect(sent).toMatchObject({ repoId: "r1", runId: RUN });
 		expect(sent).not.toHaveProperty("exclusive");
 	});
+
+	it("#1714: no stored strategy sends the request it always did - no session name, so the runner cannot infer ownership", async () => {
+		runnerAnswer.value = { snapshot: null, files: 0, clean: true, ref: null, pushed: null };
+		await releaseCheckout(env, conn, SCOPE);
+		expect(runnerAnswer.calls.find((c) => c.path === "/coding/park-snapshot")?.body).not.toHaveProperty("sessionId");
+	});
+
+	it("#1714: an explicit shared-direct repository names the session, so the runner can prove which paths its engine wrote", async () => {
+		d1.exec("UPDATE coding_repos SET strategy = 'shared-direct' WHERE id = 'r1'");
+		runnerAnswer.value = { snapshot: "a".repeat(40), files: 1, clean: false, ref: `refs/pags/parked/${RUN}`, pushed: false, unowned: ["theirs.txt"] };
+		const r = await releaseCheckout(env, conn, SCOPE);
+		expect(runnerAnswer.calls.find((c) => c.path === "/coding/park-snapshot")?.body).toMatchObject({ sessionId: "csess_1" });
+		expect(r.released).toBe(false); // a stranger's path is still in the way: held, and named
+		expect(r.line).toContain("`theirs.txt`");
+	});
+
+	it("#1714: an isolated run holds its edits in its own worktree - nothing is asked of the shared checkout and nothing is set aside", async () => {
+		d1.exec("UPDATE coding_repos SET strategy = 'isolated-direct' WHERE id = 'r1'");
+		const r = await releaseCheckout(env, conn, SCOPE);
+		expect(runnerAnswer.calls).toEqual([]);
+		expect(r.released).toBe(true);
+		expect(r.line).toMatch(/its own worktree/);
+		expect(r.onStop).toBeUndefined();
+		expect(await sessionStatus()).toBe("suspended");
+	});
 });

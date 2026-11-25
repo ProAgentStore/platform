@@ -94,3 +94,44 @@ describe("startSessionOnRunner uses the checkout of the machine it runs on (#114
 		expect(checkouts.getCheckout).not.toHaveBeenCalled();
 	});
 });
+
+describe("startSessionOnRunner and the repository's checkout strategy (#1714)", () => {
+	const paths = () => vi.mocked(runner.callRunner).mock.calls.map((c) => c[1]);
+	const withStrategy = (strategy: CodingRepo["strategy"]): CodingRepo => ({ ...repo, strategy });
+	beforeEach(() => vi.mocked(checkouts.getCheckout).mockResolvedValue(null));
+
+	it("a repository with no stored strategy is never asked about, on a fresh open or any other", async () => {
+		await startSessionOnRunner(env, "i1", "u1", { ...session }, repo, { freshOpen: true });
+		expect(paths()).not.toContain("/coding/admit-checkout");
+		expect(paths()).toContain("/coding/start");
+	});
+
+	it("an explicit shared-direct repository is refused on a fresh open when its checkout is dirty, naming the paths, and nothing is started", async () => {
+		vi.mocked(runner.callRunner).mockImplementation((async (_c: unknown, path: string) => (path === "/coding/admit-checkout" ? { ok: false, blocking: ["a.ts"], blockingCount: 1 } : { ok: true })) as never);
+		const res = await startSessionOnRunner(env, "i1", "u1", { ...session }, withStrategy("shared-direct"), { freshOpen: true });
+		expect(res.conn).toBeNull();
+		expect(res.startError).toContain("`a.ts`");
+		expect(paths()).not.toContain("/coding/start");
+	});
+
+	it("...but a re-attach (not a fresh open) is never admission-checked: it holds its own edits", async () => {
+		await startSessionOnRunner(env, "i1", "u1", { ...session }, withStrategy("shared-direct"));
+		expect(paths()).not.toContain("/coding/admit-checkout");
+		expect(paths()).toContain("/coding/start");
+	});
+
+	it("an isolated repository whose runner did not report a worktree is refused and its engine stopped, not silently run shared", async () => {
+		const res = await startSessionOnRunner(env, "i1", "u1", { ...session }, withStrategy("isolated-pr"), { freshOpen: true });
+		expect(res.conn).toBeNull();
+		expect(res.startError).toMatch(/did not report an isolated worktree/);
+		expect(paths()).toEqual(expect.arrayContaining(["/coding/start", "/coding/end"]));
+	});
+
+	it("an isolated repository whose runner reported its worktree starts normally", async () => {
+		vi.mocked(runner.callRunner).mockResolvedValue({ ok: true, checkout: { mode: "worktree", path: "/wt/x" } } as never);
+		const res = await startSessionOnRunner(env, "i1", "u1", { ...session }, withStrategy("isolated-direct"), { freshOpen: true });
+		expect(res.startError).toBeUndefined();
+		expect(res.conn).not.toBeNull();
+		expect(paths()).not.toContain("/coding/end");
+	});
+});

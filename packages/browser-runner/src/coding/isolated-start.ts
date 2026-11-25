@@ -14,6 +14,9 @@ import { createRunWorktree } from "./run-worktree.js";
 
 const SESSION_UUID = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
+/** A session's worktree run id: the uuid in `csess_<uuid>`, or undefined for an id that carries none. */
+export const runIdForSession = (sessionId: string): string | undefined => SESSION_UUID.exec(sessionId)?.[1];
+
 export interface IsolatedCheckout {
 	mode: "worktree";
 	path: string;
@@ -44,7 +47,7 @@ export function startIsolatedCheckout(sharedDir: string, root: string, input: { 
 	if (strategy.checkout !== "worktree") return null;
 	const problems = strategyProblems(strategy);
 	if (problems.length) throw new RunnerInputError(problems[0]);
-	const runId = SESSION_UUID.exec(input.sessionId)?.[1];
+	const runId = runIdForSession(input.sessionId);
 	if (!runId) throw new RunnerInputError(`cannot name an isolated worktree for session ${input.sessionId}`);
 	const target = input.branch || currentBranch(sharedDir);
 	if (!target) throw new RunnerInputError("an isolated checkout needs a target branch, and the repository's folder is on none; set the repository's branch");
