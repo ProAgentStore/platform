@@ -48,6 +48,12 @@ interface ObjectiveQueueRow {
 	next_retry_at?: number | null;
 	/** When the entry began waiting on an offline runner in this unbroken stretch (#1189); null = not waiting on one. */
 	offline_since?: number | null;
+	/** The owner's approval of a forced start, recorded when it queued (#1728) — see migration 0351. */
+	approval_reason?: string | null;
+	approval_issue?: number | null;
+	approval_repo_id?: string | null;
+	approval_at?: number | null;
+	approval_audited_at?: number | null;
 }
 
 export interface ObjectiveQueueEntry {
@@ -79,10 +85,16 @@ export interface ObjectiveQueueEntry {
 	nextRetryAt: number | null;
 	/** When it began waiting on an offline runner, ms epoch (#1189); the wait is bounded by `QUEUE_OFFLINE_MAX_MS`. Null = not waiting on one. */
 	offlineSince?: number | null;
+	/**
+	 * The owner's approval of a forced start (#1728): their own reason, the one issue and repository it was given for, and when. Written only by
+	 * the server when a start with `force` + `force_reason` had to queue; absent for every other entry. The drain turns it back into the same
+	 * forced start — re-checked against the issue, repository and age it was recorded for.
+	 */
+	approval?: { reason: string; issue: number; repoId: string; approvedAt: number; auditedAt: number | null };
 }
 
 const COLUMNS =
-	"id, instance_id, repo_id, user_id, objective, max_iterations, metadata, status, stop_reason, run_id, created_at, started_at, finished_at, request_id, actor_uid, client_claimed, defer_reason, next_retry_at, offline_since";
+	"id, instance_id, repo_id, user_id, objective, max_iterations, metadata, status, stop_reason, run_id, created_at, started_at, finished_at, request_id, actor_uid, client_claimed, defer_reason, next_retry_at, offline_since, approval_reason, approval_issue, approval_repo_id, approval_at, approval_audited_at";
 
 /**
  * The queue in BOARD order (#1097): each entry is a card (`objective:<id>`), and where the owner placed it
@@ -113,6 +125,10 @@ function toEntry(row: ObjectiveQueueRow): ObjectiveQueueEntry {
 		deferReason: row.defer_reason ?? null,
 		nextRetryAt: row.next_retry_at ?? null,
 		offlineSince: row.offline_since ?? null,
+		// All four or none: a half-recorded approval is no approval (#1728).
+		...(row.approval_reason && row.approval_issue && row.approval_repo_id && row.approval_at
+			? { approval: { reason: row.approval_reason, issue: row.approval_issue, repoId: row.approval_repo_id, approvedAt: row.approval_at, auditedAt: row.approval_audited_at ?? null } }
+			: {}),
 	};
 }
 
@@ -134,6 +150,12 @@ export interface EnqueueInput {
 	 * did not answer carries its reason and first retry time from the moment it exists — before, it sat with neither until a run ended.
 	 */
 	deferral?: { reason: string; note?: string | null };
+	/**
+	 * The owner's approval of a FORCED start that is being queued instead of run (#1728) — their `force_reason`, the issue and the repository
+	 * it was validated for. Without it the drain re-runs the ordinary duplicate/done checks and refuses the issue it was told to start.
+	 * `audited` says the audit comment was already posted by the start that discovered the repo was busy, so the drain does not post it again.
+	 */
+	approval?: { reason: string; issue: number; repoId: string; audited: boolean };
 }
 
 /**
@@ -153,10 +175,14 @@ export async function enqueueObjective(env: Env, input: EnqueueInput): Promise<O
 	const note = timed && input.deferral?.note ? clipMarked(input.deferral.note, QUEUE_NOTE_CHARS) : null;
 	await env.DB.prepare(
 		`INSERT INTO instance_objective_queue
-		   (id, instance_id, repo_id, user_id, objective, max_iterations, metadata, status, created_at, deferral_count, issue_number, defer_reason, next_retry_at, stop_reason)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?8, 0, ?9, ?10, ?11, ?12)`,
+		   (id, instance_id, repo_id, user_id, objective, max_iterations, metadata, status, created_at, deferral_count, issue_number, defer_reason, next_retry_at, stop_reason,
+		    approval_reason, approval_issue, approval_repo_id, approval_at, approval_audited_at)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?8, 0, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)`,
 	)
-		.bind(id, input.instanceId, input.repoId ?? null, input.userId, objective, input.maxIterations ?? null, input.metadata ?? null, createdAt, referencedIssue(objective), deferReason, nextRetryAt, note)
+		.bind(
+			id, input.instanceId, input.repoId ?? null, input.userId, objective, input.maxIterations ?? null, input.metadata ?? null, createdAt, referencedIssue(objective), deferReason, nextRetryAt, note,
+			input.approval?.reason ?? null, input.approval?.issue ?? null, input.approval?.repoId ?? null, input.approval ? createdAt : null, input.approval?.audited ? createdAt : null,
+		)
 		.run();
 	if (input.position === "next") {
 		// Above every placed card on the instance — so above everything in its column, placed or not.
@@ -184,7 +210,20 @@ export async function enqueueObjective(env: Env, input: EnqueueInput): Promise<O
 		finishedAt: null,
 		deferReason,
 		nextRetryAt,
+		...(input.approval ? { approval: { reason: input.approval.reason, issue: input.approval.issue, repoId: input.approval.repoId, approvedAt: createdAt, auditedAt: input.approval.audited ? createdAt : null } } : {}),
 	};
+}
+
+/**
+ * Claim the one audit comment for an entry's recorded approval (#1728). True exactly once per entry — the first caller to find it unposted —
+ * however many times the entry is claimed, deferred and drained again. The row is the lock: one conditional UPDATE, so two concurrent drains
+ * cannot both post. An entry with no approval, or one already audited at enqueue, answers false.
+ */
+export async function claimApprovalAudit(env: Env, entryId: string, now = Date.now()): Promise<boolean> {
+	const res = await env.DB.prepare("UPDATE instance_objective_queue SET approval_audited_at = ?2 WHERE id = ?1 AND approval_reason IS NOT NULL AND approval_audited_at IS NULL")
+		.bind(entryId, now)
+		.run();
+	return (res.meta?.changes ?? 0) > 0;
 }
 
 /**

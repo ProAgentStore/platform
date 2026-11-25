@@ -24,6 +24,7 @@ import type { Env } from "../types.js";
 const dequeueNext = vi.fn();
 const finishQueueEntry = vi.fn();
 const requeueEntry = vi.fn();
+const claimApprovalAudit = vi.fn();
 const start = vi.fn();
 const openBudget = vi.fn();
 const resolveAccountCeilings = vi.fn();
@@ -39,6 +40,7 @@ vi.mock("./objective-queue.js", () => ({
 	dequeueNext: (...a: unknown[]) => dequeueNext(...a),
 	finishQueueEntry: (...a: unknown[]) => finishQueueEntry(...a),
 	requeueEntry: (...a: unknown[]) => requeueEntry(...a),
+	claimApprovalAudit: (...a: unknown[]) => claimApprovalAudit(...a),
 }));
 vi.mock("./loop-drivers.js", async (orig) => ({
 	loopDriverFor: () => ({ id: "coding", label: "the engine", start: (...a: unknown[]) => start(...a) }),
@@ -137,6 +139,44 @@ describe("a successful start", () => {
 		dequeueNext.mockResolvedValue(entry());
 		await tryDequeueAndStart(env, "i1", "r1", "owner-1");
 		expect(start.mock.calls[0][0]).toMatchObject({ depth: 0 });
+	});
+});
+
+describe("a forced start the owner approved before it queued (#1728)", () => {
+	const approval = { reason: "regression found in prod", issue: 1698, repoId: "r1", approvedAt: 1_700_000_000_000, auditedAt: null };
+
+	it("hands the recorded approval to the driver as evidence — not as `force`", async () => {
+		dequeueNext.mockResolvedValue(entry({ approval }));
+		await tryDequeueAndStart(env, "i1", "r1", "owner-1");
+		const input = start.mock.calls[0][0] as { force?: boolean; forceReason?: string; forceApproval?: { reason: string; issue: number; repoId: string; approvedAt: number } };
+		expect(input.force).toBeUndefined();
+		expect(input.forceReason).toBeUndefined();
+		expect(input.forceApproval).toMatchObject({ reason: "regression found in prod", issue: 1698, repoId: "r1", approvedAt: 1_700_000_000_000 });
+	});
+
+	it("binds the audit claim to THIS entry, so a drain that is deferred and retried posts the comment once", async () => {
+		claimApprovalAudit.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+		dequeueNext.mockResolvedValue(entry({ id: "objq-9", approval }));
+		await tryDequeueAndStart(env, "i1", "r1", "owner-1");
+		const claim = (start.mock.calls[0][0] as { forceApproval: { claimAudit: () => Promise<boolean> } }).forceApproval.claimAudit;
+		expect(claimApprovalAudit).not.toHaveBeenCalled(); // claimed only if and when the guard is about to post
+		expect(await claim()).toBe(true);
+		expect(await claim()).toBe(false);
+		expect(claimApprovalAudit).toHaveBeenCalledWith(env, "objq-9");
+	});
+
+	it("an entry queued with no approval carries none: the driver sees an ordinary start", async () => {
+		dequeueNext.mockResolvedValue(entry());
+		await tryDequeueAndStart(env, "i1", "r1", "owner-1");
+		expect((start.mock.calls[0][0] as { forceApproval?: unknown }).forceApproval).toBeUndefined();
+	});
+
+	it("a refusal at drain still fails the entry with the driver's own sentence — the approval does not turn a refusal into a start", async () => {
+		start.mockResolvedValue({ ok: false, status: 409, reason: "already_done", error: "Issue #1698 was finished by run r-1." });
+		dequeueNext.mockResolvedValue(entry({ approval }));
+		const out = await tryDequeueAndStart(env, "i1", "r1", "owner-1");
+		expect(out).toMatchObject({ drained: true, started: false, requeued: false, error: "Issue #1698 was finished by run r-1." });
+		expect(finishQueueEntry).toHaveBeenCalledWith(env, "objq-1", "failed", "Issue #1698 was finished by run r-1.");
 	});
 });
 

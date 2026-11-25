@@ -331,6 +331,8 @@ export async function createLoopRun(
 		exclusiveRepoId?: string | null;
 		/** What this run does with a question it would park on (#1385): `ask` (default) or `decide`. Null/absent is `ask`. */
 		questionsPolicy?: "ask" | "decide" | null;
+		/** Checkout maintenance (#1728): a repair run, kept out of "this issue was worked" (migration 0351). */
+		maintenance?: boolean;
 	},
 ): Promise<boolean> {
 	const exclusive = input.exclusiveRepoId
@@ -338,8 +340,8 @@ export async function createLoopRun(
 		     WHERE o.instance_id = ?3 AND os.repo_id = ?12 AND ${ownsCheckoutSql("o", "?13")})`
 		: "";
 	const res = await env.DB.prepare(
-		`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, max_iterations, budget_id, started_at, status, delegated_by, session_id, issue_number, questions_policy)
-		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', ?8, ?9, ?10, ?11 ${exclusive}`,
+		`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, max_iterations, budget_id, started_at, status, delegated_by, session_id, issue_number, questions_policy, maintenance)
+		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', ?8, ?9, ?10, ?11, ${input.maintenance === true ? 1 : "NULL"} ${exclusive}`,
 	)
 		.bind(
 			input.runId,

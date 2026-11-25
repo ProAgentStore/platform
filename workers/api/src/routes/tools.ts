@@ -61,7 +61,7 @@ import { BUSY_NEXT, describeBusyHolder } from "../lib/loop-busy.js";
 import { instanceRepoCi } from "../lib/repo-ci-health.js";
 import { REPAIR_RUN_OBJECTIVE } from "../lib/repo-sync-gate.js";
 import { backingOffAhead, enqueueObjective } from "../lib/objective-queue.js";
-import { liveIssueClosedRefusal, startIssueFor } from "../lib/start-idempotency.js";
+import { approvalToRecord, liveIssueClosedRefusal, startIssueFor } from "../lib/start-idempotency.js";
 import { registerLoopQueueRoutes } from "./loop-queue-routes.js";
 import { registerLoopContinueRoutes } from "./loop-continue-routes.js";
 import { readLoopPresets, writeLoopPresets } from "../lib/loop-presets-store.js";
@@ -1337,12 +1337,14 @@ toolRoutes.post("/:id/loop", async (c) => {
 		// every path, not only when the repo is busy. Resolved the way the driver resolves it, so repo-qualified.
 		let dedupeRepoId = repoId;
 		let dedupeGithubRepo: string | null = null;
+		let repoResolved = false;
 		if (driver.id === "coding") {
 			const repos = await listRepos(c.env, instanceId, session.uid).catch(() => []);
 			const dupRepo = pickLoopRepo(repos, repoId, { requireChoice: requireRepoChoice });
 			if (dupRepo.ok) {
 				dedupeRepoId = dupRepo.repo.id;
 				dedupeGithubRepo = dupRepo.repo.githubRepo ?? null;
+				repoResolved = true;
 			}
 			if (dupRepo.ok && !repairCheckout) {
 				const dup = await findDuplicateObjective(c.env, { userId: session.uid, instanceId, repoId: dupRepo.repo.id, objective, issue });
@@ -1360,6 +1362,8 @@ toolRoutes.post("/:id/loop", async (c) => {
 			const refusal = await liveIssueClosedRefusal(c.env, { userId: session.uid, githubRepo: dedupeGithubRepo, repoId: dedupeRepoId ?? "", issue: liveIssue });
 			return refusal ? c.json({ error: refusal.error, reason: refusal.reason, startState: "not_started", ...(refusal.detail ?? {}) }, 409) : null;
 		};
+		// A forced start that queues keeps the owner's approval for the drain (#1728); nothing is recorded without `force` + a reason.
+		const approvalFor = (audited: boolean) => approvalToRecord({ force: body.force, forceReason: body.forceReason, repair: repairCheckout, repoId: repoResolved ? (dedupeRepoId ?? null) : null, githubRepo: dedupeGithubRepo, objective, issue, audited });
 		// Queued behind an earlier objective that is waiting out a timed backoff (#1388): do not start ahead of it. Objectives queued in
 		// order (#507 → #508 → #509) depend on each other, and a runner that briefly missed a ping must not reorder them.
 		if (driver.id === "coding" && body.queueIfBusy === true && body.queuePosition !== "next") {
@@ -1371,7 +1375,8 @@ toolRoutes.post("/:id/loop", async (c) => {
 				const dup = await findDuplicateObjective(c.env, { userId: session.uid, instanceId, repoId: dedupeRepoId, objective, issue });
 				if (dup?.kind === "queued") return c.json({ queued: true, entry: dup.entry, duplicate_of: dup.entry.id, blocked }, 202);
 				if (dup) return c.json({ runId: dup.runId, status: "running", duplicate_of: dup.runId, objective: dup.objective }, 200);
-				const entry = await enqueueObjective(c.env, { instanceId, repoId, userId: session.uid, objective, maxIterations: body.maxIterations ?? null, metadata: questions ? JSON.stringify({ questions }) : null, position: body.queuePosition });
+				// No start ran here, so no audit comment was posted: the drain posts the one (#1728).
+				const entry = await enqueueObjective(c.env, { instanceId, repoId, userId: session.uid, objective, maxIterations: body.maxIterations ?? null, metadata: questions ? JSON.stringify({ questions }) : null, position: body.queuePosition, approval: approvalFor(false) });
 				return c.json({ queued: true, entry, blocked }, 202);
 			}
 		}
@@ -1406,7 +1411,7 @@ toolRoutes.post("/:id/loop", async (c) => {
 				if (dup?.kind === "queued") return c.json({ queued: true, entry: dup.entry, duplicate_of: dup.entry.id, blocked: started.error }, 202);
 				if (dup) return c.json({ runId: dup.runId, status: "running", duplicate_of: dup.runId, objective: dup.objective }, 200);
 				// A start that names `questions` keeps it through the wait (#1385); one that does not inherits the instance default when the drain starts it.
-				const entry = await enqueueObjective(c.env, { instanceId, repoId, userId: session.uid, objective, maxIterations: body.maxIterations ?? null, metadata: questions ? JSON.stringify({ questions }) : null, position: body.queuePosition, deferral: started.reason ? { reason: started.reason, note: started.error } : undefined });
+				const entry = await enqueueObjective(c.env, { instanceId, repoId, userId: session.uid, objective, maxIterations: body.maxIterations ?? null, metadata: questions ? JSON.stringify({ questions }) : null, position: body.queuePosition, deferral: started.reason ? { reason: started.reason, note: started.error } : undefined, approval: approvalFor(true) }); // true: this start already passed the guard and posted the audit comment (#1728)
 				// 202, not 201: nothing was created that is running. The `blocked` sentence is the driver's
 				// own refusal, kept so the caller can see WHAT it is waiting behind rather than only that
 				// it is waiting.

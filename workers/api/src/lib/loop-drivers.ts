@@ -45,7 +45,7 @@ import { EMPTY_RUNTIME_FACTS, runtimeConnectivity } from "./instance-connectivit
 import { checkJobCapabilityRequirements } from "./machine-capabilities.js";
 import { currentGateState, DEFAULT_GATE_STATE, describeRejection, rejectionFor } from "./runner-admission-gate.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
-import { checkStartIdempotency, quarantineRefusal, startIssueFor } from "./start-idempotency.js";
+import { checkStartIdempotency, quarantineRefusal, startIssueFor, validQueuedApproval, type QueuedForceApproval } from "./start-idempotency.js";
 import { writeScopeAdmissionRefusal } from "./write-scope-admission.js";
 import type { Env } from "../types.js";
 import { effectiveQuestionsPolicy, type QuestionsPolicy } from "./question-policy.js";
@@ -162,6 +162,8 @@ export interface LoopStartInput {
 	force?: boolean;
 	/** Why — posted as a comment on the issue. */
 	forceReason?: string;
+	/** The owner's approval of a forced start, recorded when it queued (#1728). Set only by the drain; the start guard honours it for its own issue and repository only. */
+	forceApproval?: QueuedForceApproval;
 	/**
 	 * What the machine must be able to do (#1312): `webkit`, `node>=22`, `wrangler`, `docker`… Checked against the
 	 * machine's reported capability record before anything starts; a machine that cannot meet them refuses the run
@@ -363,8 +365,11 @@ const codingDriver: LoopDriver = {
 		if (scopeRefusal) return { ok: false, status: 409, reason: scopeRefusal.reason, error: scopeRefusal.error, detail: scopeRefusal.detail };
 		// One unit of work, started once (#1253): the same issue in this repo is not worked twice, whichever
 		// path started it. A repair and an explicit continue are the deliberate exceptions.
+		// A forced start that had to queue (#1728) arrives without `force`; the guard honours its recorded approval only for this issue and repository.
+		const queued = input.force === true || input.repairCheckout === true || input.continueFromRunId ? undefined : input.forceApproval;
+		const startIssue = input.issue ?? validQueuedApproval(queued, { repoId: repo.id, githubRepo: repo.githubRepo ?? null, objective })?.issue;
 		if (input.repairCheckout !== true && !input.continueFromRunId) {
-			const refused = await checkStartIdempotency(env, { userId, instanceId, repo: { id: repo.id, githubRepo: repo.githubRepo ?? null }, objective, issue: input.issue, force: input.force, forceReason: input.forceReason });
+			const refused = await checkStartIdempotency(env, { userId, instanceId, repo: { id: repo.id, githubRepo: repo.githubRepo ?? null }, objective, issue: startIssue, force: input.force, forceReason: input.forceReason, approval: queued });
 			if (refused) return { ok: false, status: 409, reason: refused.reason, error: refused.error, detail: refused.detail };
 		} else if (input.repairCheckout !== true) {
 			// A continue (auto-resume included) skips the duplicate/done checks, but not the per-issue hard stop (#1336).
@@ -470,7 +475,7 @@ const codingDriver: LoopDriver = {
 				// The caller's explicit issue, else the objective's own subject — the SAME reading
 				// `linkRunToIssue` makes, so what the run will be attributed to is what decides
 				// whether it may inherit this checkout.
-				issue: input.issue ?? referencedIssue(objective),
+				issue: startIssue ?? referencedIssue(objective),
 				repair: input.repairCheckout === true,
 				continueFromRunId: input.continueFromRunId ?? null,
 			},
@@ -586,6 +591,7 @@ const codingDriver: LoopDriver = {
 				// #1385: this start's value, else the instance default, else `ask` — resolved HERE so every way a run starts (the route, the queue
 				// drain, an automatic resume, a continuation) gets the same rule without each re-reading the limits.
 				questionsPolicy: effectiveQuestionsPolicy(input.questions, limits.questions),
+				maintenance: input.repairCheckout === true, // checkout maintenance, not delivery (#1728)
 			});
 		} catch (e) {
 			await releaseSessionDriver(env, instanceId, userId, session.id, driverId).catch(() => undefined);
@@ -620,7 +626,7 @@ const codingDriver: LoopDriver = {
 		}
 
 		// The run's issue card (#895): explicit, else the objective's subject. Never fails the start.
-		await linkRunToIssue(env, { instanceId, userId, runId, sessionId: session.id, repoId: repo.id, githubRepo: repo.githubRepo ?? null, objective, issue: input.issue }).catch(() => undefined);
+		await linkRunToIssue(env, { instanceId, userId, runId, sessionId: session.id, repoId: repo.id, githubRepo: repo.githubRepo ?? null, objective, issue: startIssue }).catch(() => undefined);
 
 		let boardTaskId: string | undefined;
 		if (input.delegated) {

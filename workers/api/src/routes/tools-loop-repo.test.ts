@@ -242,3 +242,63 @@ describe("POST /:id/loop — a closed linked issue is refused immediately, never
 		expect(liveIssueClosedRefusal).not.toHaveBeenCalled();
 	});
 });
+
+describe("POST /:id/loop — a forced, owner-approved start that has to queue keeps its approval (#1728)", () => {
+	const BUSY = "r1 is already being worked on — wait for the current run to finish.";
+	const OBJECTIVE = "Implement GitHub issue #1698 in acme/app: Rebuild per-instance Kanban";
+	const forced = { objective: OBJECTIVE, repoId: "r1", queueIfBusy: true, force: true, forceReason: "  regression found in prod  " };
+	const approvalOf = () => (enqueueObjective.mock.calls[0][1] as { approval?: unknown }).approval;
+
+	beforeEach(() => {
+		listRepos.mockResolvedValue([{ id: "r1", name: "app", githubRepo: "acme/app" }]);
+		driverStart.mockResolvedValue({ ok: false, status: 409, reason: "busy", error: BUSY });
+	});
+
+	it("busy refusal path: the entry records the owner's reason, the issue and the repository, as already audited (the start that found it busy posted the comment)", async () => {
+		expect((await post(forced)).status).toBe(202);
+		expect(approvalOf()).toEqual({ reason: "regression found in prod", issue: 1698, repoId: "r1", audited: true });
+	});
+
+	it("backing-off path (no start runs): the entry records the approval as NOT yet audited, so the drain posts the one comment", async () => {
+		backingOffAhead.mockResolvedValue({ deferReason: "runner_overloaded", nextRetryAt: Date.now() + 120_000 });
+		expect((await post(forced)).status).toBe(202);
+		expect(driverStart).not.toHaveBeenCalled();
+		expect(approvalOf()).toEqual({ reason: "regression found in prod", issue: 1698, repoId: "r1", audited: false });
+	});
+
+	it("an explicit `issue` is the issue the approval is for, whatever the objective's own text names", async () => {
+		expect((await post({ ...forced, objective: "finish the board work", issue: 1698 })).status).toBe(202);
+		expect(approvalOf()).toMatchObject({ issue: 1698 });
+	});
+
+	it.each([
+		["no `force`", { force: undefined }],
+		["`force` false", { force: false }],
+		["`force` as a string", { force: "true" }],
+		["no reason", { forceReason: undefined }],
+		["a blank reason", { forceReason: "   " }],
+		["a repair run", { repairCheckout: true }],
+	])("%s: nothing is recorded — the entry is queued exactly as before and the drain applies the ordinary guard", async (_name, over) => {
+		expect((await post({ ...forced, ...over })).status).toBe(202);
+		expect(enqueueObjective).toHaveBeenCalledTimes(1);
+		expect(approvalOf()).toBeUndefined();
+	});
+
+	it("an objective that names no issue, with no explicit one, has nothing to approve", async () => {
+		expect((await post({ ...forced, objective: "finish the board work" })).status).toBe(202);
+		expect(approvalOf()).toBeUndefined();
+	});
+
+	it("a repository the caller's agent does not have records no approval — the repository is the caller's own or there is none", async () => {
+		listRepos.mockResolvedValue([]);
+		expect((await post({ ...forced, repoId: "someone-elses" })).status).toBe(202);
+		expect(approvalOf()).toBeUndefined();
+	});
+
+	it("a caller cannot plant an approval through the body: only `force` + `forceReason` are read, and the queue's `metadata` carries only `questions`", async () => {
+		expect((await post({ ...forced, force: false, approval: { reason: "x", issue: 1698, repoId: "r1", audited: true }, metadata: JSON.stringify({ force: true }) })).status).toBe(202);
+		const input = enqueueObjective.mock.calls[0][1] as { approval?: unknown; metadata?: string | null };
+		expect(input.approval).toBeUndefined();
+		expect(input.metadata ?? null).toBeNull();
+	});
+});

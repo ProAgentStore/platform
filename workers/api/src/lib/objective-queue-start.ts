@@ -28,7 +28,7 @@ import { deepLinkFor } from "./console-links.js";
 import { logError } from "./error-log.js";
 import { notifyUser } from "../routes/push.js";
 import { loopDriverFor, startRefusalIsWaitable } from "./loop-drivers.js";
-import { dequeueNext, failOfflineEntry, finishQueueEntry, requeueEntry } from "./objective-queue.js";
+import { claimApprovalAudit, dequeueNext, failOfflineEntry, finishQueueEntry, requeueEntry } from "./objective-queue.js";
 import { offlineWaitExpired, offlineWaitSentence, QUEUE_OFFLINE_MAX_MS } from "./objective-queue-offline.js";
 import { pausedStartRefusal } from "./instance-pause.js";
 import { automaticProviderHold } from "./provider-account-hold.js";
@@ -136,6 +136,10 @@ export async function tryDequeueAndStart(env: Env, instanceId: string, repoId: s
 			repoId: entry.repoId ?? repoId ?? undefined,
 			// What the caller asked for when it queued this (#1385); none ⇒ the driver applies the instance default.
 			questions: questionsFromMetadata(entry.metadata),
+			// The owner's approval of a forced start, recorded when this was queued (#1728) — handed over as evidence, not as `force`: the
+			// driver honours it only for the issue and repository it names and while it is fresh, and still runs every other check. The
+			// audit comment is claimed on the entry row, so a drain that is deferred and retried posts it once.
+			forceApproval: entry.approval ? { ...entry.approval, claimAudit: () => claimApprovalAudit(env, entry.id) } : undefined,
 			budgetId,
 			// Depth 0: the queue is the OWNER's, not a subordinate's. A queued objective is not
 			// delegated by the run that drained it, and inheriting that run's depth would make the

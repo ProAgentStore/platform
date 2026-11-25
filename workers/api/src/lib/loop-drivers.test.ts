@@ -1,4 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+
+// The start guard, passed through to the real one unless a test stubs an answer: the driver's glue (what it hands the guard) is
+// what is asserted here; what the guard decides lives in start-idempotency.test.ts and queue-force-approval.test.ts (#1728).
+const guard = vi.hoisted(() => vi.fn());
+vi.mock("./start-idempotency.js", async (orig) => {
+	const actual = await orig<typeof import("./start-idempotency.js")>();
+	guard.mockImplementation(actual.checkStartIdempotency);
+	return { ...actual, checkStartIdempotency: (...a: Parameters<typeof actual.checkStartIdempotency>) => guard(...a) };
+});
 import { DEFAULT_LOOP_DRIVER, loopDriverFor, LOOP_DRIVER_IDS, pickLoopRepo, startRefusalIsWaitable } from "./loop-drivers.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
 import type { Env } from "../types.js";
@@ -923,5 +932,68 @@ describe("the coding driver refuses a run whose engine is not signed in, before 
 			expect(out.ok).toBe(true);
 			expect(created[0].binding).toBe("CODING_SESSION");
 		}
+	});
+});
+
+describe("checkout maintenance and a queued forced start, through the coding driver (#1728)", () => {
+	const repoRow = { id: "r1", name: "fws/platform", instance_id: "i1", user_id: "u1", clone_status: "ready", github_repo: "acme/app" };
+	const session = { id: "s1", client_type: "claude", status: "active" };
+	const approval = (over: Partial<{ reason: string; issue: number; repoId: string; approvedAt: number; claimAudit: () => Promise<boolean> }> = {}) => ({
+		reason: "regression found in prod",
+		issue: 1698,
+		repoId: "r1",
+		approvedAt: Date.now() - 60_000,
+		...over,
+	});
+	const OBJECTIVE = "Implement GitHub issue #1698 in acme/app: Rebuild per-instance Kanban";
+	/** The guard's own input for the start, with its answer stubbed: this asserts what the DRIVER hands it, not what the guard decides (that is queue-force-approval.test.ts). */
+	async function guardInputFor(input: Record<string, unknown>) {
+		guard.mockClear();
+		guard.mockResolvedValueOnce(null);
+		const { env } = stubEnv({ repos: [repoRow], session });
+		await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base, objective: OBJECTIVE, ...input });
+		return guard.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+	}
+
+	it("a repair run's row is written as maintenance; an ordinary run's is not", async () => {
+		const insertFor = async (input: Record<string, unknown>) => {
+			const { env, binds } = stubEnv({ repos: [repoRow], session });
+			await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base, ...input });
+			return binds.find((b) => b.q.includes("INSERT INTO agent_loop_runs"))?.q ?? "";
+		};
+		expect(await insertFor({ repairCheckout: true })).toMatch(/\?11, 1\b/);
+		expect(await insertFor({})).toMatch(/\?11, NULL\b/);
+	});
+
+	it("a repair run never reaches the start guard, so it cannot be refused as a duplicate of the issue it is repairing", async () => {
+		expect(await guardInputFor({ repairCheckout: true })).toBeUndefined();
+	});
+
+	it("a recorded approval reaches the guard as evidence, with the issue it was given for — not as `force`", async () => {
+		const given = approval({ claimAudit: async () => true });
+		const seen = await guardInputFor({ forceApproval: given });
+		expect(seen).toMatchObject({ issue: 1698, approval: given });
+		expect(seen?.force).toBeUndefined();
+		expect(seen?.forceReason).toBeUndefined();
+	});
+
+	it("a start that carries its own `force` keeps its own reason and audit; the queued approval is not passed alongside it", async () => {
+		const seen = await guardInputFor({ force: true, forceReason: "the owner said so", forceApproval: approval({ claimAudit: async () => true }) });
+		expect(seen).toMatchObject({ force: true, forceReason: "the owner said so" });
+		expect(seen?.approval).toBeUndefined();
+	});
+
+	it("an ordinary start carries no approval to the guard", async () => {
+		const seen = await guardInputFor({});
+		expect(seen?.approval).toBeUndefined();
+		expect(seen?.force).toBeUndefined();
+	});
+
+	it.each([
+		["another repository", { repoId: "r2" }],
+		["another issue than the objective names", { issue: 1699 }],
+	])("%s: the run is not linked to the approval's issue (the guard fails the approval closed itself)", async (_name, over) => {
+		const seen = await guardInputFor({ forceApproval: approval(over) });
+		expect(seen?.issue).toBeUndefined();
 	});
 });
