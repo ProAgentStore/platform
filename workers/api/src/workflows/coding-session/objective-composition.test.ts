@@ -9,7 +9,7 @@
  * are about WHICH PROCESS received WHICH BYTES, and how many times — not only about the cloud's own state.
  * Every fixture is synthetic; nothing touches a live session, a real engine or a real owner process.
  */
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -34,6 +34,7 @@ vi.mock("../../lib/coding-loop.js", async () => {
 
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { CodingRuntime } from "../../../../../packages/browser-runner/src/coding/runtime.js";
+import { fakeEngine } from "../../../../../packages/browser-runner/src/coding/fake-engine.fixture.js";
 import type { CodingDecision, CodingGoal } from "../../lib/coding-loop.js";
 import { realSchemaD1, type RealSchemaD1, seedTenant } from "../../lib/d1-sqlite.js";
 import { getLoopRun } from "../../lib/agent-loop-store.js";
@@ -50,13 +51,6 @@ import { runCodingSessionWorkflow } from "./workflow-run.js";
 // default — chosen for pure functions — is not this file's budget. 60s, from a deliberately loaded run (eight copies
 // of this file at once took up to ~10s a test), the same reasoning as the integration project's 120s; a real hang still fails.
 vi.setConfig({ testTimeout: 60_000 });
-
-/**
- * The inert engine below is a `#!/usr/bin/env node` script made executable, which Windows cannot spawn ("spawn EFTYPE"); the real runtime's own
- * Windows shim resolution is covered in engine-spawn.test.ts. Same boundary as headless.test.ts. Running these through a .cmd wrapper is a
- * separate piece of work (#1723).
- */
-const NO_SHEBANG_ENGINES = process.platform === "win32";
 
 /** The inert engine: reads stream-json turns, logs what it read and under which pid, answers. Never runs anything. */
 const engineScript = (log: string) => `#!/usr/bin/env node
@@ -93,9 +87,7 @@ function newMachine(name: string, caps?: string[]): Machine {
 	const dir = join(root, name);
 	mkdirSync(join(dir, "work"), { recursive: true });
 	const log = join(dir, "engine.log");
-	const bin = join(dir, "inert-engine.js");
-	writeFileSync(bin, engineScript(log));
-	chmodSync(bin, 0o755);
+	const bin = fakeEngine(join(dir, "inert-engine.js"), engineScript(log));
 	const m = { name, rt: new CodingRuntime(join(dir, "repos")), dir, log, bin, caps };
 	machines.push(m);
 	return m;
@@ -286,7 +278,7 @@ function loseReplyOf(nth: number, then?: (m: Machine) => void | Promise<void>) {
 	};
 }
 
-describe.skipIf(NO_SHEBANG_ENGINES)("first objective-bearing act interrupted, then the machine changes (#1019 case 1)", () => {
+describe("first objective-bearing act interrupted, then the machine changes (#1019 case 1)", () => {
 	it("before dispatch: the retry is RECOMPOSED for legacy 0.4.103 machine B — no objective envelope reaches B's engine", async () => {
 		const b = newMachine("B", LEGACY_0_4_103);
 		byName.set("B", b);
@@ -325,7 +317,7 @@ describe.skipIf(NO_SHEBANG_ENGINES)("first objective-bearing act interrupted, th
 	});
 });
 
-describe.skipIf(NO_SHEBANG_ENGINES)("same engine process versus a replacement (#1019 case 2)", () => {
+describe("same engine process versus a replacement (#1019 case 2)", () => {
 	it("a relay reconnect to the SAME live process keeps the real receipt — no replacement delivery invented, nothing re-sent", async () => {
 		loseReplyOf(1);
 		decisions = [SEND("read the code"), SEND("now the tests"), FINISH];
@@ -388,7 +380,7 @@ describe.skipIf(NO_SHEBANG_ENGINES)("same engine process versus a replacement (#
 	});
 });
 
-describe.skipIf(NO_SHEBANG_ENGINES)("lost outcomes are journalled facts, not re-derived (#1019 case 4)", () => {
+describe("lost outcomes are journalled facts, not re-derived (#1019 case 4)", () => {
 	it("act reply AND reconciliation captures fail, the final capture recovers the read: a terminal receipt names it", async () => {
 		loseReplyOf(1);
 		let failing = false;
@@ -462,7 +454,7 @@ describe.skipIf(NO_SHEBANG_ENGINES)("lost outcomes are journalled facts, not re-
 	});
 });
 
-describe.skipIf(NO_SHEBANG_ENGINES)("the objective envelope carries the precedence AND the constraints in force (#1019 case 6)", () => {
+describe("the objective envelope carries the precedence AND the constraints in force (#1019 case 6)", () => {
 	it("a standing owner restriction reaches the engine's bytes with the preserved goal, in the first envelope", async () => {
 		d1.exec(`UPDATE coding_repos SET instructions = 'Read-only from now on. Do not push.' WHERE id = 'r1'`); // the repo's standing rule
 		decisions = [SEND("summarise the export module"), FINISH];
@@ -516,7 +508,7 @@ describe.skipIf(NO_SHEBANG_ENGINES)("the objective envelope carries the preceden
 	});
 });
 
-describe.skipIf(NO_SHEBANG_ENGINES)("retained controls", () => {
+describe("retained controls", () => {
 	it("a fresh run on a capable machine delivers the 20k-character Unicode objective whole, once, with its exact digest", async () => {
 		const unicode = "€".repeat(13_331) + "a".repeat(6_669); // 20,000 characters, 46,662 UTF-8 bytes
 		decisions = [SEND("go"), SEND("again"), FINISH];
@@ -540,7 +532,7 @@ describe.skipIf(NO_SHEBANG_ENGINES)("retained controls", () => {
 
 // ── Workflow-instance EVICTION mid-send: the journal is all that survives (#1019) ───────────────────
 
-describe.skipIf(NO_SHEBANG_ENGINES)("an evicted workflow instance reconstructed from its journal (#1019 durable intent)", () => {
+describe("an evicted workflow instance reconstructed from its journal (#1019 durable intent)", () => {
 	/**
 	 * Evict on the run's FIRST act: `afterDispatch` lets A accept and read it first (the reply is then lost
 	 * with the instance); otherwise the instance dies before anything is dispatched. Then a fresh workflow
@@ -606,7 +598,7 @@ describe.skipIf(NO_SHEBANG_ENGINES)("an evicted workflow instance reconstructed 
 
 // ── Same id, different content: a conflict is never delivery of the changed content (#1019 case 5) ─────
 
-describe.skipIf(NO_SHEBANG_ENGINES)("the workflow never reports changed content delivered under an id the runner holds for other content (#1019 case 5)", () => {
+describe("the workflow never reports changed content delivered under an id the runner holds for other content (#1019 case 5)", () => {
 	/** Before the workflow's FIRST act reaches the runner, the same id was already accepted and READ — with `seeded` content. */
 	function seedSameId(seeded: (action: Record<string, unknown>) => Record<string, unknown>) {
 		let n = 0;
@@ -660,7 +652,7 @@ describe.skipIf(NO_SHEBANG_ENGINES)("the workflow never reports changed content 
 // stops before any engine input, with a refused receipt (#1019). Lines are computed with the production
 // constraintLines(), so the boundary is the real one. Legacy `unsupported` runners keep their own path (case 1 above).
 
-describe.skipIf(NO_SHEBANG_ENGINES)("constraints are delivered whole or the run stops before ANY engine input (#1019)", () => {
+describe("constraints are delivered whole or the run stops before ANY engine input (#1019)", () => {
 	const grants = (names: string[]) => names.map((n) => `You may kill the ${n} processes.`).join(" ");
 	const linesFor = (names: string[]) => constraintLines(activeConstraints(constraintSources({ standingInstructions: grants(names) })));
 	const name = (i: number) => `worker-pool-process-name-${String(i).padStart(2, "0")}-abcdefgh`;
@@ -740,7 +732,7 @@ describe.skipIf(NO_SHEBANG_ENGINES)("constraints are delivered whole or the run 
 
 // ── #1019: the refusal is the run's TERMINAL reason — on its last step too — and history it does not rewrite ───────
 
-describe.skipIf(NO_SHEBANG_ENGINES)("a refused envelope is the run's own terminal reason, and earlier facts stand (#1019)", () => {
+describe("a refused envelope is the run's own terminal reason, and earlier facts stand (#1019)", () => {
 	const grants = (n: number) => Array.from({ length: n }, (_, i) => `You may kill the worker-pool-process-name-${String(i).padStart(2, "0")}-abcdefgh processes.`).join(" ");
 	const overlong = () => d1.exec(`UPDATE coding_repos SET instructions = '${grants(14)}' WHERE id = 'r1'`);
 	/** The run's own loop row, as the platform opens it — the terminal report and the continue decision read it. */
@@ -839,7 +831,7 @@ describe.skipIf(NO_SHEBANG_ENGINES)("a refused envelope is the run's own termina
 
 // ── #1019: a delivery settled by the act's own pane counts that act ─────────────────────────────────────────────────
 
-describe.skipIf(NO_SHEBANG_ENGINES)("the first delivered receipt counts the act that delivered it (#1019)", () => {
+describe("the first delivered receipt counts the act that delivered it (#1019)", () => {
 	it("a lost reply reconciled from a capture that already shows the read: delivered with actsSent 1, not 0", async () => {
 		let n = 0;
 		hooks.act = async (m, _b, send) => {

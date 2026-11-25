@@ -8,11 +8,12 @@
  * stderr and `[grok exited with code 1]`. These tests replay exactly those two turns — the captured stream
  * (`fixtures/grok-streaming-json-1.0.62/`) and the stderr Grok printed, verbatim — so the behaviour stays pinned.
  */
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { fakeEngine } from "./fake-engine.fixture.js";
 import { defaultStatePath, HeadlessSession } from "./headless.js";
 
 const FIXTURE = fileURLToPath(new URL("./fixtures/grok-streaming-json-1.0.62/command-success-and-failure.ndjson", import.meta.url).href);
@@ -31,14 +32,13 @@ if (argv.includes("grok-9-imaginary")) { process.stderr.write(${JSON.stringify(`
 process.stdout.write(readFileSync(${JSON.stringify(FIXTURE)}, "utf8"));
 `;
 
-describe.skipIf(process.platform === "win32")("the Grok pane coding_session_capture reads (#1201)", () => {
+describe("the Grok pane coding_session_capture reads (#1201)", () => {
 	let dir: string;
 	let bin: string;
 	beforeAll(() => {
 		dir = mkdtempSync(join(tmpdir(), "pags-grok-pane-"));
 		bin = join(dir, "grok");
-		writeFileSync(bin, FAKE_GROK);
-		chmodSync(bin, 0o755);
+		bin = fakeEngine(bin, FAKE_GROK);
 	});
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 

@@ -1,7 +1,8 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { fakeEngine } from "./fake-engine.fixture.js";
 import { buildClaudeArgs, defaultStatePath, HeadlessSession, parseCommand } from "./headless.js";
 import { MAX_OBJECTIVE_CONSTRAINT_CHARS, MAX_OBJECTIVE_CONSTRAINTS, runObjective, runObjectiveBlock } from "./run-objective.js";
 import { CodingRuntime } from "./runtime.js";
@@ -127,8 +128,13 @@ rl.on("line", (line) => {
 `;
 
 /** A raw CLI that reports the `gh` its own PATH resolves — to prove the guard reaches the spawn. */
-const FAKE_WHICH_GH = `#!/bin/sh
-printf 'resolved: %s\\n' "$(command -v gh || echo none)"
+const FAKE_WHICH_GH = `#!/usr/bin/env node
+const { existsSync } = require("node:fs");
+const { delimiter, join } = require("node:path");
+const names = process.platform === "win32" ? ["gh.exe", "gh.cmd", "gh"] : ["gh"];
+const PATH = process.env.PATH ?? process.env.Path ?? "";
+const hit = PATH.split(delimiter).map((d) => names.map((n) => join(d, n)).find((p) => d && existsSync(p))).find(Boolean);
+process.stdout.write("resolved: " + (hit ?? "none") + "\\n");
 `;
 
 /** A raw CLI that prints its own argv — to prove preset flags reach the engine verbatim. */
@@ -241,23 +247,15 @@ async function until(cond: () => boolean, timeoutMs = 8000, description = "condi
 /** A `gh` that reads nothing: a completed merge is then published `unreadable`, with no network and no real `gh` (#1350). */
 const noGh = () => async () => ({ code: 1, stdout: "" });
 
-/**
- * These fixtures stand in for an engine CLI with a script that starts `#!/usr/bin/env node` and is chmod +x. Windows cannot execute that
- * ("spawn EFTYPE"): it runs only .exe/.com, and a shim is read for its target by engine-spawn.ts, which has its own tests. Same boundary as
- * engine-native-claude.test.ts and headless-cleanup.test.ts. Running these against a .cmd wrapper is a separate piece of work (#1723).
- */
-const NO_SHEBANG_ENGINES = process.platform === "win32";
-
-describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession (stream-json engine)", () => {
+describe("HeadlessSession (stream-json engine)", () => {
 	let dir: string;
 	let bin: string;
 
 	beforeAll(() => {
 		dir = mkdtempSync(join(tmpdir(), "pags-headless-"));
 		bin = join(dir, "fake-claude.js");
-		writeFileSync(bin, FAKE_CLAUDE);
-		chmodSync(bin, 0o755);
-	});
+		bin = fakeEngine(bin, FAKE_CLAUDE);
+		});
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 	it("drives a turn via stdin/stdout JSON: thinking → real reply → idle", async () => {
@@ -646,7 +644,7 @@ describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession (stream-json engine)", () =
  * arrive as argv[5]). Saying `command: "codex"` is the test declaring "a bare prefix, so the turn
  * text is argv[2]", instead of depending on the default preset happening to have no flags.
  */
-describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
+describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 	let dir: string;
 	let codexBin: string;
 	let slowBin: string;
@@ -676,29 +674,18 @@ describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession (raw engine — Codex/Grok/
 		wedgedBin = join(dir, "fake-wedged.js");
 		refuserBin = join(dir, "fake-refuser.js");
 		whichGhBin = join(dir, "fake-which-gh.sh");
-		writeFileSync(codexBin, FAKE_CODEX);
-		writeFileSync(slowBin, FAKE_SLOW);
-		writeFileSync(pauserBin, FAKE_PAUSER);
-		writeFileSync(argvBin, FAKE_ARGV);
-		writeFileSync(codexJsonArgvBin, FAKE_CODEX_JSON_ARGV);
-		writeFileSync(codexResumeBin, FAKE_CODEX_RESUME);
-		writeFileSync(codexGatedBin, FAKE_CODEX_GATED_USAGE);
-		writeFileSync(oldCodexJsonBin, FAKE_CODEX_OLD_JSON);
-		writeFileSync(wedgedBin, FAKE_WEDGED);
-		writeFileSync(refuserBin, FAKE_REFUSER);
-		writeFileSync(whichGhBin, FAKE_WHICH_GH);
-		chmodSync(codexBin, 0o755);
-		chmodSync(slowBin, 0o755);
-		chmodSync(pauserBin, 0o755);
-		chmodSync(argvBin, 0o755);
-		chmodSync(codexJsonArgvBin, 0o755);
-		chmodSync(codexResumeBin, 0o755);
-		chmodSync(codexGatedBin, 0o755);
-		chmodSync(oldCodexJsonBin, 0o755);
-		chmodSync(wedgedBin, 0o755);
-		chmodSync(refuserBin, 0o755);
-		chmodSync(whichGhBin, 0o755);
-	});
+		codexBin = fakeEngine(codexBin, FAKE_CODEX);
+		slowBin = fakeEngine(slowBin, FAKE_SLOW);
+		pauserBin = fakeEngine(pauserBin, FAKE_PAUSER);
+		argvBin = fakeEngine(argvBin, FAKE_ARGV);
+		codexJsonArgvBin = fakeEngine(codexJsonArgvBin, FAKE_CODEX_JSON_ARGV);
+		codexResumeBin = fakeEngine(codexResumeBin, FAKE_CODEX_RESUME);
+		codexGatedBin = fakeEngine(codexGatedBin, FAKE_CODEX_GATED_USAGE);
+		oldCodexJsonBin = fakeEngine(oldCodexJsonBin, FAKE_CODEX_OLD_JSON);
+		wedgedBin = fakeEngine(wedgedBin, FAKE_WEDGED);
+		refuserBin = fakeEngine(refuserBin, FAKE_REFUSER);
+		whichGhBin = fakeEngine(whichGhBin, FAKE_WHICH_GH);
+		});
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 	describe("per-turn replay from the platform's record (#693 slice 2)", () => {
@@ -950,12 +937,11 @@ describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession (raw engine — Codex/Grok/
 		const guardRoot = join(dir, "guard-e2e");
 		const fakeGhDir = join(dir, "ghbin");
 		mkdirSync(fakeGhDir, { recursive: true });
-		writeFileSync(join(fakeGhDir, "gh"), "#!/bin/sh\nexit 0\n");
-		chmodSync(join(fakeGhDir, "gh"), 0o755);
+		fakeEngine(join(fakeGhDir, "gh"), "#!/usr/bin/env node\nprocess.exit(0);\n");
 		const s = new HeadlessSession({
 			id: "gh-guard-e2e", workDir: dir, clientType: "codex", command: "codex", bin: whichGhBin,
 			ghScope: ["ProAgentStore/platform"], ghGuardRoot: guardRoot,
-			env: { PATH: `${fakeGhDir}:${process.env.PATH ?? ""}` },
+			env: { PATH: `${fakeGhDir}${delimiter}${process.env.PATH ?? ""}` },
 		});
 		s.start();
 		s.input("go");
@@ -1130,9 +1116,8 @@ describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession (raw engine — Codex/Grok/
 		// configured, so a codex/grok session was silently driven by the wrong CLI. Whether
 		// codex is installed (→ "[codex] …" output / exit) or not (→ "cannot run `codex`"),
 		// the transcript must reference codex and NEVER claude.
-		const fakePath = `${dir}:${process.env.PATH ?? ""}`;
-		writeFileSync(join(dir, "codex"), FAKE_CODEX_JSON_ARGV);
-		chmodSync(join(dir, "codex"), 0o755);
+		const fakePath = `${dir}${delimiter}${process.env.PATH ?? ""}`;
+		fakeEngine(join(dir, "codex"), FAKE_CODEX_JSON_ARGV);
 		const s = new HeadlessSession({ id: "raw-default", workDir: dir, clientType: "codex", env: { PATH: fakePath } });
 		expect(() => s.start()).not.toThrow();
 		// One-shot: the process is spawned by the TURN, so nothing runs until input arrives.
@@ -1312,7 +1297,7 @@ rl.on("line", (line) => {
 });
 `;
 
-describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — a completed turn reports which inputs it consumed (#1019)", () => {
+describe("HeadlessSession — a completed turn reports which inputs it consumed (#1019)", () => {
 	let dir: string;
 	let bin: string;
 	let pauser: string;
@@ -1321,11 +1306,9 @@ describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — a completed turn report
 	beforeAll(() => {
 		dir = mkdtempSync(join(tmpdir(), "pags-consumed-"));
 		bin = join(dir, "fake-claude-gated.js");
-		writeFileSync(bin, FAKE_CLAUDE_GATED);
-		chmodSync(bin, 0o755);
+		bin = fakeEngine(bin, FAKE_CLAUDE_GATED);
 		pauser = join(dir, "fake-pauser.js");
-		writeFileSync(pauser, FAKE_PAUSER);
-		chmodSync(pauser, 0o755);
+		pauser = fakeEngine(pauser, FAKE_PAUSER);
 		gate = join(dir, "turn-gate");
 	});
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -1413,16 +1396,15 @@ process.on("SIGTERM", () => {
 });
 `;
 
-describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — a replaced process cannot speak for its replacement (#1019)", () => {
+describe("HeadlessSession — a replaced process cannot speak for its replacement (#1019)", () => {
 	let dir: string;
 	let bin: string;
 
 	beforeAll(() => {
 		dir = mkdtempSync(join(tmpdir(), "pags-stale-"));
 		bin = join(dir, "fake-claude-late.js");
-		writeFileSync(bin, FAKE_CLAUDE_LATE_RESULT);
-		chmodSync(bin, 0o755);
-	});
+		bin = fakeEngine(bin, FAKE_CLAUDE_LATE_RESULT);
+		});
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 	it("old A's late result neither credits new B's input, nor files B's turn report, nor marks B idle", async () => {
@@ -1464,16 +1446,15 @@ describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — a replaced process cann
 	});
 });
 
-describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — a stream-json turn reports its own error (#545)", () => {
+describe("HeadlessSession — a stream-json turn reports its own error (#545)", () => {
 	let dir: string;
 	let bin: string;
 
 	beforeAll(() => {
 		dir = mkdtempSync(join(tmpdir(), "pags-turn-err-"));
 		bin = join(dir, "fake-claude-err.js");
-		writeFileSync(bin, FAKE_CLAUDE_ERR);
-		chmodSync(bin, 0o755);
-	});
+		bin = fakeEngine(bin, FAKE_CLAUDE_ERR);
+		});
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 	it("takes the verdict from the `result` event's is_error, with no exit code to take it from", async () => {
@@ -1508,7 +1489,7 @@ describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — a stream-json turn repo
  * ("a file reaches the Pilot"), and the earlier attribution of this failure to the pane window
  * rather than the runner is what a unit-level check would have missed again.
  */
-describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — how much of a file reaches the pane (#700)", () => {
+describe("HeadlessSession — how much of a file reaches the pane (#700)", () => {
 	let dir: string;
 	let bin: string;
 	const file = fixtureFile();
@@ -1516,9 +1497,8 @@ describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — how much of a file reac
 	beforeAll(() => {
 		dir = mkdtempSync(join(tmpdir(), "pags-file-dump-"));
 		bin = join(dir, "fake-claude-file.js");
-		writeFileSync(bin, FAKE_CLAUDE_FILE);
-		chmodSync(bin, 0o755);
-	});
+		bin = fakeEngine(bin, FAKE_CLAUDE_FILE);
+		});
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 	it("a Read result arrives as LINES, ~1,500 characters of them, and says how much it lost", async () => {
@@ -1656,7 +1636,7 @@ function readState(path: string, id: string): string | null {
 	}
 }
 
-describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — a finishing turn must not clobber a newer one", () => {
+describe("HeadlessSession — a finishing turn must not clobber a newer one", () => {
 	let dir: string;
 	let slowBin: string;
 	let fastBin: string;
@@ -1666,11 +1646,9 @@ describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — a finishing turn must n
 		slowBin = join(dir, "slow.js");
 		fastBin = join(dir, "fast.js");
 		// Emits immediately, then LINGERS — so it is still "running" when turn 2 starts.
-		writeFileSync(slowBin, `#!/usr/bin/env node\nprocess.stdout.write("turn1 start\\n");\nsetTimeout(() => process.stdout.write("turn1 end\\n"), 3000);\n`);
-		writeFileSync(fastBin, `#!/usr/bin/env node\nprocess.stdout.write("turn2: " + (process.argv[2]||"") + "\\n");\nsetTimeout(()=>{}, 5000);\n`);
-		chmodSync(slowBin, 0o755);
-		chmodSync(fastBin, 0o755);
-	});
+		slowBin = fakeEngine(slowBin, `#!/usr/bin/env node\nprocess.stdout.write("turn1 start\\n");\nsetTimeout(() => process.stdout.write("turn1 end\\n"), 3000);\n`);
+		fastBin = fakeEngine(fastBin, `#!/usr/bin/env node\nprocess.stdout.write("turn2: " + (process.argv[2]||"") + "\\n");\nsetTimeout(()=>{}, 5000);\n`);
+		});
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 	it("a stale process's close does not force the session idle mid-turn", async () => {
@@ -1823,7 +1801,7 @@ process.stdout.write(JSON.stringify({ type: "turn.completed", usage: {
 } }) + "\\n");
 `;
 
-describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — a run that merges to main must leave a record (#294)", () => {
+describe("HeadlessSession — a run that merges to main must leave a record (#294)", () => {
 	let dir: string;
 
 	beforeAll(() => {
@@ -1832,9 +1810,8 @@ describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — a run that merges to ma
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 	function merger(id: string, env?: Record<string, string>): HeadlessSession {
-		const bin = join(dir, `fake-merger-${id}.js`);
-		writeFileSync(bin, FAKE_MERGER);
-		chmodSync(bin, 0o755);
+		let bin = join(dir, `fake-merger-${id}.js`);
+		bin = fakeEngine(bin, FAKE_MERGER);
 		return new HeadlessSession({ id, workDir: dir, clientType: "claude", bin, env, statePath: defaultStatePath(dir), gh: noGh });
 	}
 
@@ -1873,9 +1850,8 @@ describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — a run that merges to ma
 	});
 
 	it("records Codex command_execution acts through the structured adapter", async () => {
-		const bin = join(dir, "fake-codex-merger.js");
-		writeFileSync(bin, FAKE_CODEX_MERGER);
-		chmodSync(bin, 0o755);
+		let bin = join(dir, "fake-codex-merger.js");
+		bin = fakeEngine(bin, FAKE_CODEX_MERGER);
 		const s = new HeadlessSession({ id: "acts-codex", workDir: dir, clientType: "codex", command: "codex exec --sandbox danger-full-access", bin, gh: noGh });
 		s.start();
 		s.input("ship it");
@@ -1893,9 +1869,8 @@ describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — a run that merges to ma
 		// Nothing parses a Codex/Grok session's stdout, so it can report no acts. An empty list must
 		// therefore mean "not observed"; every consumer is written against that, and this is the test
 		// that keeps the runner honest about it.
-		const bin = join(dir, "fake-raw.js");
-		writeFileSync(bin, `#!/usr/bin/env node\nprocess.stdout.write("gh pr merge 42 --squash\\n");\n`);
-		chmodSync(bin, 0o755);
+		let bin = join(dir, "fake-raw.js");
+		bin = fakeEngine(bin, `#!/usr/bin/env node\nprocess.stdout.write("gh pr merge 42 --squash\\n");\n`);
 		const s = new HeadlessSession({ id: "acts3", workDir: dir, clientType: "generic", command: "custom-cli", bin });
 		s.start();
 		s.input("ship it");
@@ -1930,7 +1905,7 @@ rl.on("line", (line) => {
 });
 `;
 
-describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — a `--fill` PR names its number in its own result (#417)", () => {
+describe("HeadlessSession — a `--fill` PR names its number in its own result (#417)", () => {
 	let dir: string;
 
 	beforeAll(() => {
@@ -1939,9 +1914,8 @@ describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — a `--fill` PR names its
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 	function opener(id: string, env?: Record<string, string>): HeadlessSession {
-		const bin = join(dir, `fake-opener-${id}.js`);
-		writeFileSync(bin, FAKE_OPENER);
-		chmodSync(bin, 0o755);
+		let bin = join(dir, `fake-opener-${id}.js`);
+		bin = fakeEngine(bin, FAKE_OPENER);
 		return new HeadlessSession({ id, workDir: dir, clientType: "claude", bin, env, statePath: defaultStatePath(dir) });
 	}
 
@@ -2005,16 +1979,15 @@ describe("parseCommand — apostrophes must not pair ACROSS tokens", () => {
 	});
 });
 
-describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — a tool result records whether the call FAILED (#597)", () => {
+describe("HeadlessSession — a tool result records whether the call FAILED (#597)", () => {
 	let dir: string;
 	let bin: string;
 
 	beforeAll(() => {
 		dir = mkdtempSync(join(tmpdir(), "pags-tool-ok-"));
 		bin = join(dir, "fake-claude-tools.js");
-		writeFileSync(bin, FAKE_CLAUDE_TOOLS);
-		chmodSync(bin, 0o755);
-	});
+		bin = fakeEngine(bin, FAKE_CLAUDE_TOOLS);
+		});
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 	it("welds the outcome onto the arrow, so the cloud's per-call record can state it", async () => {
@@ -2048,8 +2021,10 @@ describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — a tool result records w
  * dropped the `error` events, read the object as the bare word "failed" — and then the exit
  * report overwrote even that with an empty line. The run's summary could only guess.
  */
-describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — a failed turn reports the engine's own output (#889)", () => {
+describe("HeadlessSession — a failed turn reports the engine's own output (#889)", () => {
 	let dir: string;
+	let codex401: string;
+	let codexSilent: string;
 	const FAKE_CODEX_401 = `#!/usr/bin/env node
 const out = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
 out({ type: "thread.started", thread_id: "codex-401" });
@@ -2059,19 +2034,17 @@ out({ type: "error", message: "Reconnecting... 2/5 (unexpected status 401 Unauth
 out({ type: "turn.failed", error: { message: "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses" } });
 setTimeout(() => process.exit(1), 30);
 `;
-	const FAKE_CODEX_SILENT = "#!/bin/sh\nexit 1\n";
+	const FAKE_CODEX_SILENT = "#!/usr/bin/env node\nprocess.exit(1);\n";
 
 	beforeAll(() => {
 		dir = mkdtempSync(join(tmpdir(), "pags-turn-tail-"));
-		writeFileSync(join(dir, "codex-401"), FAKE_CODEX_401);
-		writeFileSync(join(dir, "codex-silent"), FAKE_CODEX_SILENT);
-		chmodSync(join(dir, "codex-401"), 0o755);
-		chmodSync(join(dir, "codex-silent"), 0o755);
+		codex401 = fakeEngine(join(dir, "codex-401"), FAKE_CODEX_401);
+		codexSilent = fakeEngine(join(dir, "codex-silent"), FAKE_CODEX_SILENT);
 	});
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 	it("a Codex 401 reaches the report and the pane: the stderr line, the retries and the turn.failed message", async () => {
-		const s = new HeadlessSession({ id: "tail-401", workDir: dir, clientType: "codex", command: "codex exec --json", bin: join(dir, "codex-401") });
+		const s = new HeadlessSession({ id: "tail-401", workDir: dir, clientType: "codex", command: "codex exec --json", bin: codex401 });
 		s.start();
 		s.input("hi");
 		await until(() => s.lastTurn !== null && s.lastTurn.exitCode !== null, 8000, "the failing turn to exit");
@@ -2092,7 +2065,7 @@ setTimeout(() => process.exit(1), 30);
 	});
 
 	it("an engine that dies printing NOTHING reports an EMPTY tail — measured, not missing", async () => {
-		const s = new HeadlessSession({ id: "tail-silent", workDir: dir, clientType: "codex", command: "codex exec --json", bin: join(dir, "codex-silent") });
+		const s = new HeadlessSession({ id: "tail-silent", workDir: dir, clientType: "codex", command: "codex exec --json", bin: codexSilent });
 		s.start();
 		s.input("hi");
 		await until(() => s.lastTurn !== null, 8000, "the silent turn to exit");

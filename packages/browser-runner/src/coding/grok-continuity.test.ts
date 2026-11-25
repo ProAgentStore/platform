@@ -2,11 +2,12 @@
  * #1156: Grok carries its own conversation across one-shot turns by an id the runner chose — `-s <uuid>` to start it,
  * `-r <uuid>` to resume it — pure rules, then the real HeadlessSession against a fake `grok` that logs its argv.
  */
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { afterGrokTurn, grokRejectedContinuity, grokTurnArgs, isGrokConversationId, newGrokConversation, reportedGrokSession } from "./grok-continuity.js";
+import { fakeEngine } from "./fake-engine.fixture.js";
 import { HeadlessSession } from "./headless.js";
 import { defaultStatePath, readState } from "./headless-state.js";
 
@@ -72,14 +73,13 @@ if (process.env.GROK_FAKE_FAIL_ONCE && argv[0] === "-r" && !existsSync(process.e
 process.stdout.write("done: " + argv[argv.length - 1] + "\\n");
 `;
 
-describe.skipIf(process.platform === "win32")("a Grok session, in real processes (#1156)", () => {
+describe("a Grok session, in real processes (#1156)", () => {
 	let dir: string;
 	let bin: string;
 	beforeAll(() => {
 		dir = mkdtempSync(join(tmpdir(), "pags-grok-"));
 		bin = join(dir, "grok");
-		writeFileSync(bin, FAKE_GROK);
-		chmodSync(bin, 0o755);
+		bin = fakeEngine(bin, FAKE_GROK);
 	});
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -203,15 +203,14 @@ out({ type: "tool_call_update", toolCallId: "call-1", status: "completed", conte
 out({ type: "end", stopReason: "end_turn", sessionId: process.env.GROK_FAKE_SESSION, requestId: process.env.GROK_FAKE_REQUEST, usage: { input_tokens: 1000, output_tokens: 50, cache_read_input_tokens: 400, cache_creation_input_tokens: 0, reasoning_tokens: 10, total_tokens: 1450 }, total_cost_usd: 0.0123, modelUsage: { "grok-4.7-build": { costUSD: 0.0123 } } });
 `;
 
-describe.skipIf(process.platform === "win32")("a Grok turn end to end (#1197)", () => {
+describe("a Grok turn end to end (#1197)", () => {
 	let dir: string;
 	let bin: string;
 	const THEIRS = "01a14f36-85b6-7763-8935-36a11d31018b";
 	beforeAll(() => {
 		dir = mkdtempSync(join(tmpdir(), "pags-grok-e2e-"));
 		bin = join(dir, "grok");
-		writeFileSync(bin, FAKE_STREAMING_GROK);
-		chmodSync(bin, 0o755);
+		bin = fakeEngine(bin, FAKE_STREAMING_GROK);
 	});
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 	/** The argv of every turn the fake CLI logged. A line still being appended is "not yet" (#1360): the poll reads it whole next time. */

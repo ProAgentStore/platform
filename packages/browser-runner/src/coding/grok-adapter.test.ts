@@ -6,12 +6,13 @@
  * the same `tool_use` / `tool_result` / `turn_end` events Claude and Codex produce, and a real session must render
  * them into the pane the platform's evidence check reads.
  */
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { engineAdapterFor, type NormalizedEngineEvent } from "./engine-adapter.js";
 import { createGrokEngineAdapter, grokStructuredArgs } from "./grok-adapter.js";
+import { fakeEngine } from "./fake-engine.fixture.js";
 import { defaultStatePath, HeadlessSession } from "./headless.js";
 
 const FIXTURE = new URL("./fixtures/grok-streaming-json-1.0.62/command-success-and-failure.ndjson", import.meta.url);
@@ -85,14 +86,13 @@ if (argv.includes("streaming-json")) process.stdout.write(readFileSync(process.e
 else process.stdout.write("plain reply\\n");
 `;
 
-describe.skipIf(process.platform === "win32")("a Grok session renders its calls into the pane the evidence check reads (#1187)", () => {
+describe("a Grok session renders its calls into the pane the evidence check reads (#1187)", () => {
 	let dir: string;
 	let bin: string;
 	beforeAll(() => {
 		dir = mkdtempSync(join(tmpdir(), "pags-grok-stream-"));
 		bin = join(dir, "grok");
-		writeFileSync(bin, FAKE_GROK);
-		chmodSync(bin, 0o755);
+		bin = fakeEngine(bin, FAKE_GROK);
 	});
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
