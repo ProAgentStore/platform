@@ -69,6 +69,22 @@ describe("releaseCheckout when the runner could not show the dirty paths are the
 		expect(long).toMatch(/and 20 more/);
 	});
 
+	it("#1718: a raw engine on an explicit shared-direct repo is told why nothing can be attributed to it", async () => {
+		d1.exec("UPDATE coding_repos SET strategy = 'shared-direct' WHERE id = 'r1'");
+		runnerAnswer.value = { snapshot: null, files: 0, clean: false, ref: null, pushed: null, unowned: ["src/a.ts"], conflict: "ownership_unknown" };
+		const r = await releaseCheckout(env, conn, SCOPE);
+		expect(r.released).toBe(false);
+		expect(r.line).toMatch(/The codex engine reports no record of the files it edits or the commands it runs/);
+	});
+
+	it("#1718: Claude, and a repo with no stored strategy, keep the line they had", async () => {
+		runnerAnswer.value = { snapshot: null, files: 0, clean: false, ref: null, pushed: null, unowned: ["src/a.ts"], conflict: "ownership_unknown" };
+		expect((await releaseCheckout(env, conn, SCOPE)).line).not.toMatch(/engine reports no record/);
+		d1.exec("UPDATE coding_repos SET strategy = 'shared-direct' WHERE id = 'r1'");
+		d1.exec("UPDATE coding_sessions SET client_type = 'claude' WHERE id = 'csess_1'");
+		expect((await releaseCheckout(env, conn, SCOPE)).line).not.toMatch(/engine reports no record/);
+	});
+
 	it("a runner that reports unowned paths WITHOUT the conflict flag (an older shape) is still never released", async () => {
 		runnerAnswer.value = { snapshot: "abc", files: 1, clean: false, ref: "refs/pags/parked/x", unowned: ["theirs.txt"] };
 		const r = await releaseCheckout(env, conn, SCOPE);

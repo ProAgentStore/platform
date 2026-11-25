@@ -354,6 +354,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		instanceId,
 		userId,
 		sessionId,
+		repoId,
 		loopRunId: event.payload.loopRunId,
 		driverId: event.payload.driverId,
 		workflowInstanceId: event.instanceId,

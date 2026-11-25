@@ -29,7 +29,7 @@ vi.mock("./github-pr-open.js", () => ({
 		return prOpen.result;
 	},
 }));
-const { notIsolatedRefusal, publishIsolatedRun, sharedAdmissionRefusal } = await import("./isolated-run.js");
+const { endIfNotIsolated, notIsolatedRefusal, publishIsolatedRun, sharedAdmissionRefusal } = await import("./isolated-run.js");
 
 const INSTANCE = "a185b1db-c560-456d-9522-f7792bd95cca";
 const conn = { runnerNode: "pink-laptop" } as unknown as RunnerConn;
@@ -94,6 +94,29 @@ describe("notIsolatedRefusal (#1714)", () => {
 		expect(why).toMatch(/pink-laptop/);
 		expect(why).toMatch(/did not report an isolated worktree/);
 		expect(why).toMatch(/not started/);
+	});
+});
+
+describe("endIfNotIsolated (#1718: the one check every relaunch of a session makes)", () => {
+	const scope = { instanceId: INSTANCE, userId: "u1", repoId: "r1", sessionId: "csess_1" };
+
+	it("an isolated repository whose runner came back without a worktree: the session is ended and the sentence returned", async () => {
+		d1.exec("UPDATE coding_repos SET strategy = 'isolated-pr' WHERE id = 'r1'");
+		runner.answers["/coding/end"] = { ok: true };
+		expect(await endIfNotIsolated(env, conn, scope, {})).toMatch(/set to isolated-pr.*did not report an isolated worktree/);
+		expect(paths()).toEqual(["/coding/end"]);
+		expect(runner.calls[0].body).toEqual({ sessionId: "csess_1" });
+	});
+
+	it("an isolated repository whose runner reported its worktree carries on, and nothing is ended", async () => {
+		d1.exec("UPDATE coding_repos SET strategy = 'isolated-pr' WHERE id = 'r1'");
+		expect(await endIfNotIsolated(env, conn, scope, { checkout: { mode: "worktree", path: "/wt/x" } })).toBeNull();
+		expect(paths()).toEqual([]);
+	});
+
+	it("no stored strategy behaves exactly as today: no refusal, no runner call", async () => {
+		expect(await endIfNotIsolated(env, conn, scope, {})).toBeNull();
+		expect(paths()).toEqual([]);
 	});
 });
 

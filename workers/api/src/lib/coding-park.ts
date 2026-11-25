@@ -24,9 +24,9 @@ import type { Env } from "../types.js";
 import { RESUME_WINDOW_MS, describeAge } from "./coding-session-continuity.js";
 import { startSessionOnRunnerConn, type RelaunchInput } from "./coding-session-relaunch.js";
 import { strategyForRunner } from "./checkout-strategy.js";
-import { notIsolatedRefusal } from "./isolated-run.js";
+import { endIfNotIsolated } from "./isolated-run.js";
 import { seedBriefForRepo } from "./coding-seed-brief.js";
-import { claimSessionDriver, getRepo, reassignSessionNode } from "./coding-store.js";
+import { claimSessionDriver, getRepo, getSession, reassignSessionNode } from "./coding-store.js";
 import { describeOwner, describeRepoHolder, releaseStaleActiveSessions, repoFreeForRun, runnerEngineProbe } from "./coding-ownership.js";
 import { machineDisplayNames } from "./machine-names.js";
 import { callRunner, getRunnerConnIgnoringLiveness, relayConnected, type RunnerConn } from "./runner-client.js";
@@ -186,12 +186,8 @@ export async function relaunchAfterPark(
 	const started = await startSessionOnRunnerConn(env, conn, { ...input, fresh: why !== null, seed: seed || undefined });
 	// #1717: the same check a fresh open makes. An isolated repository whose runner brought the engine up WITHOUT a worktree (an older runner, or
 	// a restart that lost it) would resume in the shared checkout the repository is set not to use; stop it instead, and say so.
-	const repo = await getRepo(env, input.instanceId, input.userId, input.repoId).catch(() => null);
-	const notIsolated = repo ? notIsolatedRefusal(repo, started, conn.runnerNode) : null;
-	if (notIsolated) {
-		await callRunner(conn, "/coding/end", { sessionId: input.sessionId }).catch(() => undefined);
-		return { blocked: notIsolated };
-	}
+	const notIsolated = await endIfNotIsolated(env, conn, input, started);
+	if (notIsolated) return { blocked: notIsolated };
 	if (started?.resumed === true) return { resumed: true, line: "The coding engine continued its own conversation." };
 	return { resumed: false, line: `The coding engine started fresh (${why ?? "its saved conversation was not on the machine"}), briefed from this repository's record.` };
 }
@@ -284,7 +280,10 @@ export async function releaseCheckout(env: Env, conn: RunnerConn, scope: ParkSco
 	// #1547: dirty paths nobody could show are this run's are never swept up. The runner touched nothing; say so, and name them.
 	if (saved?.conflict === "ownership_unknown" || (!saved?.clean && saved?.unowned?.length)) {
 		const paths = nameFiles(saved.unowned ?? []); // "a.ts, b.ts and 3 more": a cut is always said out loud
-		return { released: false, line: `The checkout stays held while it waits: ${saved.unowned?.length ?? "some"} uncommitted path${saved.unowned?.length === 1 ? "" : "s"} in it (${paths}) could not be shown to be this run's, so NOTHING was set aside, stashed or cleaned — they are exactly as they were. Commit or move them, or run on an isolated checkout, and the checkout can be released.` };
+		// #1718: a raw engine emits no tool events, so on an explicit shared-direct repo nothing it did in a shell can be attributed to it. Say so for that engine.
+		const session = repo?.strategy === "shared-direct" ? await getSession(env, scope.instanceId, scope.userId, scope.sessionId).catch(() => null) : null;
+		const raw = session && session.clientType !== "claude" ? ` The ${session.clientType} engine reports no record of the files it edits or the commands it runs, so unlike Claude it cannot show which of these are this run's.` : "";
+		return { released: false, line: `The checkout stays held while it waits: ${saved.unowned?.length ?? "some"} uncommitted path${saved.unowned?.length === 1 ? "" : "s"} in it (${paths}) could not be shown to be this run's, so NOTHING was set aside, stashed or cleaned — they are exactly as they were.${raw} Commit or move them, or run on an isolated checkout, and the checkout can be released.` };
 	}
 	if (!saved?.clean) return { released: false, line: "The checkout stays held while it waits: it was not clean after setting the work aside." };
 	const pushed = typeof saved.pushed === "boolean" ? (saved.pushed ? 1 : 0) : null;

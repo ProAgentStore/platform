@@ -10,6 +10,7 @@ import type { WorkflowStep } from "cloudflare:workers";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "../../lib/runner-client.js";
 import { runtimeConnectivity } from "../../lib/instance-connectivity.js";
 import { isRunnerSessionAbsent, makeRunnerGuard, RUNNER_PROBE_INTERVAL, type RunnerGuard, type RunStep } from "../../lib/runner-availability.js";
+import { endIfNotIsolated } from "../../lib/isolated-run.js";
 import { runnerParkDeps, runnerWaitState } from "../../lib/runner-park.js";
 import { reassignSessionNode, touchSessionActivity, touchSessionDriver } from "../../lib/coding-store.js";
 import { recordLiveness } from "../../lib/agent-loop-store.js";
@@ -25,6 +26,7 @@ export interface CodingRunnerGuardCtx {
 	instanceId: string;
 	userId: string;
 	sessionId: string;
+	repoId: string;
 	/** The loop-run row, if the run has one (only such a run can be parked and woken). */
 	loopRunId: string | null | undefined;
 	driverId: string | null | undefined;
@@ -45,7 +47,7 @@ export interface CodingRunnerGuardCtx {
 }
 
 export function makeCodingRunnerGuard(ctx: CodingRunnerGuardCtx): RunnerGuard {
-	const { env, step, instanceId, userId, sessionId, loopRunId, driverId, workflowInstanceId, runRetry, runWith, postToChat, getConn, setConn, startOnRunner, getLastEngine, setLastEngine, getObjective } = ctx;
+	const { env, step, instanceId, userId, sessionId, repoId, loopRunId, driverId, workflowInstanceId, runRetry, runWith, postToChat, getConn, setConn, startOnRunner, getLastEngine, setLastEngine, getObjective } = ctx;
 	return makeRunnerGuard({
 		wait: {
 			// JOURNALLED when labelled (#1177): the body replays after every `step.sleep`, and a live read there answers differently the second
@@ -106,7 +108,15 @@ export function makeCodingRunnerGuard(ctx: CodingRunnerGuardCtx): RunnerGuard {
 				}
 				setConn(back);
 			}
-			const started = (await runWith(START_RETRY)(`restart-${label}`, startOnRunner)) as CodingPaneSnapshot | null;
+			// #1718: the check a fresh open and a park-resume make. An isolated repository whose runner came back without a worktree is ended
+			// inside the step (once) and the run stops on the sentence, not carried on in the shared checkout. No added step: the refusal rides in the result.
+			const relaunch = async () => {
+				const r = (await startOnRunner()) as (CodingPaneSnapshot & { checkout?: unknown }) | null;
+				const notIsolated = await endIfNotIsolated(env, getConn(), { instanceId, userId, repoId, sessionId }, r);
+				return notIsolated ? { ...r, notIsolated } : r;
+			};
+			const started = (await runWith(START_RETRY)(`restart-${label}`, relaunch)) as (CodingPaneSnapshot & { notIsolated?: string }) | null;
+			if (started?.notIsolated) throw new Error(started.notIsolated);
 			setLastEngine(started?.engine ?? getLastEngine());
 			// The engine back may be the same process, a replacement or another machine's, which may not render the
 			// objective: re-read its capabilities (journalled per reconnect), and let its named identity decide (#1019).

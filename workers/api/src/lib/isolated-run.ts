@@ -17,6 +17,7 @@ import { appendTimeline } from "./coding-timeline.js";
 import { nameFiles } from "./coding-resume-sync.js";
 import { strategyForRunner } from "./checkout-strategy.js";
 import { openRunPullRequest } from "./github-pr-open.js";
+import { getRepo } from "./coding-store.js";
 import { callRunner, type RunnerConn } from "./runner-client.js";
 import type { CodingRepo } from "./coding-types.js";
 import type { Env } from "../types.js";
@@ -36,6 +37,18 @@ export function notIsolatedRefusal(repo: Pick<CodingRepo, "name"> & Partial<Pick
 	const c = started?.checkout as { mode?: unknown; path?: unknown } | undefined;
 	if (c?.mode === "worktree" && typeof c.path === "string") return null;
 	return `${repo.name || "This repository"} is set to ${repo.strategy}, but ${node ? `the runner on ${node}` : "the runner"} did not report an isolated worktree for this run — it is too old to isolate (update it with \`npm i -g @proagentstore/cli\`). The run was not started, because it would have used the shared checkout the repository is set not to use.`;
+}
+
+/**
+ * Check what a relaunch's `/coding/start` answer says about isolation, and end the session when an isolated repository came up in the
+ * shared checkout (#1717 resume, #1718 heal). One check for every relaunch of an existing session. Returns the sentence, or null to carry on.
+ * A repository with no stored strategy, or one that cannot be read, is never refused.
+ */
+export async function endIfNotIsolated(env: Env, conn: RunnerConn, scope: { instanceId: string; userId: string; repoId: string; sessionId: string }, started: { checkout?: unknown } | null | undefined): Promise<string | null> {
+	const repo = await getRepo(env, scope.instanceId, scope.userId, scope.repoId).catch(() => null);
+	const refusal = repo ? notIsolatedRefusal(repo, started, conn.runnerNode) : null;
+	if (refusal) await callRunner(conn, "/coding/end", { sessionId: scope.sessionId }).catch(() => undefined);
+	return refusal;
 }
 
 type Published = {
