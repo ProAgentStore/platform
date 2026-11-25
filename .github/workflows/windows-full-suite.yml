@@ -23,14 +23,13 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # The same builds ci.yml runs before the suite: tests import the SDK dist and the generated host pages.
-      - name: Build SDK, console, admin and host pages
+      # The builds ci.yml runs before the suite that tests read. Host pages are not built: vitest aliases a committed stub for them.
+      - name: Build SDK, console and admin
         shell: bash
         run: |
           (cd packages/sdk && npx tsc)
           (cd store/console && npx vite build)
           (cd store/admin && npx vite build)
-          (cd workers/host && node build.js)
       - name: Unit + integration tests (verdict from the JSON report, #920)
         run: pnpm test:full
       - name: Upload the JSON report
