@@ -18,6 +18,7 @@ import { spawnPortableSync } from "./lib/portable-command.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CI_GUARDS, hostPagesPlan, relatedTestTargets, typecheckCommands } from "./lib/hook-plan.mjs";
+import { withoutRepoLocation } from "./lib/git-repo-env.mjs";
 import { workspaceMembers } from "./lib/workspace-members.mjs";
 
 const root = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
@@ -34,8 +35,7 @@ const STEP_TIMEOUT_MS = 20 * 60_000;
  * creates `wip/recovery`, and writes `core.bare=true` and a fixture identity into the shared config (scripts/lib/fail-before.test.mjs
  * did exactly that during a push). Every step runs from the repo root, so none of them needs the variables.
  */
-const REPO_LOCATION_VARS = ["GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_PREFIX", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE"];
-const stepEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !REPO_LOCATION_VARS.includes(k)));
+const stepEnv = () => withoutRepoLocation();
 
 function run(cmd, args) {
 	console.log(`[pre-push] ${cmd} ${args.join(" ")}`);

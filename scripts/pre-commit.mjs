@@ -16,13 +16,21 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { spawnPortableSync } from "./lib/portable-command.mjs";
 import { biomeTargets } from "./lib/hook-plan.mjs";
+import { withoutRepoLocation } from "./lib/git-repo-env.mjs";
 
 const root = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
 process.chdir(root);
 
+/**
+ * The staged-content steps keep git's hook environment: under `git commit -a` / `-o` GIT_INDEX_FILE names the temporary index that
+ * holds what will actually be committed, and a check against the default index would pass on the wrong content. Every other step
+ * (Biome, and whatever it spawns) runs without the repo-location variables, so nothing a tool starts can act on this repository (#1722).
+ */
+const NEEDS_HOOK_ENV = (cmd, args) => cmd === "git" || args[0] === "scripts/check-file-size.mjs";
+
 function run(cmd, args) {
 	console.log(`[pre-commit] ${cmd} ${args.join(" ")}`);
-	const r = spawnPortableSync(cmd, args, { stdio: "inherit" });
+	const r = spawnPortableSync(cmd, args, { stdio: "inherit", ...(NEEDS_HOOK_ENV(cmd, args) ? {} : { env: withoutRepoLocation() }) });
 	if (r.error) console.error(r.error.message);
 	if (r.error || r.status !== 0) process.exit(r.status || 1);
 }
