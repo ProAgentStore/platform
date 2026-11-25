@@ -8,7 +8,7 @@ on:
       args:
         description: "vitest arguments (project and test files)"
         required: false
-        default: "--project integration packages/browser-runner/src/coding/headless.test.ts"
+        default: "--project integration packages/browser-runner/src/coding/headless.test.ts packages/browser-runner/src/coding/headless-cleanup.test.ts"
 
 permissions:
   contents: read
@@ -29,6 +29,8 @@ jobs:
           cache: pnpm
       - run: git config --global core.autocrlf false
       - run: pnpm install --frozen-lockfile
+      - name: Does rmSync retry on a directory a live process holds as its cwd?
+        run: node scripts/probe-rmsync-retry.mjs
       - name: Run, and list what holds any directory that stays locked
         shell: pwsh
         env:

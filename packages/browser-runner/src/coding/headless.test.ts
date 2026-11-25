@@ -286,13 +286,21 @@ const diagnoseLock = (dir: string, error: unknown) => {
 };
 const removeDir = (dir: string) => {
 	for (const s of touched) if (s.config.workDir === dir) s.stop();
-	try {
-		rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
-	} catch (e) {
-		diagnoseLock(dir, e);
-		// Three of these directories (turn-err, stale, tool-ok) stayed locked on a Windows runner even after their engines were stopped and
-		// the removal retried for over a minute; the holder is not identified (#1724). A temp dir left on a CI runner is harmless, a failed file is not.
-		if (process.platform !== "win32" || (e as NodeJS.ErrnoException).code !== "EBUSY") throw e;
+	// Windows lets go of a stopped process's working directory a moment after kill() returns, so the removal retries for a bounded time
+	// (30s) and then FAILS: a directory that stays locked is a real leak, not something to ignore (#1727).
+	const deadline = Date.now() + 30_000;
+	for (;;) {
+		try {
+			rmSync(dir, { recursive: true, force: true });
+			return;
+		} catch (e) {
+			const code = (e as NodeJS.ErrnoException).code;
+			if (process.platform !== "win32" || (code !== "EBUSY" && code !== "EPERM" && code !== "ENOTEMPTY") || Date.now() > deadline) {
+				diagnoseLock(dir, e);
+				throw e;
+			}
+			Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+		}
 	}
 };
 
@@ -815,6 +823,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 				command: "codex exec",
 				statePath,
 				env: { CODEX_RESUME_LOG: log, CODEX_THREAD_ID: "01a0d811-35aa-7fc1-bd23-f39d943db79b" },
+				gh: noGh,
 			});
 			expect(s.holdsConversationThisTurn).toBe(false);
 			s.input("first", { replay: "REPLAY-1" });
@@ -1126,6 +1135,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 			command: "codex exec --sandbox danger-full-access",
 			statePath,
 			env: { CODEX_RESUME_LOG: log, CODEX_THREAD_ID: "01a0d813-7a6e-7439-b5a4-9cc026ac3f76" },
+			gh: noGh,
 		});
 
 		expect(s.resumedConversation).toBe(false);
