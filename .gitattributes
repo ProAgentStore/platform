@@ -1,0 +1,3 @@
+# Check out every text file with LF, on every OS (#1723). Windows git defaults to core.autocrlf=true, which turned
+# migrations, seeds and sources into CRLF and failed every test that reads one with a regex over "\n".
+* text=auto eol=lf

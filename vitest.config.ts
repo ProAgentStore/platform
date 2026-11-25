@@ -151,8 +151,11 @@ export default defineConfig({
 					sequence: { groupOrder: 0 },
 					// Real-schema and assembled-route checks can exceed Vitest's 5s test / 10s hook
 					// defaults when this shared machine is busy (#1360). Keep a finite budget.
-					testTimeout: 30_000,
-					hookTimeout: 30_000,
+					// A windows-2022 runner is several times slower than ubuntu on the same work (every real-schema
+					// file replays the whole migration history; the full suite takes ~2.5h there, #1723), and the
+					// 30s budget failed tests that only needed longer, not tests that hung. A real hang still fails.
+					testTimeout: process.platform === "win32" ? 120_000 : 30_000,
+					hookTimeout: process.platform === "win32" ? 120_000 : 30_000,
 				},
 			},
 			{
