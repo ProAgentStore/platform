@@ -638,7 +638,7 @@ immediately instead of a whole transcript.
 | `list_discord_guilds` | The Discord servers the connected bot is in (#1132) | read | | |
 | `list_discord_channels` | The text/announcement channels the bot can see in one server (#1132) | read | | |
 | `list_instance_discord_grants` | One instance's granted Discord channels, with the stable grant ids its Discord tools take (#1132) | read | | |
-| `grant_instance_discord_channel` | Grant one instance one channel, checked with the bot first; a re-grant returns the same id; `purpose: release_notes` grants release notes only, no Discord tools needed (#1132, #1218) | write | yes | |
+| `grant_instance_discord_channel` | Grant one instance one channel, or with `guild_id` a whole server (every text channel the bot can see, new ones included, #1703), checked with the bot first; a re-grant returns the same id; `purpose: release_notes` grants release notes only, no Discord tools needed (#1132, #1218) | write | yes | |
 | `revoke_instance_discord_grant` | Revoke one instance's channel grant by id (#1132) | destructive | yes | `revoke_instance_discord_grant` |
 | `create_discord_channel` | Create a text channel or category with the owner's bot, optionally under a category by name; needs Manage Channels (#1625) | write | yes | |
 | `update_discord_channel` | Rename a channel, change its topic or move it between categories; a rename updates the grants' names (#1625) | write | yes | |

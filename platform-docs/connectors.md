@@ -48,7 +48,7 @@ resolved before the run and is refused at dispatch instead.
 | `mcp` | bearer token **per endpoint** | read + write | `mcp_list_tools`, `mcp_call_tool`, `mcp_list_resources`, `mcp_read_resource`, `mcp_list_prompts`, `mcp_get_prompt` against user-configured MCP servers |
 | `google_sheets` | OAuth2 | read + write | `sheets_read`, `sheets_append` |
 | `email-worker` | bearer token **per connection** (owner-pasted, endpoint-keyed like `mcp`) | read + write | `email_worker_list_messages`, `email_worker_read_message`, `email_worker_send` (write), `email_worker_reply` (write), `email_worker_identities`, `email_worker_list_events` against a customer-owned Worker implementing the [adapter contract](email-worker-adapter.md) — see [Worker-backed email](#worker-backed-email) |
-| `discord` | owner-provided bot token | read + write, per-instance channel grants | `discord_list_granted_channels`, `discord_read_messages`, `discord_read_reactions`, `discord_list_members`, `discord_send_message`, `discord_add_reaction` |
+| `discord` | owner-provided bot token | read + write, per-instance channel grants | `discord_list_granted_channels`, `discord_read_messages`, `discord_search_messages`, `discord_read_reactions`, `discord_list_members`, `discord_send_message`, `discord_add_reaction` |
 
 To connect Discord, store a **Discord bot token** in **Profile → API Keys & connector credentials**.
 Then, on the particular agent's **Permissions** tab, select a server and text channel to grant.
@@ -100,6 +100,21 @@ same id), `list_instance_discord_grants`, `revoke_instance_discord_grant`, and `
 (removes the token and every Discord grant). Write consent stays a separate step
 (`set_instance_connector_consent`). Connect, rotate, disconnect, grant and revoke each write a
 `discord.*` audit event with ids only — never the token or message content.
+
+A whole server can be granted instead of one channel (#1703): `grant_instance_discord_channel` with `guild_id` stores ONE
+grant (`resourceType: discord_guild`) covering every text channel of that server the bot can see, including channels created
+later. The agent passes that grant id plus a `channelId` to `discord_read_messages`, `discord_send_message` and the other channel
+tools; the channel is checked live against Discord (a text channel of exactly that server) so a new channel works with no new grant.
+`discord_list_granted_channels` lists a server grant's channels as they are now under `servers`. Revoking the grant removes the
+whole reach; per-channel grants work as before. Sending still needs the write consent.
+
+`discord_search_messages` (#1704, read-only, no write consent) finds messages by author (`authorId` / `authorUsername`), mention
+(`mentionsUserId` / `mentionsUsername`), text and `since` / `until` across every channel the instance is granted, narrowed by
+`guildId` or `grantIds`. Discord's own search is closed to bots, so it scans recent history channel by channel: newest first, a
+hit is returned only once every channel has been scanned back past it, `nextCursor` pages to older ones. Each hit is channel,
+message id, link, author, time and content, not the raw Discord object. It is bounded to 120 channels and 200 Discord calls per
+search, honours Discord's rate limits, and says when it stopped early (`truncated`, `truncatedBecause`, `searchedBackTo`).
+A bot cannot read anyone's direct messages, so those are out of reach.
 
 The owner's bot can also manage channels (#1625), owner-scoped like the rest: `create_discord_channel`
 (a text channel or a category, optionally under a category given by name), `update_discord_channel` (rename,

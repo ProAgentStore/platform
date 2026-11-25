@@ -4,55 +4,33 @@
 import { listConnectorGrants } from "../connector-grants.js";
 import { clipMarked } from "../clip-marked.js";
 import { safeFetch } from "../ssrf.js";
+import { API, DISCORD_AGENT_GRANT, DISCORD_GUILD_GRANT, DISCORD_RELEASE_GRANT, discordFailure, discordGet, guildOfGrantUrl, guildTextChannels, snowflake, TEXT_CHANNEL_TYPES } from "./discord-reach.js";
+import { searchMessages } from "./discord-search.js";
 import type { Connector, RegistryToolCtx, ToolDef } from "./types.js";
 
-const API = "https://discord.com/api/v10";
-const SNOWFLAKE = /^\d{16,22}$/;
+export { DISCORD_AGENT_GRANT, DISCORD_GUILD_GRANT, DISCORD_RELEASE_GRANT, discordFailure };
+
 const MAX_MESSAGE_LENGTH = 2_000;
 
 type DiscordReply = { ok: true; data: unknown } | { ok: false; status: number; message: string; /** Discord's own error code (50001 Missing Access, ...), when it sent one. */ code?: number };
 
-/**
- * The two kinds of Discord channel grant (#1218), told apart by `resourceType`.
- *
- * `discord_channel` is the AGENT's grant: the channel its Discord tools may read and post in. Granting one
- * requires that the agent declares those tools. `discord_release_channel` is the PLATFORM's: the channel a
- * release note (#1216) is posted to. It needs no tools — a coder declares none — and the agent's tools can
- * never use it: {@link grantedChannel} refuses any grant that is not `discord_channel`, and the listing below
- * leaves it out. So giving a coder a release-notes channel gives it no Discord reach, now or if its owner
- * later declares the tools.
- */
-export const DISCORD_AGENT_GRANT = "discord_channel";
-export const DISCORD_RELEASE_GRANT = "discord_release_channel";
-
 export const DISCORD_NOT_CONNECTED = "No Discord bot is connected. Connect one with the MCP tool connect_discord_bot, or in Profile → API Keys → Discord bot token.";
 
 /**
- * One wording for a Discord refusal (#1132), shared by the agent's tools and the owner's setup
- * routes, with the status the platform answers with. Discord's 401 is NEVER passed on as a 401: it
- * means the STORED BOT TOKEN was reset or revoked, and a 401 from this API reads as "your PAGS session
- * expired" — the console signs the owner out on it.
+ * The channel a tool call acts on, resolved from a grant of THIS instance.
+ *
+ * A channel grant IS one channel. A server grant (#1703) covers every text channel of the server, so the call also names the
+ * `channelId`, which is checked live against Discord: it must be a text channel of exactly that server, and one the bot can see.
+ * That check is what lets a channel created after the grant be used with no new grant.
  */
-export function discordFailure(status: number, detail: string): { status: 403 | 404 | 409 | 429 | 502; message: string } {
-	if (status === 401) return { status: 409, message: `Discord rejected the connected bot token — it was reset or revoked. Reconnect the bot with connect_discord_bot. (Discord: ${detail})` };
-	if (status === 403) return { status: 403, message: `The bot lacks access or permission there. In Discord, give the bot's role View Channel, Read Message History and Send Messages on that channel. (Discord: ${detail})` };
-	if (status === 404) return { status: 404, message: `Discord has no such server, channel or message visible to this bot. (Discord: ${detail})` };
-	if (status === 429) return { status: 429, message: `Discord rate-limited the bot — retry shortly. (Discord: ${detail})` };
-	return { status: 502, message: `Discord returned ${status}: ${detail}` };
-}
-
-function snowflake(value: unknown): string | null {
-	const id = String(value ?? "").trim();
-	return SNOWFLAKE.test(id) ? id : null;
-}
-
-async function grantedChannel(ctx: RegistryToolCtx, grantId: unknown): Promise<{ channelId: string } | { error: string }> {
+async function grantedChannel(ctx: RegistryToolCtx, grantId: unknown, channelId?: unknown): Promise<{ channelId: string } | { error: string }> {
 	const id = String(grantId ?? "").trim();
 	if (!id) return { error: "grantId is required. Use discord_list_granted_channels first." };
 	if (!ctx.connectorClient) return { error: "Discord connector client is unavailable." };
 	try {
 		const grant = await ctx.connectorClient("discord").requireGrant(id);
 		if (grant.resourceType === DISCORD_RELEASE_GRANT) return { error: "This Discord grant is reserved for release notes (the platform posts there); it is not a channel this agent can read or post in." };
+		if (grant.resourceType === DISCORD_GUILD_GRANT && snowflake(grant.resourceId)) return await channelOfServerGrant(ctx, grant.resourceId, channelId);
 		if (grant.resourceType !== DISCORD_AGENT_GRANT || !snowflake(grant.resourceId)) {
 			return { error: "This Discord grant is not a text-channel grant." };
 		}
@@ -64,6 +42,20 @@ async function grantedChannel(ctx: RegistryToolCtx, grantId: unknown): Promise<{
 		if (status === 403) return { error: `This agent holds no Discord grant "${id}" — it was revoked or belongs to another agent. Call discord_list_granted_channels for the current grants.` };
 		return { error: error instanceof Error ? error.message : "This agent has not been granted that Discord channel." };
 	}
+}
+
+async function channelOfServerGrant(ctx: RegistryToolCtx, guildId: string, channelId: unknown): Promise<{ channelId: string } | { error: string }> {
+	const channel = typeof channelId === "string" ? snowflake(channelId) : null;
+	if (!channel) return { error: `This grant covers every channel of server ${guildId}: pass channelId (a text channel id from discord_list_granted_channels) with it.` };
+	const token = await botToken(ctx);
+	if (!token) return { error: DISCORD_NOT_CONNECTED };
+	const found = await discordGet(token, `/channels/${channel}`);
+	if (!found.ok) return { error: found.message };
+	const row = found.data as { id?: unknown; guild_id?: unknown; type?: unknown } | null;
+	if (row?.id !== channel || row.guild_id !== guildId || typeof row.type !== "number" || !TEXT_CHANNEL_TYPES.has(row.type)) {
+		return { error: `Channel ${channel} is not a text channel of server ${guildId}, which is the only server this grant covers.` };
+	}
+	return { channelId: channel };
 }
 
 async function botToken(ctx: RegistryToolCtx): Promise<string | null> {
@@ -169,15 +161,32 @@ function taggedIds(content: string, kind: "user" | "role"): Set<string> {
 const listGrantedChannels: ToolDef["handler"] = async (ctx) => {
 	if (!ctx.instanceId || !ctx.userId) return { content: "Discord channel grants are available only from a subscribed agent instance.", success: false };
 	// Only the AGENT's grants: a release-notes channel (#1218) is the platform's, not a channel to act in.
-	const grants = (await listConnectorGrants(ctx.env, ctx.instanceId, ctx.userId, "discord")).filter((g) => g.resourceType === DISCORD_AGENT_GRANT);
+	const all = await listConnectorGrants(ctx.env, ctx.instanceId, ctx.userId, "discord");
+	const grants = all.filter((g) => g.resourceType === DISCORD_AGENT_GRANT);
+	const guildGrants = all.filter((g) => g.resourceType === DISCORD_GUILD_GRANT);
+	// A server grant (#1703) covers whatever text channels the server has NOW: list them live, so a new channel shows up here.
+	const servers = [];
+	if (guildGrants.length) {
+		const token = await botToken(ctx);
+		for (const g of guildGrants) {
+			const live = token ? await guildTextChannels(token, g.resourceId) : { ok: false as const, message: DISCORD_NOT_CONNECTED };
+			servers.push({
+				grantId: g.id,
+				guildId: g.resourceId,
+				name: g.resourceName,
+				note: "Covers every text channel of this server. Pass this grantId AND a channelId from `channels` to the Discord tools.",
+				...(live.ok ? { channels: live.channels.map((c) => ({ channelId: c.id, name: c.name, ...(c.category ? { category: c.category } : {}) })) } : { channelsError: live.message }),
+			});
+		}
+	}
 	return {
-		content: JSON.stringify({ channels: grants.map((g) => ({ grantId: g.id, channelId: g.resourceId, name: g.resourceName, url: g.resourceUrl ?? null })) }, null, 2),
+		content: JSON.stringify({ channels: grants.map((g) => ({ grantId: g.id, channelId: g.resourceId, name: g.resourceName, url: g.resourceUrl ?? null })), ...(servers.length ? { servers } : {}) }, null, 2),
 		success: true,
 	};
 };
 
 const readMessages: ToolDef["handler"] = async (ctx, input) => {
-	const granted = await grantedChannel(ctx, input.grantId);
+	const granted = await grantedChannel(ctx, input.grantId, input.channelId);
 	if ("error" in granted) return { content: granted.error, success: false };
 	const token = await botToken(ctx);
 	if (!token) return { content: DISCORD_NOT_CONNECTED, success: false };
@@ -193,7 +202,7 @@ const readMessages: ToolDef["handler"] = async (ctx, input) => {
 };
 
 const sendMessage: ToolDef["handler"] = async (ctx, input) => {
-	const granted = await grantedChannel(ctx, input.grantId);
+	const granted = await grantedChannel(ctx, input.grantId, input.channelId);
 	if ("error" in granted) return { content: granted.error, success: false };
 	const content = String(input.content ?? "").trim();
 	if (!content) return { content: "content is required.", success: false };
@@ -276,7 +285,7 @@ async function reactingUsers(token: string, channelId: string, messageId: string
 }
 
 const readReactions: ToolDef["handler"] = async (ctx, input) => {
-	const granted = await grantedChannel(ctx, input.grantId);
+	const granted = await grantedChannel(ctx, input.grantId, input.channelId);
 	if ("error" in granted) return { content: granted.error, success: false };
 	const messageId = snowflake(input.messageId);
 	if (typeof input.messageId !== "string" || !messageId) return { content: "messageId must be a Discord message id (a string of 16-22 digits).", success: false };
@@ -307,7 +316,7 @@ const readReactions: ToolDef["handler"] = async (ctx, input) => {
 };
 
 const addReaction: ToolDef["handler"] = async (ctx, input) => {
-	const granted = await grantedChannel(ctx, input.grantId);
+	const granted = await grantedChannel(ctx, input.grantId, input.channelId);
 	if ("error" in granted) return { content: granted.error, success: false };
 	const messageId = snowflake(input.messageId);
 	const emoji = String(input.emoji ?? "").trim();
@@ -333,10 +342,14 @@ export const DISCORD_MEMBERS_INTENT_HELP =
 async function grantedGuilds(ctx: RegistryToolCtx, token: string): Promise<Set<string>> {
 	const guilds = new Set<string>();
 	if (!ctx.instanceId || !ctx.userId) return guilds;
-	const grants = (await listConnectorGrants(ctx.env, ctx.instanceId, ctx.userId, "discord")).filter((g) => g.resourceType === DISCORD_AGENT_GRANT);
+	const grants = (await listConnectorGrants(ctx.env, ctx.instanceId, ctx.userId, "discord")).filter((g) => g.resourceType === DISCORD_AGENT_GRANT || g.resourceType === DISCORD_GUILD_GRANT);
 	let lookups = 0;
 	for (const g of grants) {
-		const fromUrl = /^https:\/\/discord\.com\/channels\/(\d{16,22})\/\d{16,22}$/.exec(g.resourceUrl ?? "")?.[1];
+		if (g.resourceType === DISCORD_GUILD_GRANT) {
+			guilds.add(g.resourceId);
+			continue;
+		}
+		const fromUrl = guildOfGrantUrl(g.resourceUrl);
 		if (fromUrl) {
 			guilds.add(fromUrl);
 			continue;
@@ -420,7 +433,7 @@ export const DISCORD_CONNECTOR: Connector = {
 		{
 			name: "discord_read_messages",
 			description: "Read up to 50 recent messages from one Discord channel explicitly granted to this agent, newest first. Pass before (the id of the oldest message you have seen) to page back through older history.",
-			jsonSchema: { type: "object", properties: { grantId: { type: "string" }, limit: { type: "number" }, before: { type: "string", description: "Optional. Return messages older than this message id." } }, required: ["grantId"] },
+			jsonSchema: { type: "object", properties: { grantId: { type: "string" }, channelId: { type: "string", description: "Required when grantId is a whole-server grant (see `servers` in discord_list_granted_channels): the text channel of that server to use." }, limit: { type: "number" }, before: { type: "string", description: "Optional. Return messages older than this message id." } }, required: ["grantId"] },
 			tier: "connector",
 			connector: "discord",
 			scope: "read",
@@ -429,9 +442,36 @@ export const DISCORD_CONNECTOR: Connector = {
 			handler: readMessages,
 		},
 		{
+			name: "discord_search_messages",
+			description:
+				"Find messages across ALL the Discord channels granted to this agent (its channel grants, and every text channel of a server grant) without knowing which channel they are in. Filters, all optional and combined with AND: authorId / authorUsername (who wrote it), mentionsUserId / mentionsUsername (who it tags), text (substring, case-insensitive), since / until (ISO dates), guildId or grantIds (narrow to one server or some grants). Newest first; limit (default 20, max 50); pass nextCursor back as cursor for older results. Each hit has channelName, channelId, messageId, url, author, timestamp and content. It scans recent history channel by channel (Discord's own search is closed to bots), so it is bounded: at most 120 channels and 200 Discord calls per search, rate limits honoured. When `truncated` is true the search stopped early: read `truncatedBecause` and `searchedBackTo`, and narrow with since / guildId / grantIds or continue with the cursor. Cannot read anyone's direct messages: a bot has no access to a person's DMs, so do not try. Read-only.",
+			jsonSchema: {
+				type: "object",
+				properties: {
+					authorId: { type: "string", description: "Discord user id of the author." },
+					authorUsername: { type: "string", description: "Author's username (or display name), case-insensitive; a leading @ is ignored." },
+					mentionsUserId: { type: "string", description: "Discord user id the message tags." },
+					mentionsUsername: { type: "string", description: "Username (or display name) of someone the message tags, case-insensitive." },
+					text: { type: "string", description: "Substring the message content must contain, case-insensitive." },
+					since: { type: "string", description: "Only messages at or after this ISO 8601 date or time. Also stops the scan early, so it makes a search cheaper." },
+					until: { type: "string", description: "Only messages before this ISO 8601 date or time." },
+					guildId: { type: "string", description: "Search only this server's granted channels." },
+					grantIds: { type: "array", items: { type: "string" }, description: "Search only these grants (channel or server grants from discord_list_granted_channels)." },
+					limit: { type: "number", description: "How many hits to return (default 20, max 50)." },
+					cursor: { type: "string", description: "The nextCursor of the previous page: continue with older messages." },
+				},
+			},
+			tier: "connector",
+			connector: "discord",
+			scope: "read",
+			mutates: false,
+			untrustedOutput: true,
+			handler: searchMessages,
+		},
+		{
 			name: "discord_read_reactions",
 			description: "Read the reactions on ONE message in a Discord channel explicitly granted to this agent: each emoji, its count, whether the bot reacted, and (includeUsers, default true) the users who reacted — up to usersPerEmoji each (default 25, max 200), for the first 10 emoji. Take messageId from discord_read_messages. Read-only.",
-			jsonSchema: { type: "object", properties: { grantId: { type: "string" }, messageId: { type: "string" }, includeUsers: { type: "boolean" }, usersPerEmoji: { type: "number" } }, required: ["grantId", "messageId"] },
+			jsonSchema: { type: "object", properties: { grantId: { type: "string" }, channelId: { type: "string", description: "Required when grantId is a whole-server grant (see `servers` in discord_list_granted_channels): the text channel of that server to use." }, messageId: { type: "string" }, includeUsers: { type: "boolean" }, usersPerEmoji: { type: "number" } }, required: ["grantId", "messageId"] },
 			tier: "connector",
 			connector: "discord",
 			scope: "read",
@@ -457,6 +497,7 @@ export const DISCORD_CONNECTOR: Connector = {
 				type: "object",
 				properties: {
 					grantId: { type: "string" },
+					channelId: { type: "string", description: "Required when grantId is a whole-server grant (see `servers` in discord_list_granted_channels): the text channel of that server to use." },
 					content: { type: "string" },
 					replyToMessageId: { type: "string", description: "Optional. Id of a message in this channel to reply to." },
 					mentionUserIds: { type: "array", items: { type: "string" }, maxItems: 100, description: "Optional. Discord user ids (17-20 digit strings) that may be pinged; each must also be tagged as <@id> in content." },
@@ -474,7 +515,7 @@ export const DISCORD_CONNECTOR: Connector = {
 		{
 			name: "discord_add_reaction",
 			description: "Add one reaction as the connected Discord bot to a message in a channel explicitly granted to this agent. WRITE — the reaction is really added.",
-			jsonSchema: { type: "object", properties: { grantId: { type: "string" }, messageId: { type: "string" }, emoji: { type: "string" } }, required: ["grantId", "messageId", "emoji"] },
+			jsonSchema: { type: "object", properties: { grantId: { type: "string" }, channelId: { type: "string", description: "Required when grantId is a whole-server grant (see `servers` in discord_list_granted_channels): the text channel of that server to use." }, messageId: { type: "string" }, emoji: { type: "string" } }, required: ["grantId", "messageId", "emoji"] },
 			tier: "connector",
 			connector: "discord",
 			scope: "write",

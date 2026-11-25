@@ -19156,12 +19156,14 @@ paths:
           application/json:
             schema:
               type: object
-              required: [channelId]
+              description: Give exactly one of channelId and guildId.
               properties:
                 channelId: { type: string, description: Discord text-channel snowflake. }
+                guildId: { type: string, description: "Discord server snowflake (#1703). Grants every text channel of the server the bot can see, including channels created later, as one grant (resourceType discord_guild). The agent's tools then take this grant id plus a channelId. Not available with purpose release_notes." }
+                purpose: { type: string, enum: [agent, release_notes] }
       responses:
         "201":
-          description: Verified channel grant
+          description: Verified channel or server grant
           content:
             application/json:
               schema:

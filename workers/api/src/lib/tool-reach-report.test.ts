@@ -129,6 +129,7 @@ const INTERNET = new Set<string>([
 	"browser_act",
 	// ── discord ── bot messages leave the platform; grants only constrain which channel ──
 	"discord_read_messages",
+	"discord_search_messages", // #1704 — scans granted channels' history through Discord with the owner's bot
 	"discord_read_reactions",
 	"discord_list_members", // #1387 — one server's member list, read from Discord with the owner's bot
 	"discord_send_message",

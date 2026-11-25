@@ -34,17 +34,19 @@ const CH_ALERTS = "333333333333333333";
 const CH_PRIVATE = "444444444444444444";
 const CH_HIDDEN = "555555555555555555";
 const CH_VOICE = "666666666666666666";
+const CH_NEW = "181818181818181818"; // #1703: a channel created in GUILD after a server grant
 const ANA = "131313131313131313";
 const STRANGER = "141414141414141414";
 const ROLE_STAFF = "151515151515151515";
 const SORT_GUILD = "161616161616161616";
-const DISCORD_TOOLS = ["discord_list_granted_channels", "discord_read_messages", "discord_read_reactions", "discord_send_message", "discord_add_reaction"];
+const DISCORD_TOOLS = ["discord_list_granted_channels", "discord_read_messages", "discord_read_reactions", "discord_send_message", "discord_add_reaction", "discord_search_messages"];
 
 let d1: RealSchemaD1;
 let env: Env;
 let sent: Array<{ path: string; method: string; auth: string | null; body: string | null }>;
 let revokedTokens: Set<string>;
 let sortRefused: boolean;
+let newChannelExists: boolean;
 
 const app = new Hono<{ Bindings: Env }>();
 app.route("/v1/discord", discordRoutes);
@@ -65,6 +67,7 @@ function discord(path: string, method: string, auth: string | null): Response {
 			{ id: "555555555555555555", name: "FREE-APPS", type: 4, guild_id: GUILD },
 			{ id: CH_PRIVATE, name: "private", type: 0, guild_id: GUILD },
 			{ id: CH_VOICE, name: "lounge", type: 2, guild_id: GUILD },
+			...(newChannelExists ? [{ id: CH_NEW, name: "fit-food-app", type: 0, guild_id: GUILD }] : []),
 		]);
 	}
 	// #1625: channel management. CH_PRIVATE is the one the bot may manage; CH_ALERTS's server refuses Manage Channels for PATCH/DELETE.
@@ -97,6 +100,10 @@ function discord(path: string, method: string, auth: string | null): Response {
 		]);
 	}
 	if (path === `/guilds/${SORT_GUILD}/channels` && method === "PATCH") return sortRefused ? json({ message: "Missing Permissions", code: 50013 }, 403) : new Response(null, { status: 204 });
+	// #1703: the server itself, and a channel created after a server grant.
+	if (path === `/guilds/${GUILD}` && method === "GET") return json({ id: GUILD, name: "Ops" });
+	if (path === `/channels/${CH_NEW}` && method === "GET") return json({ id: CH_NEW, name: "fit-food-app", type: 0, guild_id: GUILD });
+	if (path === `/channels/${CH_NEW}/messages` && method === "GET") return json([{ id: "888888888888888889", content: "newest", author: { id: ANA, username: "ana.l" }, mentions: [], timestamp: "2026-11-25T01:00:00.000000+00:00" }]);
 	// #1274: one message with its reaction counts, and who reacted with each emoji.
 	if (path === `/channels/${CH_ALERTS}/messages/888888888888888888` && method === "GET") return json({ id: "888888888888888888", reactions: [{ count: 2, me: false, emoji: { id: null, name: "👍" } }, { count: 1, me: true, emoji: { id: "123123123123123123", name: "pags" } }] });
 	if (path === `/channels/${CH_ALERTS}/messages/888888888888888888/reactions/${encodeURIComponent("👍")}` && method === "GET") return json([{ id: "111111111111111110", username: "ana", email: "never-passed-on@example.com" }, { id: "111111111111111111", username: "bo", bot: true }]);
@@ -115,6 +122,7 @@ beforeEach(() => {
 	sent = [];
 	revokedTokens = new Set();
 	sortRefused = false;
+	newChannelExists = false;
 	vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = new URL(String(input instanceof Request ? input.url : input));
 		const auth = new Headers(init?.headers).get("Authorization");
@@ -599,5 +607,46 @@ describe("the owner's bot finds members and lets one into a channel (#1633)", ()
 			{ id: ROLE_STAFF, kind: "role", name: "staff", view: "allow", allow: "1024", deny: "0" },
 			{ id: ANA, kind: "member", name: "ana.l", view: "allow", allow: "117824", deny: "0" },
 		]);
+	});
+});
+
+describe("a whole-server grant keeps the agent on every channel of the server (#1703)", () => {
+	const grantsOf = (instance: string) => d1.sqlite.prepare("SELECT id, resource_id, resource_type FROM instance_connector_grants WHERE instance_id = ? AND provider = 'discord'").all(instance) as Array<{ id: string; resource_id: string; resource_type: string }>;
+	const grantGuild = (body: Record<string, unknown>) => call("POST", `/v1/discord/instances/${INSTANCE}/grants`, body);
+
+	it("grants the server once (verified with the bot), lists it, and a channel created later is readable and searchable with no new grant", async () => {
+		await call("PUT", "/v1/discord/bot", { token: TOKEN_A });
+		const made = await grantGuild({ guildId: GUILD });
+		expect(made.status).toBe(201);
+		expect(made.json.grant).toMatchObject({ resourceId: GUILD, resourceType: "discord_guild", resourceName: "Server: Ops" });
+		const again = await grantGuild({ guildId: GUILD });
+		expect(again.status).toBe(200);
+		expect(again.json.grant.id).toBe(made.json.grant.id);
+		expect(grantsOf(INSTANCE)).toHaveLength(1);
+		expect((await call("GET", `/v1/discord/instances/${INSTANCE}/grants`)).json.grants).toEqual([expect.objectContaining({ id: made.json.grant.id, resourceType: "discord_guild" })]);
+		expect(events().map((e) => e.event)).toEqual(["discord.bot_connect", "discord.grant_guild"]);
+
+		newChannelExists = true;
+		const read = await tool("discord_read_messages", { grantId: made.json.grant.id, channelId: CH_NEW });
+		expect(read.json.success).toBe(true);
+		expect(read.json.content).toContain("newest");
+		const found = await tool("discord_search_messages", { authorUsername: "ana.l" });
+		expect(found.json.success).toBe(true);
+		expect(JSON.parse(found.json.content.slice(found.json.content.indexOf("{"), found.json.content.lastIndexOf("}") + 1)).hits).toMatchObject([{ channelId: CH_NEW, messageId: "888888888888888889" }]);
+		// Only reads were made through the server grant.
+		expect(sent.filter((x) => x.path.includes(CH_NEW) && x.method !== "GET")).toEqual([]);
+
+		expect((await call("DELETE", `/v1/discord/instances/${INSTANCE}/grants/${made.json.grant.id}`)).status).toBe(200);
+		const after = await tool("discord_read_messages", { grantId: made.json.grant.id, channelId: CH_NEW });
+		expect(after.json.success).toBe(false);
+	});
+
+	it("refuses a server and a channel together, a release-notes server grant, a bad id, and a server the bot is not in", async () => {
+		await call("PUT", "/v1/discord/bot", { token: TOKEN_A });
+		expect((await grantGuild({ guildId: GUILD, channelId: CH_ALERTS })).status).toBe(400);
+		expect((await grantGuild({ guildId: GUILD, purpose: "release_notes" })).status).toBe(400);
+		expect((await grantGuild({ guildId: "nope" })).status).toBe(400);
+		expect((await grantGuild({ guildId: "191919191919191919" })).status).toBe(404);
+		expect(grantsOf(INSTANCE)).toEqual([]);
 	});
 });

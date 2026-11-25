@@ -144,6 +144,8 @@ const UNREACHABLE_BY_DESIGN: Readonly<Record<string, string>> = {
 		"No seeded agent should enumerate an owner's Discord bot channels. A creator declares this tool and the owner grants exact channels to that instance.",
 	discord_read_messages:
 		"Discord reads require a creator-declared agent and an owner-granted exact channel, rather than adding broad chat reads to a seeded agent.",
+	discord_search_messages:
+		"Searching a community's messages (#1704) needs a creator-declared agent (the owner's Discord Command Center is one, a D1 row) holding channel or server grants; no seeded agent has a reason to read a community's history.",
 	discord_read_reactions:
 		"Reading who reacted needs a creator-declared agent and an owner-granted exact channel; no seeded agent has a reason to read a community's reactions.",
 	discord_list_members:

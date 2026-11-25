@@ -8,7 +8,7 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { clipMarked } from "../lib/clip-marked.js";
 import { connectorGrantReach, deleteConnectorGrant, listConnectorGrants, revokeUserConnectorGrants, revokeUserConnectorResourceGrants, upsertConnectorGrant } from "../lib/connector-grants.js";
 import { connectorClient } from "../lib/connectors/client.js";
-import { DISCORD_AGENT_GRANT, DISCORD_NOT_CONNECTED, DISCORD_RELEASE_GRANT, discordFailure } from "../lib/connectors/discord.js";
+import { DISCORD_AGENT_GRANT, DISCORD_GUILD_GRANT, DISCORD_NOT_CONNECTED, DISCORD_RELEASE_GRANT, discordFailure } from "../lib/connectors/discord.js";
 import { logEvent } from "../lib/events.js";
 import { hasUserProviderKey, upsertUserProviderKey } from "../lib/user-api-key-store.js";
 import { connectorRefusalFor } from "../lib/instance-connector-access.js";
@@ -437,11 +437,41 @@ discordRoutes.get("/instances/:instanceId/grants", async (c) => {
  *     agent no reach. Asking for it on a channel the agent already holds returns that grant as it is —
  *     never a downgrade of the agent's access.
  */
+/**
+ * Grant a whole server (#1703): every text channel of it that the bot can see, now and later. Stored as ONE grant
+ * (`discord_guild`, resourceId = the server id); a channel is checked against the server when the agent uses it, so a channel
+ * created after this needs no new grant. Revoking the grant removes the whole reach. The server is verified with the owner's
+ * bot first: one the bot is not in is refused. Only for the agent's own tools, never for release notes.
+ */
+async function grantGuild(env: Env, uid: string, instanceId: string, config: string | null | undefined, body: { channelId?: string; guildId?: string; purpose?: unknown }) {
+	if (body.channelId !== undefined) throw new HttpError(400, "Pass either channelId (one channel) or guildId (a whole server), not both.");
+	if (body.purpose !== undefined && body.purpose !== "agent") throw new HttpError(400, "A server grant is for the agent's own Discord tools; purpose release_notes takes one channel (channelId).");
+	const refusal = await connectorRefusalFor(env, "discord", instanceId, uid, config);
+	if (refusal) throw new HttpError(403, refusal);
+	const guildId = requireSnowflake(body.guildId, "guildId");
+	const data = (await discordJson(await botToken(env, uid), `/guilds/${guildId}`)) as { id?: unknown; name?: unknown } | null;
+	if (data?.id !== guildId || typeof data.name !== "string") throw new HttpError(502, "Discord returned no server metadata.");
+	const existing = (await listConnectorGrants(env, instanceId, uid, "discord")).find((g) => g.resourceId === guildId);
+	const grant = await upsertConnectorGrant(env, instanceId, uid, {
+		provider: "discord",
+		resourceId: guildId,
+		resourceName: clipMarked(`Server: ${data.name}`, 500, { within: true, what: "characters in Discord server name" }),
+		resourceType: DISCORD_GUILD_GRANT,
+		resourceUrl: `https://discord.com/channels/${guildId}`,
+	});
+	if (!existing) await audit(env, uid, "discord.grant_guild", `Granted every channel of Discord server ${data.name}`, { grantId: grant.id, guildId }, instanceId);
+	return { grant, created: !existing };
+}
+
 discordRoutes.post("/instances/:instanceId/grants", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	const instance = await requireOwnedInstance(c.env, instanceId, session.uid);
-	const body = (await c.req.json().catch(() => ({}))) as { channelId?: string; purpose?: unknown };
+	const body = (await c.req.json().catch(() => ({}))) as { channelId?: string; guildId?: string; purpose?: unknown };
+	if (body.guildId !== undefined) {
+		const { grant, created } = await grantGuild(c.env, session.uid, instanceId, instance.config, body);
+		return c.json({ grant } satisfies DiscordGrantResponse, created ? 201 : 200);
+	}
 	if (body.purpose !== undefined && body.purpose !== "agent" && body.purpose !== "release_notes") {
 		throw new HttpError(400, 'purpose must be "agent" (the default: a channel the agent\'s Discord tools may use) or "release_notes" (a channel the platform posts release notes to).');
 	}

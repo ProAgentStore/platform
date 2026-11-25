@@ -44,6 +44,7 @@ describe("Discord bot connector", () => {
 		expect(DISCORD_CONNECTOR.tools.map((t) => t.name)).toEqual([
 			"discord_list_granted_channels",
 			"discord_read_messages",
+			"discord_search_messages",
 			"discord_read_reactions",
 			"discord_list_members",
 			"discord_send_message",

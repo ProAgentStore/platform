@@ -757,6 +757,7 @@ const READBACK: Record<string, string | null> = {
 	"grant_instance_calendar.calendar_id": "list_instance_calendar_grants",
 	"grant_instance_discord_channel.channel_id": "list_instance_discord_grants",
 	"grant_instance_discord_channel.purpose": "list_instance_discord_grants",
+	"grant_instance_discord_channel.guild_id": "list_instance_discord_grants",
 	"revoke_instance_discord_grant.grant_id": "list_instance_discord_grants",
 	// #1625: what the owner's bot made or changed reads back from the channel list.
 	"create_discord_channel.guild_id": "list_discord_channels",

@@ -284,7 +284,7 @@ export function registerDiscordTools(server: McpServer, ctx: InstanceToolsCtx): 
 
 	server.tool(
 		"list_instance_discord_grants",
-		"List the Discord channels one instance is granted, each with its stable grant `id` — the `grantId` the agent's Discord tools take, and what revoke_instance_discord_grant takes. An agent can read or post only in a channel listed here with resourceType `discord_channel`; one with `discord_release_channel` is reserved for release notes (the platform posts there, the agent cannot). Read-only.",
+		"List the Discord channels one instance is granted, each with its stable grant `id` — the `grantId` the agent's Discord tools take, and what revoke_instance_discord_grant takes. An agent can read or post only in a channel listed here with resourceType `discord_channel`, or in any text channel of a server listed with `discord_guild` (a whole-server grant, #1703: resourceId is the server id); one with `discord_release_channel` is reserved for release notes (the platform posts there, the agent cannot). Read-only.",
 		{ token: tokenArg, instance_id: instanceId },
 		async ({ token, instance_id }) => {
 			const session = tokenFor(token);
@@ -298,16 +298,24 @@ export function registerDiscordTools(server: McpServer, ctx: InstanceToolsCtx): 
 
 	server.tool(
 		"grant_instance_discord_channel",
-		"Grant one instance one Discord text or announcement channel (id from list_discord_channels). The channel is checked with your bot first: one it cannot see is refused (403) with the permissions to give it. Granting the same channel again returns the SAME grant id. Refused when the instance's agent does not declare the Discord tools — unless `purpose` is `release_notes`, which grants the channel to the platform's release notes only (resourceType `discord_release_channel`: the agent gets no reach, so a coder with no Discord tools can have one); every other check still applies, and a channel the agent already holds is returned unchanged. For the default purpose this allows reads; posting still needs the instance's Discord write consent (set_instance_connector_consent). WRITE: widens what the agent can read. Call with dry_run first.",
-		{ token: tokenArg, instance_id: instanceId, channel_id: z.string().describe("Channel id from list_discord_channels."), purpose: z.enum(["agent", "release_notes"]).optional().describe("agent (default): a channel the agent's Discord tools may use. release_notes: a channel the platform posts release notes to; needs no Discord tools."), dry_run: z.boolean().optional() },
-		async ({ token, instance_id, channel_id, purpose, dry_run }) => {
+		"Grant one instance one Discord text or announcement channel (channel_id from list_discord_channels), OR a whole server (guild_id from list_discord_guilds): every text channel of it that your bot can see, including channels created later with no new grant (#1703). Pass exactly one of channel_id and guild_id. A server grant is one grant id, shown by list_instance_discord_grants with resourceType `discord_guild`; the agent passes that grantId plus a channelId to its Discord tools, and discord_search_messages searches all of the server's channels. Revoke it with revoke_instance_discord_grant to remove the whole reach. A channel is checked with your bot first: one it cannot see is refused (403) with the permissions to give it; a server is checked the same way. Granting the same channel or server again returns the SAME grant id. Refused when the instance's agent does not declare the Discord tools — unless `purpose` is `release_notes`, which grants one channel to the platform's release notes only (resourceType `discord_release_channel`: the agent gets no reach, so a coder with no Discord tools can have one; not available with guild_id); every other check still applies, and a channel the agent already holds is returned unchanged. For the default purpose this allows reads; posting still needs the instance's Discord write consent (set_instance_connector_consent). WRITE: widens what the agent can read. Call with dry_run first.",
+		{
+			token: tokenArg,
+			instance_id: instanceId,
+			channel_id: z.string().optional().describe("Channel id from list_discord_channels. Give this or guild_id."),
+			guild_id: z.string().optional().describe("Server id from list_discord_guilds: grants every text channel of the server, present and future. Give this or channel_id."),
+			purpose: z.enum(["agent", "release_notes"]).optional().describe("agent (default): a channel the agent's Discord tools may use. release_notes: a channel the platform posts release notes to; needs no Discord tools."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, channel_id, guild_id, purpose, dry_run }) => {
 			const session = tokenFor(token);
 			if (!session) return authRequired();
-			const input = { instance_id, channel_id, ...(purpose ? { purpose } : {}) };
+			const input = { instance_id, ...(channel_id ? { channel_id } : {}), ...(guild_id ? { guild_id } : {}), ...(purpose ? { purpose } : {}) };
 			const denied = await requirePermission(safetyFor(token), "write", "grant_instance_discord_channel", input);
 			if (denied) return denied;
-			if (dry_run) return dryRun(safetyFor(token), "grant_instance_discord_channel", "grant a Discord channel to this instance", input, { endpoint: `/v1/discord/instances/${encodeURIComponent(instance_id)}/grants`, method: "POST" });
-			const data = await authedCall(`/v1/discord/instances/${encodeURIComponent(instance_id)}/grants`, session, { method: "POST", body: JSON.stringify({ channelId: channel_id, ...(purpose ? { purpose } : {}) }) }, env);
+			if (dry_run) return dryRun(safetyFor(token), "grant_instance_discord_channel", guild_id ? "grant every channel of a Discord server to this instance" : "grant a Discord channel to this instance", input, { endpoint: `/v1/discord/instances/${encodeURIComponent(instance_id)}/grants`, method: "POST" });
+			if (!channel_id === !guild_id) return text("Error: pass exactly one of channel_id (one channel) and guild_id (a whole server).");
+			const data = await authedCall(`/v1/discord/instances/${encodeURIComponent(instance_id)}/grants`, session, { method: "POST", body: JSON.stringify({ ...(channel_id ? { channelId: channel_id } : { guildId: guild_id }), ...(purpose ? { purpose } : {}) }) }, env);
 			if (err(data)) return text(`Error: ${err(data)}`);
 			await audit(safetyFor(token), { tool: "grant_instance_discord_channel", action: "completed", input, result: data });
 			return jsonText(data);
