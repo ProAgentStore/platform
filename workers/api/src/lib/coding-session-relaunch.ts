@@ -37,7 +37,7 @@ export interface RelaunchInput {
 	seed?: string;
 }
 
-export async function startSessionOnRunnerConn(env: Env, conn: RunnerConn, input: RelaunchInput): Promise<{ sessionId?: string; resumed?: boolean; seeded?: boolean }> {
+export async function startSessionOnRunnerConn(env: Env, conn: RunnerConn, input: RelaunchInput): Promise<{ sessionId?: string; resumed?: boolean; seeded?: boolean; checkout?: unknown }> {
 	const { instanceId, userId, sessionId, repoId } = input;
 	// Resolve the session's exact CLI command, its workDir, and its engine env (API key / OAuth
 	// token) FRESH here — the same fields `startSessionOnRunner` passes. Without them, a runner
@@ -49,7 +49,7 @@ export async function startSessionOnRunnerConn(env: Env, conn: RunnerConn, input
 	const machineId = repo ? await machineIdForNode(env, instanceId, userId, conn.runnerNode ?? "").catch(() => null) : null;
 	const checkout = repo && machineId ? await getCheckout(env, instanceId, userId, repoId, machineId).catch(() => null) : null;
 	const engineEnv = sess ? await resolveEngineEnv(env, instanceId, userId, sess) : undefined;
-	return callRunner<{ sessionId?: string; resumed?: boolean; seeded?: boolean }>(conn, "/coding/start", {
+	return callRunner<{ sessionId?: string; resumed?: boolean; seeded?: boolean; checkout?: unknown }>(conn, "/coding/start", {
 		sessionId,
 		repoId,
 		workDir: effectiveWorkdir(checkout, repo?.workdir) || undefined,
@@ -68,5 +68,6 @@ export async function startSessionOnRunnerConn(env: Env, conn: RunnerConn, input
 		seed: input.seed || undefined,
 		// #1708: an isolated repository's engine runs in a worktree cut from its configured branch; any other sends nothing new.
 		strategy: strategyForRunner(repo?.strategy),
+		trackShellEdits: repo?.strategy === "shared-direct" ? true : undefined, // #1717
 	});
 }

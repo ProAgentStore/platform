@@ -88,6 +88,7 @@ export const RUNNER_ROUTES: Readonly<Record<string, RunnerRoute>> = {
 	"/coding/worktree-discard": once(),
 	// Publish an isolated run's work, then remove its worktree (#1713): a push and a removal, so never re-sent blind — the caller reads back.
 	"/coding/worktree-publish": once(),
+	"/coding/worktree-publish-owner": once(), // the owner's publish (#1717): previews, or pushes — never re-sent blind
 	"/coding/worktree-finish": once(),
 	"/coding/park-snapshot": once(),
 	"/coding/park-restore": once(),

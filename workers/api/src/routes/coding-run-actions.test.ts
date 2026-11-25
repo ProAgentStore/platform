@@ -106,3 +106,54 @@ describe("POST /coding/repos/:repoId/worktrees/discard", () => {
 		expect(RUNNER_ROUTES["/coding/worktree-discard"].retry).toBe("never");
 	});
 });
+
+describe("worktrees/publish — the owner's publish of a run ended by hand (#1717)", () => {
+	const named = { runner_node: "Macmini.modem", session_id: SESSION };
+	const setStrategy = (d1: { exec: (sql: string) => void }, strategy: string | null) => d1.exec(`UPDATE coding_repos SET strategy = ${strategy ? `'${strategy}'` : "NULL"} WHERE id = 'r1'`);
+
+	it("refuses a repository with no stored isolated strategy, a stranger, another repo's session, and an execute without the previewed head", async () => {
+		const { call, get, d1 } = build();
+		expect((await call("/repos/r1/worktrees/publish", named)).status).toBe(409); // nothing stored: never touched
+		setStrategy(d1, "shared-direct");
+		expect((await call("/repos/r1/worktrees/publish", named)).status).toBe(409);
+		setStrategy(d1, "isolated-direct");
+		expect((await call("/repos/r1/worktrees/publish", { session_id: SESSION })).status).toBe(400);
+		expect((await call("/repos/r2/worktrees/publish", named)).status).toBe(404);
+		expect((await call("/repos/r1/worktrees/publish", named, "u2")).status).toBe(404);
+		expect((await call("/repos/r1/worktrees/publish", { ...named, dry_run: false })).status).toBe(400);
+		expect((await get(`/repos/r1/worktrees/publish?runner_node=Macmini.modem&session_id=${SESSION}`, "u2")).status).toBe(404);
+		expect(callRunner).not.toHaveBeenCalled();
+	});
+
+	it("previews on the owner-only runner path with the stored mode, and executes a direct publish with the head, reading back and finishing", async () => {
+		const { call, get, d1 } = build();
+		setStrategy(d1, "isolated-direct");
+		callRunner.mockResolvedValue({ isolated: true, ok: true, dryRun: true, mode: "direct", head: HEAD, commits: 2 });
+		const preview = await get(`/repos/r1/worktrees/publish?runner_node=Macmini.modem&session_id=${SESSION}`);
+		expect(preview.status).toBe(200);
+		expect(callRunner.mock.calls[0].slice(1, 3)).toEqual(["/coding/worktree-publish-owner", { workDir: "/w/r", repoId: "r1", sessionId: SESSION, expect: "direct", dryRun: true }]);
+		callRunner.mockReset().mockImplementation(async (_c: unknown, path: string) => (path === "/coding/worktree-finish" ? { removed: true } : { isolated: true, ok: true, mode: "direct", target: "main", sha: HEAD }));
+		const done = await call("/repos/r1/worktrees/publish", { ...named, dry_run: false, expected_head: HEAD });
+		expect(done.status).toBe(200);
+		expect(await done.json()).toMatchObject({ ok: true, published: true, mode: "direct", removed: true });
+		const sent = callRunner.mock.calls.find((c) => c[1] === "/coding/worktree-publish-owner")?.[2];
+		expect(sent).toMatchObject({ dryRun: false, expectedHead: HEAD, expect: "direct" });
+		expect(callRunner.mock.calls.map((c) => c[1])).toEqual(["/coding/worktree-publish-owner", "/coding/worktree-finish"]);
+	});
+
+	it("a refusal the machine names is a 409 and nothing is finished; a machine that is offline is 503", async () => {
+		const { call, d1 } = build();
+		setStrategy(d1, "isolated-direct");
+		callRunner.mockResolvedValue({ isolated: true, ok: false, reason: "session_live", error: "engine running" });
+		const res = await call("/repos/r1/worktrees/publish", { ...named, dry_run: false, expected_head: HEAD });
+		expect(res.status).toBe(409);
+		expect(await res.json()).toMatchObject({ ok: false, published: false, reason: "session_live" });
+		expect(callRunner.mock.calls.map((c) => c[1])).toEqual(["/coding/worktree-publish-owner"]);
+		getRunnerConn.mockResolvedValue(null);
+		expect((await call("/repos/r1/worktrees/publish", { ...named, dry_run: false, expected_head: HEAD })).status).toBe(503);
+	});
+
+	it("is a never-repeat runner route", () => {
+		expect(RUNNER_ROUTES["/coding/worktree-publish-owner"].retry).toBe("never");
+	});
+});

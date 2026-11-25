@@ -6,7 +6,7 @@ import type { InstanceToolsCtx } from "./shared.js";
 
 /**
  * Branches and stashes in a repo's checkout, on the machine that holds it (#1700, #1701), and the owner's two endings for a run (#1709):
- * abandon it, and discard its isolated worktree. Both are owner-only: no agent tool reaches them.
+ * abandon it, discard its isolated worktree, and publish the worktree of a run that ended by hand (#1717). All three are owner-only: no agent tool reaches them.
  *
  * The git is the runner's; the API route is `workers/api/src/routes/coding-branch-actions.ts`. Two shapes:
  *
@@ -22,7 +22,7 @@ import type { InstanceToolsCtx } from "./shared.js";
 export function registerBranchTools(server: McpServer, ctx: InstanceToolsCtx): void {
 	const { env, tokenFor, safetyFor } = ctx;
 	const tokenField = z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in.");
-	const route = (instance_id: string, repo_id: string, sub: "branches" | "branches/integrate" | "branches/delete" | "stashes" | "stashes/drop" | "worktrees/discard") => `/v1/instances/${encodeURIComponent(instance_id)}/coding/repos/${encodeURIComponent(repo_id)}/${sub}`;
+	const route = (instance_id: string, repo_id: string, sub: "branches" | "branches/integrate" | "branches/delete" | "stashes" | "stashes/drop" | "worktrees/discard" | "worktrees/publish") => `/v1/instances/${encodeURIComponent(instance_id)}/coding/repos/${encodeURIComponent(repo_id)}/${sub}`;
 	const common = {
 		token: tokenField,
 		instance_id: z.string().describe("Instance ID or slug"),
@@ -33,15 +33,15 @@ export function registerBranchTools(server: McpServer, ctx: InstanceToolsCtx): v
 
 	server.tool(
 		"coding_branches",
-		"List a repo's branches on the machine that holds its checkout (#1700): local branches (tip, upstream, ahead/behind its upstream and the default branch, default / protected / checked-out-in-which-work-tree, linked worktrees included) and the remote's heads. Remote heads are read LIVE (`ls-remote`) and marked `source: \"live\"`; tracking refs the remote no longer reports are `cached-only` and `cacheStale` marks a cache behind the remote — a cached ref is never presented as live. `protected.onRemote` is GitHub's answer, or null when it could not be read (`protectionKnown: false`); `protected.byName` is the conventional names (main, master, release/*...). With `compare: <branch>` it compares that branch against the default (freshly fetched): ahead/behind, the unique commits (50) and changed files (200) with totals. With `preview` it shows what integrating or deleting that branch would do (or, with `discard_worktree` and `session_id`, what discarding that run's isolated worktree would remove: the changed files and the exact `head` to pass back as `expected_head`) — unique commits and files, the exact `tip` to pass back as `expected_tip`, the checks state, and the refusal that would apply — changing nothing. A machine that is offline, too old, or lacks access is named with a `reason`, never an empty list. Read-only.",
+		"List a repo's branches on the machine that holds its checkout (#1700): local branches (tip, upstream, ahead/behind its upstream and the default branch, default / protected / checked-out-in-which-work-tree, linked worktrees included) and the remote's heads. Remote heads are read LIVE (`ls-remote`) and marked `source: \"live\"`; tracking refs the remote no longer reports are `cached-only` and `cacheStale` marks a cache behind the remote — a cached ref is never presented as live. `protected.onRemote` is GitHub's answer, or null when it could not be read (`protectionKnown: false`); `protected.byName` is the conventional names (main, master, release/*...). With `compare: <branch>` it compares that branch against the default (freshly fetched): ahead/behind, the unique commits (50) and changed files (200) with totals. With `preview` it shows what integrating or deleting that branch would do (or, with `discard_worktree` and `session_id`, what discarding that run's isolated worktree would remove: the changed files and the exact `head` to pass back as `expected_head`; with `publish_worktree` and `session_id`, what publishing it would do: direct or pull request, the target, the commits, any uncommitted files that would NOT be published, and the `head` to pass back) — unique commits and files, the exact `tip` to pass back as `expected_tip`, the checks state, and the refusal that would apply — changing nothing. A machine that is offline, too old, or lacks access is named with a `reason`, never an empty list. Read-only.",
 		{
 			...common,
 			runner_node: optionalNode,
 			compare: z.string().optional().describe("Branch to compare against the default branch."),
 			base: z.string().optional().describe("With compare: compare against this branch instead of the default."),
-			preview: z.enum(["integrate", "delete_local", "delete_remote", "discard_worktree"]).optional().describe("Preview that mutation for `branch` (read-only; nothing is changed). Needs runner_node. `discard_worktree` previews coding_worktree_discard for `session_id` instead of a branch."),
+			preview: z.enum(["integrate", "delete_local", "delete_remote", "discard_worktree", "publish_worktree"]).optional().describe("Preview that mutation for `branch` (read-only; nothing is changed). Needs runner_node. `discard_worktree` previews coding_worktree_discard, and `publish_worktree` coding_worktree_publish, for `session_id` instead of a branch."),
 			branch: z.string().optional().describe("The branch a preview is for."),
-			session_id: z.string().optional().describe("With preview `discard_worktree`: the session (csess_...) whose isolated worktree would be discarded."),
+			session_id: z.string().optional().describe("With preview `discard_worktree` or `publish_worktree`: the session (csess_...) whose isolated worktree it is."),
 		},
 		async ({ token, instance_id, repo_id, runner_node, compare, base: baseBranch, preview, branch, session_id }) => {
 			const sessionToken = tokenFor(token);
@@ -49,11 +49,11 @@ export function registerBranchTools(server: McpServer, ctx: InstanceToolsCtx): v
 			const denied = await requirePermission(safetyFor(token), "read", "coding_branches", { instance_id, repo_id, runner_node, compare, preview, branch, session_id });
 			if (denied) return denied;
 			const q = new URLSearchParams();
-			if (preview === "discard_worktree") {
-				if (!session_id || !runner_node) return jsonText({ error: "preview discard_worktree needs both `session_id` and `runner_node`" });
+			if (preview === "discard_worktree" || preview === "publish_worktree") {
+				if (!session_id || !runner_node) return jsonText({ error: `preview ${preview} needs both \`session_id\` and \`runner_node\`` });
 				q.set("runner_node", runner_node);
 				q.set("session_id", session_id);
-				return jsonText(await authedCall(`${route(instance_id, repo_id, "worktrees/discard")}?${q}`, sessionToken, {}, env));
+				return jsonText(await authedCall(`${route(instance_id, repo_id, preview === "discard_worktree" ? "worktrees/discard" : "worktrees/publish")}?${q}`, sessionToken, {}, env));
 			}
 			if (runner_node) q.set("runner_node", runner_node);
 			if (compare) q.set("compare", compare);
@@ -217,6 +217,33 @@ export function registerBranchTools(server: McpServer, ctx: InstanceToolsCtx): v
 			if (unconfirmed) return unconfirmed;
 			const data = (await authedCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify({ runner_node, session_id, expected_head, dry_run: false }) }, env)) as { error?: string };
 			await audit(safetyFor(token), { tool: "coding_worktree_discard", action: data.error ? "failed" : "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"coding_worktree_publish",
+		"Publish ONE run's isolated worktree on the machine that holds it, for a run the owner ended by hand (#1717). A run that ends on its own publishes automatically; a session the owner ends does not, and its worktree is kept. This is that decision, with the same read-back and the same choice the repository stored: an isolated-direct repository gets a plain, never-forced push of the run's commits to its target (the target's own checks and protection still decide), read back from the remote; an isolated-pr repository gets the run branch pushed and a pull request opened through the GitHub App, and nothing is pushed to the target. The worktree is removed only after that read-back; uncommitted files are never published (`dirty`: commit them first) and keep the worktree. A repository that stored no isolated strategy is refused and nothing changes. Preview first with coding_branches `preview: \"publish_worktree\"` and `session_id`: it names the mode, target, commits and the `head` to pass as `expected_head`. Refused with a named `reason` for a moved head (`stale_head`), a run whose engine is still running (`session_live`), a target that moved (`target_moved`), a worktree cut the other way from the repository's setting (`mode_mismatch`) and a failed push. Owner only; an agent has no tool for this. Requires `confirm: \"coding_worktree_publish\"`, `runner_node`, `session_id` and `expected_head`. `destructive` scope.",
+		{
+			...common,
+			runner_node: node,
+			session_id: z.string().describe("The session (csess_...) whose isolated worktree to publish; its uuid is the worktree's run id."),
+			expected_head: z.string().describe("The worktree's full 40-character HEAD SHA, as the preview returned it. A different current head refuses."),
+			confirm: z.string().optional().describe('Must be "coding_worktree_publish".'),
+			dry_run: z.boolean().optional().describe("Describe the request without contacting anything. For the machine's own preview use coding_branches preview publish_worktree."),
+		},
+		async ({ token, instance_id, repo_id, runner_node, session_id, expected_head, confirm, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, repo_id, runner_node, session_id, expected_head };
+			const denied = await requirePermission(safetyFor(token), "destructive", "coding_worktree_publish", input);
+			if (denied) return denied;
+			const endpoint = route(instance_id, repo_id, "worktrees/publish");
+			if (dry_run) return dryRun(safetyFor(token), "coding_worktree_publish", "publish one ended run's isolated worktree", input, { endpoint, method: "POST", effect: "The machine would refuse a live engine or a moved head, then push the run's commits with a plain push (to the target for isolated-direct, to the run branch plus an opened pull request for isolated-pr), read the remote back, and remove the worktree only if that read back and it is clean. Uncommitted files are never published.", reversible: "Not automatically: a published commit is on the remote. A pushed run branch can be deleted; the receipt names what was pushed." });
+			const unconfirmed = await requireConfirmation(safetyFor(token), "coding_worktree_publish", confirm, "coding_worktree_publish", input);
+			if (unconfirmed) return unconfirmed;
+			const data = (await authedCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify({ runner_node, session_id, expected_head, dry_run: false }) }, env)) as { error?: string };
+			await audit(safetyFor(token), { tool: "coding_worktree_publish", action: data.error ? "failed" : "completed", input, result: data });
 			return jsonText(data);
 		},
 	);

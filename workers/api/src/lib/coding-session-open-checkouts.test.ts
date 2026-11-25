@@ -120,6 +120,18 @@ describe("startSessionOnRunner and the repository's checkout strategy (#1714)", 
 		expect(paths()).toContain("/coding/start");
 	});
 
+	it("shell-edit tracking is asked of the runner for an explicit shared-direct repository only (#1717)", async () => {
+		const sent = () => (vi.mocked(runner.callRunner).mock.calls.find((c) => c[1] === "/coding/start")?.[2] as { trackShellEdits?: boolean }).trackShellEdits;
+		await startSessionOnRunner(env, "i1", "u1", { ...session }, withStrategy("shared-direct"));
+		expect(sent()).toBe(true);
+		vi.mocked(runner.callRunner).mockClear();
+		await startSessionOnRunner(env, "i1", "u1", { ...session }, repo);
+		expect(sent()).toBeUndefined();
+		vi.mocked(runner.callRunner).mockClear();
+		await startSessionOnRunner(env, "i1", "u1", { ...session }, withStrategy("isolated-direct"));
+		expect(sent()).toBeUndefined();
+	});
+
 	it("an isolated repository whose runner did not report a worktree is refused and its engine stopped, not silently run shared", async () => {
 		const res = await startSessionOnRunner(env, "i1", "u1", { ...session }, withStrategy("isolated-pr"), { freshOpen: true });
 		expect(res.conn).toBeNull();

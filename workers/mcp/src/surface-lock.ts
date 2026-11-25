@@ -1299,4 +1299,5 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.230": "sha256:e21532474838e64e984b9df69197c0577bdea6f99e2f98f3b6eea6531009c434", // #1712: coding_engine_set takes fallback_id and coding_engine_get returns each engine's fallbackId.
 	"0.1.231": "sha256:89977226790604aaab6c8888cf6328843b055580fe9146f0928d012ccf3c913c", // #1709: coding_run_abandon and coding_worktree_discard (owner-only, destructive): end a run and clear what could resume it; remove one run's isolated checkout; coding_branches gains preview discard_worktree + session_id.
 	"0.1.232": "sha256:eb572f705e2aa4afb7f1005b43f7ddfcd186af745cc0ed6bd4f704144ff333c3", // #1703: grant_instance_discord_channel takes guild_id (a whole-server grant, new channels included) beside channel_id.
+	"0.1.233": "sha256:5e4deaf079a2ee1198a487a59d346ce79be8486794ee99449d0cd74b744e2a57", // #1717: coding_worktree_publish (owner-only, destructive): publish the isolated worktree of a run the owner ended by hand; coding_branches gains preview publish_worktree.
 };

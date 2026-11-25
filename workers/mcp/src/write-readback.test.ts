@@ -411,6 +411,10 @@ const READBACK: Record<string, string | null> = {
 	"coding_worktree_discard.runner_node": "list_runner_nodes",
 	"coding_worktree_discard.session_id": "coding_branches",
 	"coding_worktree_discard.expected_head": "coding_branches",
+	// #1717: the publish names the machine and session the same way, and the head its preview returned.
+	"coding_worktree_publish.runner_node": "list_runner_nodes",
+	"coding_worktree_publish.session_id": "coding_branches",
+	"coding_worktree_publish.expected_head": "coding_branches",
 	// The approval is read back with GET /coding/auto-stash and on the run timeline; the MCP surface returns it from the write itself.
 	"set_auto_stash.enabled": null,
 	// #613: terminal-tab selection is durable instance state, not ephemeral client state. The

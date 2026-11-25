@@ -117,6 +117,27 @@ describe("checkout strategy routes (#1714, #1713)", () => {
 		expect(existsSync(wt?.path ?? "")).toBe(true);
 	});
 
+	it("owner publish (#1717): previews by default and pushes nothing; executing needs the previewed head and no live engine", async () => {
+		const wt = startIsolatedCheckout(shared, root, { sessionId: S1, strategy: "isolated-direct", branch: "main" });
+		commit(wt?.path ?? "", "b.txt", "two\n");
+		const before = git(origin, "rev-parse", "main").trim();
+		const head = git(wt?.path ?? "", "rev-parse", "HEAD").trim();
+		const owner = "/coding/worktree-publish-owner";
+		for (const body of [{ sessionId: S1, expect: "direct" }, { sessionId: S1, expect: "direct", dryRun: true }]) {
+			expect(await call(owner, body)).toMatchObject({ ok: true, dryRun: true, mode: "direct", target: "main", head, commits: 1, uncommittedFiles: 0, published: false });
+		}
+		expect(git(origin, "rev-parse", "main").trim()).toBe(before);
+		// no head, a stale head, or a live engine: nothing is published
+		expect(await call(owner, { sessionId: S1, dryRun: false })).toMatchObject({ ok: false, reason: "stale_head" });
+		expect(await call(owner, { sessionId: S1, dryRun: false, expectedHead: "0".repeat(40) })).toMatchObject({ ok: false, reason: "stale_head" });
+		expect(await call(owner, { sessionId: S1, dryRun: false, expectedHead: head }, [R1])).toMatchObject({ ok: false, reason: "session_live" });
+		expect(git(origin, "rev-parse", "main").trim()).toBe(before);
+		// the same publish the automatic path makes (mode check included)
+		expect(await call(owner, { sessionId: S1, dryRun: false, expectedHead: head, expect: "pr" })).toMatchObject({ ok: false, reason: "mode_mismatch" });
+		expect(await call(owner, { sessionId: S1, dryRun: false, expectedHead: head, expect: "direct" })).toMatchObject({ ok: true, mode: "direct" });
+		expect(git(origin, "rev-parse", "main").trim()).toBe(head);
+	});
+
 	it("answers `isolated: false` for a session with no managed worktree, and touches nothing", async () => {
 		expect(await call("/coding/worktree-publish", { sessionId: S1 })).toEqual({ isolated: false });
 		expect(await call("/coding/worktree-finish", { sessionId: S1 })).toEqual({ isolated: false });

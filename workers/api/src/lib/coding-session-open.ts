@@ -376,6 +376,7 @@ export async function startSessionOnRunner(
 			ghScope: repo.githubRepo ? [repo.githubRepo] : undefined,
 			env: engineEnv,
 			strategy: strategyForRunner(repo.strategy), // #1708: isolated repos only; nothing new is sent for shared/direct
+			trackShellEdits: repo.strategy === "shared-direct" ? true : undefined, // #1717: only an explicit shared-direct repo; absent = unchanged
 		});
 		// #1714: an isolated repository whose runner did not isolate is said so and stopped, not silently run in the shared checkout.
 		const notIsolated = opts?.freshOpen ? notIsolatedRefusal(repo, started, conn.runnerNode) : null;

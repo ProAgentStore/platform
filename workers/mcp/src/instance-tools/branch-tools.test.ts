@@ -108,18 +108,22 @@ describe.each([
 });
 
 // #1709: the owner's two endings for a run.
-describe("coding_branches preview discard_worktree", () => {
+describe.each([
+	["discard_worktree", "discard"],
+	["publish_worktree", "publish"],
+])("coding_branches preview %s", (preview, sub) => {
 	it("is a read-scope GET for the session's worktree and needs the machine and the session", async () => {
 		const { calls, run } = setup({ scopes: ["read"] });
-		expect(JSON.parse((await run("coding_branches", { ...base, preview: "discard_worktree" })).content[0].text).error).toMatch(/needs both/);
+		expect(JSON.parse((await run("coding_branches", { ...base, preview })).content[0].text).error).toMatch(/needs both/);
 		expect(calls).toHaveLength(0);
-		await run("coding_branches", { ...base, preview: "discard_worktree", session_id: "csess_x" });
-		expect(calls).toEqual([{ method: "GET", body: null, url: "https://api.test/v1/instances/i1/coding/repos/r1/worktrees/discard?runner_node=Macmini.modem&session_id=csess_x" }]);
+		await run("coding_branches", { ...base, preview, session_id: "csess_x" });
+		expect(calls).toEqual([{ method: "GET", body: null, url: `https://api.test/v1/instances/i1/coding/repos/r1/worktrees/${sub}?runner_node=Macmini.modem&session_id=csess_x` }]);
 	});
 });
 
 describe.each([
 	["coding_worktree_discard", { ...base, session_id: "csess_x", expected_head: TIP }, "/v1/instances/i1/coding/repos/r1/worktrees/discard", { runner_node: "Macmini.modem", session_id: "csess_x", expected_head: TIP, dry_run: false }],
+	["coding_worktree_publish", { ...base, session_id: "csess_x", expected_head: TIP }, "/v1/instances/i1/coding/repos/r1/worktrees/publish", { runner_node: "Macmini.modem", session_id: "csess_x", expected_head: TIP, dry_run: false }],
 	["coding_run_abandon", { instance_id: "i1", run_id: "run-1" }, "/v1/instances/i1/coding/runs/run-1/abandon", {}],
 ])("%s", (tool, args, path, sent) => {
 	it("is refused without the destructive scope or the exact confirm, before any network call", async () => {

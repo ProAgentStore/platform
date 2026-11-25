@@ -4,6 +4,7 @@
  *   POST /coding/admit-checkout   read-only: is a SHARED checkout clean enough to start a run in? Names the blocking paths; touches nothing.
  *   POST /coding/worktrees        the managed worktrees of one repository, run-attributed: edits held, published or not, live or not.
  *   POST /coding/worktree-publish publish an isolated session's work — `publishDirect` or `publishRunBranch`, by what the worktree was cut as.
+ *   POST /coding/worktree-publish-owner  the owner's publish of a run that ended by hand: previews by default, executes only with the previewed head.
  *   POST /coding/worktree-finish  remove that session's worktree, only when clean AND its publication reads back (`removeCleanWorktree`).
  *
  * Every one is addressed by repo (`repoId` / `workDir`) and, for the last two, `sessionId` (its uuid is the worktree's run id — the same
@@ -21,7 +22,9 @@ import { runIdForSession } from "./isolated-start.js";
 import { admitSharedCheckout } from "./park-snapshot.js";
 import { isPublished, publishDirect, publishRunBranch, reconcileWorktrees, removeCleanWorktree, repoKey, verifyManaged, worktreeStatus, type ReconcileReport } from "./run-worktree.js";
 
-const PATHS = new Set(["/coding/admit-checkout", "/coding/worktrees", "/coding/worktree-publish", "/coding/worktree-finish"]);
+/** The OWNER'S publish of a run that ended by hand (#1717). Its own path, not a flag on `/coding/worktree-publish`: a runner that predates it 404s here, where it would have ignored a flag and published. */
+const OWNER_PUBLISH = "/coding/worktree-publish-owner";
+const PATHS = new Set(["/coding/admit-checkout", "/coding/worktrees", "/coding/worktree-publish", "/coding/worktree-finish", OWNER_PUBLISH]);
 const RUN_DIR = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** How many blocking / held paths one answer names; the count is always the whole count. */
 const NAMED = 20;
@@ -59,8 +62,29 @@ export async function handleIsolatedRoute(method: string, path: string, deps: Is
 	// pushes to its target and a direct one never opens a branch (#1713).
 	const expect = str("expect");
 	if (expect && expect !== (pr ? "pr" : "direct")) return { body: { isolated: true, runId, ok: false, sha: null, reason: "mode_mismatch", error: `this worktree was cut for ${pr ? "a pull request" : "a direct push"}, but the repository is now set to ${expect === "pr" ? "pull requests" : "direct push"}; nothing was published` } };
+	// The owner's publish (#1717): previews unless `dryRun` is exactly false, and never under a live engine or onto a moved head.
+	if (path === OWNER_PUBLISH) {
+		const st = worktreeStatus(repoDir, deps.root, runId);
+		if (!st) return { body: { isolated: false } };
+		if (deps.liveRunIds().has(runId)) return { body: { isolated: true, runId, ok: false, sha: null, reason: "session_live", error: "That run's engine is still running in this worktree. End or abandon the run first; nothing was published." } };
+		const expected = str("expectedHead");
+		if (b.dryRun === false && (!expected || expected.toLowerCase() !== st.head.toLowerCase())) return { body: { isolated: true, runId, ok: false, sha: null, reason: "stale_head", head: st.head, error: "The worktree's HEAD is not the one previewed; nothing was published. Preview again." } };
+		if (b.dryRun !== false) {
+			return { body: { isolated: true, runId, ok: true, dryRun: true, mode: pr ? "pr" : "direct", target: m.marker.target, branch: m.marker.branch, head: st.head, commits: commitsAhead(st.path, m.marker.base), uncommittedFiles: st.files.length, uncommitted: st.files.slice(0, NAMED).map((l) => l.slice(3)), published: isPublished(repoDir, deps.root, runId, { fetch: false }).published } };
+		}
+	}
 	const r = pr ? publishRunBranch(repoDir, deps.root, runId) : publishDirect(repoDir, deps.root, runId, { lockWaitMs: 10_000 });
 	return { body: { isolated: true, runId, mode: pr ? "pr" : "direct", target: m.marker.target, branch: m.marker.branch, base: m.marker.base, ...r } };
+}
+
+/** How many commits the run added on top of the commit its worktree was cut from; null when git cannot say. */
+function commitsAhead(worktree: string, base: string | undefined): number | null {
+	if (!base) return null;
+	try {
+		return Number(execFileSync("git", ["rev-list", "--count", `${base}..HEAD`], { cwd: worktree, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim());
+	} catch {
+		return null;
+	}
 }
 
 /** Every managed worktree of this repository, attributed to its run: what it holds, whether it is published, whether its run is live. */

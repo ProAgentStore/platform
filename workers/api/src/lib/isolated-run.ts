@@ -51,15 +51,40 @@ type Published = {
 
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
+/** What a publication did, for a caller that reports it (the owner's action) rather than only recording a line. */
+export interface PublishOutcome {
+	line: string;
+	/** The run's commits reached the target (direct) or its run branch (pr), read back by the runner. */
+	published: boolean;
+	mode?: "direct" | "pr";
+	sha?: string | null;
+	/** A refusal the runner named (`stale_head`, `session_live`, `dirty`, `target_moved`, ...). */
+	reason?: string;
+	pr?: { number: number; url: string; existed?: boolean };
+	/** The worktree was removed after the read-back. */
+	removed?: boolean;
+}
+
+export type PublishInput = { instanceId: string; userId: string; sessionId: string; repo: CodingRepo; objective?: string; runId?: string | null };
+
 /**
  * Publish an isolated run's work and, once that reads back, remove its worktree. Returns the sentence it recorded, or null when this
  * run has nothing isolated (shared/direct repository, an older runner, no worktree). Never throws: the run's verdict does not depend on it.
  */
-export async function publishIsolatedRun(
-	env: Env,
-	conn: RunnerConn,
-	input: { instanceId: string; userId: string; sessionId: string; repo: CodingRepo; objective?: string; runId?: string | null },
-): Promise<string | null> {
+export async function publishIsolatedRun(env: Env, conn: RunnerConn, input: PublishInput): Promise<string | null> {
+	return (await publishRun(env, conn, input))?.line ?? null;
+}
+
+/**
+ * The same publication, as the OWNER asks for it on a run they ended by hand (#1717): same read-back, same direct-or-PR choice from the stored
+ * preset, same removal only after the read-back. It additionally names the head the owner previewed (a moved head refuses) and asks the
+ * runner (its own `/coding/worktree-publish-owner`, which an older runner 404s rather than misreads) to refuse a live engine. Owner routes only; no agent tool reaches it.
+ */
+export async function ownerPublishRun(env: Env, conn: RunnerConn, input: PublishInput & { expectedHead: string }): Promise<PublishOutcome | null> {
+	return publishRun(env, conn, input, { expectedHead: input.expectedHead });
+}
+
+async function publishRun(env: Env, conn: RunnerConn, input: PublishInput, owner?: { expectedHead: string }): Promise<PublishOutcome | null> {
 	const { repo } = input;
 	if (!strategyForRunner(repo.strategy)) return null;
 	const expect = repo.strategy === "isolated-pr" ? "pr" : "direct";
@@ -67,21 +92,22 @@ export async function publishIsolatedRun(
 	const machineId = await machineIdForNode(env, input.instanceId, input.userId, conn.runnerNode ?? "").catch(() => null);
 	const checkout = machineId ? await getCheckout(env, input.instanceId, input.userId, repo.id, machineId).catch(() => null) : null;
 	const where = { sessionId: input.sessionId, repoId: repo.id, workDir: effectiveWorkdir(checkout, repo.workdir) || undefined };
-	const say = async (line: string): Promise<string> => {
+	const say = async (line: string, extra: Omit<PublishOutcome, "line" | "published"> & { published?: boolean } = {}): Promise<PublishOutcome> => {
 		await appendTimeline(env, { sessionId: input.sessionId, instanceId: input.instanceId, userId: input.userId, type: "system", content: line }).catch(() => undefined);
-		return line;
+		return { line, published: false, ...extra };
 	};
 	try {
-		const p = await callRunner<Published>(conn, "/coding/worktree-publish", { ...where, expect }).catch(() => null);
+		const p = await callRunner<Published>(conn, owner ? "/coding/worktree-publish-owner" : "/coding/worktree-publish", { ...where, expect, ...(owner ? { dryRun: false, expectedHead: owner.expectedHead } : {}) }).catch(() => null);
 		if (p?.isolated !== true) return null;
 		if (!p.ok) {
-			return say(`This run's work was NOT published (${p.reason ?? "refused"}${p.error ? `: ${p.error}` : ""}). It stays in its own worktree on the machine, untouched — nothing was pushed and nothing was deleted.`);
+			return say(`This run's work was NOT published (${p.reason ?? "refused"}${p.error ? `: ${p.error}` : ""}). It stays in its own worktree on the machine, untouched — nothing was pushed and nothing was deleted.`, { reason: p.reason ?? "refused" });
 		}
 		const sha = p.sha ? p.sha.slice(0, 8) : "the run's commit";
 		let line: string;
+		let pr: PublishOutcome["pr"];
 		if (p.mode === "pr") {
 			const title = clip(`${(input.objective ?? "").split("\n")[0]?.trim() || "Coder run"}`, 120);
-			const pr = repo.githubRepo
+			const opened = repo.githubRepo
 				? await openRunPullRequest(env, input.userId, {
 						githubRepo: repo.githubRepo,
 						head: p.branch ?? "",
@@ -90,15 +116,16 @@ export async function publishIsolatedRun(
 						body: `Opened for review by a ProAgentStore coding run${input.runId ? ` (\`${input.runId}\`)` : ""} on \`${p.branch}\` at ${sha}.\n\nThe repository is set to publish through pull requests, so nothing was pushed to \`${p.target}\`.`,
 					})
 				: ({ ok: false, error: "the repository has no GitHub coordinates" } as const);
-			if (!pr.ok) return say(`The run's branch \`${p.branch}\` (${sha}) was pushed, but its pull request could not be opened: ${pr.error}. The worktree is kept; the branch is on the remote.`);
-			line = `Opened pull request #${pr.number} for review (${pr.url}) from \`${p.branch}\` at ${sha}${pr.existed ? " — it was already open" : ""}.`;
+			if (!opened.ok) return say(`The run's branch \`${p.branch}\` (${sha}) was pushed, but its pull request could not be opened: ${opened.error}. The worktree is kept; the branch is on the remote.`, { published: true, mode: "pr", sha: p.sha });
+			pr = { number: opened.number, url: opened.url, existed: opened.existed };
+			line = `Opened pull request #${opened.number} for review (${opened.url}) from \`${p.branch}\` at ${sha}${opened.existed ? " — it was already open" : ""}.`;
 		} else {
 			line = `Published ${sha} to \`${p.target}\` (read back from the remote).`;
 		}
 		const done = await callRunner<{ removed?: boolean; refused?: string }>(conn, "/coding/worktree-finish", where).catch(() => null);
-		return say(done?.removed ? `${line} Its worktree was removed.` : `${line} Its worktree was kept${done?.refused ? ` (${done.refused})` : ""}.`);
+		return say(done?.removed ? `${line} Its worktree was removed.` : `${line} Its worktree was kept${done?.refused ? ` (${done.refused})` : ""}.`, { published: true, mode: p.mode, sha: p.sha, pr, removed: done?.removed === true });
 	} catch (e) {
-		return say(`Publishing this run's isolated work failed (${e instanceof Error ? clip(e.message, 160) : "unknown error"}). It stays in its own worktree, untouched.`).catch(() => null);
+		return say(`Publishing this run's isolated work failed (${e instanceof Error ? clip(e.message, 160) : "unknown error"}). It stays in its own worktree, untouched.`);
 	}
 }
 

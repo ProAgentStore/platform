@@ -223,6 +223,8 @@ const ROUTES = [
 	"POST /:instanceId/coding/runs/:runId/abandon",
 	"GET /:instanceId/coding/repos/:repoId/worktrees/discard",
 	"POST /:instanceId/coding/repos/:repoId/worktrees/discard",
+	"GET /:instanceId/coding/repos/:repoId/worktrees/publish",
+	"POST /:instanceId/coding/repos/:repoId/worktrees/publish",
 	"GET /:instanceId/coding/repos/:repoId/pulls",
 	"GET /:instanceId/coding/repos/:repoId/pulls/:number",
 	"GET /:instanceId/coding/timeline",
@@ -353,6 +355,9 @@ const OWNERSHIP: Record<string, string[]> = {
 		"POST /:instanceId/coding/runs/:runId/abandon",
 		"GET /:instanceId/coding/repos/:repoId/worktrees/discard",
 		"POST /:instanceId/coding/repos/:repoId/worktrees/discard",
+		// The owner's publish of a run they ended by hand (#1717).
+		"GET /:instanceId/coding/repos/:repoId/worktrees/publish",
+		"POST /:instanceId/coding/repos/:repoId/worktrees/publish",
 	],
 	// The PR surface (#401) — the two routes that read pull requests and attribute them to agent
 	// runs. Its own module for the same reason the others are: one answerable question per file.

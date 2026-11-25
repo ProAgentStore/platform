@@ -4,7 +4,7 @@ import MarkdownText from "../../components/MarkdownText";
 import { useCallback, useEffect, useState } from "react";
 import { objectiveCardKey, postBoardOrder } from "../../lib/boardOrder";
 import { api } from "@proagentstore/sdk/client";
-import { abandonRun, discardRunWorktree } from "../../lib/runEndings";
+import { abandonRun, discardRunWorktree, publishRunWorktree } from "../../lib/runEndings";
 import { loopStopControl, type LoopPhase } from "../../lib/loopStopState";
 import { canContinueRun, continueBody, endingLabel, previewLines, type ContinuePreview } from "../../lib/loopContinue";
 import { activityLabel, isOpen, runActivity, type RunHealth } from "../../lib/workInFlight";
@@ -184,6 +184,15 @@ export default function LoopRunsPanel({ instanceId, onReport }: PanelProps) {
 		setBusy(false);
 	};
 
+	/** Publish an ended run's isolated checkout, previewed on its machine first (#1717). */
+	const publish = async (sessionId: string) => {
+		setBusy(true);
+		setMsg("");
+		const out = await publishRunWorktree(instanceId, sessionId, (t) => window.confirm(t)).catch((e) => (e instanceof Error ? e.message : String(e)));
+		if (out) setMsg(out);
+		setBusy(false);
+	};
+
 	/**
 	 * Carry a stopped run's objective onto a fresh run (#806 item 3(c)).
 	 *
@@ -328,6 +337,11 @@ export default function LoopRunsPanel({ instanceId, onReport }: PanelProps) {
 									<span className={`text-xs font-semibold ${TONE[r.status] ?? "text-muted"}`}>
 										{endingLabel(r)}
 									</span>
+									{r.sessionId && (
+										<button type="button" disabled={busy} onClick={() => void publish(r.sessionId as string)} title="Publish this run's isolated checkout the way a finished run would (previews first)" className="text-xs underline text-muted hover:text-accent" data-testid="loop-publish-ended">
+											Publish checkout
+										</button>
+									)}
 									{r.sessionId && (
 										<button type="button" disabled={busy} onClick={() => void discard(r.sessionId as string)} title="Remove this run's isolated checkout on its machine (previews first)" className="text-xs underline text-muted hover:text-accent" data-testid="loop-discard-ended">
 											Discard checkout

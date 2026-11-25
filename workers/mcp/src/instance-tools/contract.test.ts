@@ -629,6 +629,7 @@ const TABLE: Record<string, Row> = {
 	coding_stash_drop: ["branchTools", "destructive", "coding_stash_drop", "envelope", "confirm,dry_run,instance_id,repo_id,runner_node,sha,token"],
 	coding_run_abandon: ["branchTools", "destructive", "coding_run_abandon", "envelope", "confirm,dry_run,instance_id,run_id,token"],
 	coding_worktree_discard: ["branchTools", "destructive", "coding_worktree_discard", "envelope", "confirm,dry_run,expected_head,instance_id,repo_id,runner_node,session_id,token"],
+	coding_worktree_publish: ["branchTools", "destructive", "coding_worktree_publish", "envelope", "confirm,dry_run,expected_head,instance_id,repo_id,runner_node,session_id,token"],
 	discard_checkout: ["machineControl", "destructive", "discard_checkout", "envelope", "confirm,dry_run,instance_id,label,pull,repo_id,runner_node,token"],
 	set_auto_stash: ["machineControl", "write", null, "envelope", "dry_run,enabled,instance_id,token"],
 	actions_runner_setup: ["machineControl", "runtime", null, "envelope", "action,dry_run,instance_id,runner_group,scope,service_mode,token"],

@@ -24,6 +24,7 @@ import type { Env } from "../types.js";
 import { RESUME_WINDOW_MS, describeAge } from "./coding-session-continuity.js";
 import { startSessionOnRunnerConn, type RelaunchInput } from "./coding-session-relaunch.js";
 import { strategyForRunner } from "./checkout-strategy.js";
+import { notIsolatedRefusal } from "./isolated-run.js";
 import { seedBriefForRepo } from "./coding-seed-brief.js";
 import { claimSessionDriver, getRepo, reassignSessionNode } from "./coding-store.js";
 import { describeOwner, describeRepoHolder, releaseStaleActiveSessions, repoFreeForRun, runnerEngineProbe } from "./coding-ownership.js";
@@ -177,12 +178,20 @@ export async function relaunchAfterPark(
 	env: Env,
 	conn: RunnerConn,
 	input: RelaunchInput & { clientType?: string; repoName: string; driverId?: string; parkedForMs: number },
-): Promise<{ resumed: boolean; line: string }> {
+): Promise<{ resumed: boolean; line: string } | { blocked: string }> {
 	if (input.driverId) await claimSessionDriver(env, input.instanceId, input.userId, input.sessionId, input.driverId).catch(() => false);
 	const engine = input.clientType ?? "claude";
 	const why = engine !== "claude" ? `the ${engine} engine has no conversation to continue` : input.parkedForMs > RESUME_WINDOW_MS ? `it was parked ${describeAge(input.parkedForMs)}, past the ${describeAge(RESUME_WINDOW_MS)} window for continuing a conversation` : null;
 	const seed = await seedBriefForRepo(env, { instanceId: input.instanceId, userId: input.userId, repoId: input.repoId, repoName: input.repoName }).catch(() => "");
 	const started = await startSessionOnRunnerConn(env, conn, { ...input, fresh: why !== null, seed: seed || undefined });
+	// #1717: the same check a fresh open makes. An isolated repository whose runner brought the engine up WITHOUT a worktree (an older runner, or
+	// a restart that lost it) would resume in the shared checkout the repository is set not to use; stop it instead, and say so.
+	const repo = await getRepo(env, input.instanceId, input.userId, input.repoId).catch(() => null);
+	const notIsolated = repo ? notIsolatedRefusal(repo, started, conn.runnerNode) : null;
+	if (notIsolated) {
+		await callRunner(conn, "/coding/end", { sessionId: input.sessionId }).catch(() => undefined);
+		return { blocked: notIsolated };
+	}
 	if (started?.resumed === true) return { resumed: true, line: "The coding engine continued its own conversation." };
 	return { resumed: false, line: `The coding engine started fresh (${why ?? "its saved conversation was not on the machine"}), briefed from this repository's record.` };
 }
@@ -384,7 +393,9 @@ export async function resumeFromPark(
 	if (!("ok" in held)) return held;
 	let engine: { resumed: boolean; line: string };
 	try {
-		engine = await relaunchAfterPark(env, here, input);
+		const relaunched = await relaunchAfterPark(env, here, input);
+		if ("blocked" in relaunched) return relaunched;
+		engine = relaunched;
 	} catch (e) {
 		// No machine to bring the engine back on: let go again and wait, rather than resume without its base re-synced and its work back.
 		await env.DB.prepare("UPDATE coding_sessions SET status = 'suspended', updated_at = datetime('now') WHERE id = ?1 AND status = 'active'").bind(input.sessionId).run();

@@ -51,14 +51,17 @@ function changes(workDir: string): string[] {
 	return git(workDir, ["status", "--porcelain=v1", "--untracked-files=all"]).split("\n").filter(Boolean);
 }
 
-/** The changed PATHS (no status letters), rename targets included — what ownership is judged on (#1547). */
+/** The changed PATHS (no status letters), rename targets AND sources included — what ownership is judged on (#1547). A rename moved both. */
 export function dirtyPaths(workDir: string): string[] {
 	const out: string[] = [];
 	const parts = git(workDir, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]).split("\0").filter(Boolean);
 	for (let i = 0; i < parts.length; i++) {
 		const entry = parts[i];
 		out.push(entry.slice(3));
-		if (entry[0] === "R" || entry[0] === "C") i++; // the next field is the rename's source path
+		if (entry[0] === "R" || entry[0] === "C") {
+			const source = parts[++i]; // the next field is the rename's source path
+			if (source) out.push(source);
+		}
 	}
 	return out;
 }
@@ -164,7 +167,13 @@ function parkOwned(workDir: string, runId: string, owned: readonly string[]): Pa
 	const unowned = dirty.filter((p) => !want.has(p));
 	const extra = unowned.length ? { unowned } : {};
 	if (mine.length === 0) return { snapshot: null, files: 0, clean: unowned.length === 0, ref: null, pushed: null, ...extra };
-	git(workDir, ["stash", "push", "--include-untracked", "-m", parkMessage(runId), "--", ...mine]);
+	// Every dirty path is the run's: no pathspec is needed, and none could name a rename's deleted source (git refuses a pathspec that
+	// matches neither the index nor the tree). A mixed tree names its own paths; if git cannot, nothing is touched and the park refuses (#1717).
+	try {
+		git(workDir, ["stash", "push", "--include-untracked", "-m", parkMessage(runId), ...(unowned.length ? ["--", ...mine] : [])]);
+	} catch {
+		return { snapshot: null, files: 0, clean: false, ref: null, pushed: null, unowned: dirty, conflict: "ownership_unknown" };
+	}
 	const mineEntry = git(workDir, ["stash", "list", "--format=%H %s"]).split("\n").filter(Boolean).find((l) => l.endsWith(parkMessage(runId)));
 	if (!mineEntry) throw new InspectError("the stash entry for this park was not found after saving it; nothing was released");
 	const snapshot = mineEntry.split(" ")[0];

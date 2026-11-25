@@ -100,6 +100,8 @@ export interface StartCodingInput {
 	 * at the latest `branch` commit. Absent (an older cloud, or a repository that chose nothing) means the repository's own folder, as always.
 	 */
 	strategy?: string;
+	/** Attribute the files the engine's shell commands change (#1717). Sent only for an explicit shared-direct repository; absent (an older cloud) tracks nothing. */
+	trackShellEdits?: boolean;
 }
 
 /**
@@ -600,6 +602,7 @@ export class CodingRuntime {
 				fresh: input.fresh === true,
 				seed: input.seed,
 				ghScope: input.ghScope,
+				trackShellEdits: input.trackShellEdits === true,
 				bin: input.bin,
 				cleanup: this.cleanup,
 			});

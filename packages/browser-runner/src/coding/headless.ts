@@ -1,4 +1,5 @@
 import { editedPathFromToolUse } from "./edited-paths.js";
+import { ShellEditTracker } from "./shell-edits.js";
 import { InputLedger } from "./input-ledger.js";
 import { type RecordAck, RecordBuffer, type RecordCursor } from "./record-cursor.js";
 import type { CleanupManager } from "./cleanup.js";
@@ -118,6 +119,8 @@ export interface HeadlessSessionConfig {
 	ghScope?: string[];
 	/** Override where the generated `gh` guard is written (tests). Defaults to the runner's config dir. */
 	ghGuardRoot?: string;
+	/** Attribute the files this session's shell commands change (#1717), as park ownership evidence. Sent by the cloud for an explicit shared-direct repository only. */
+	trackShellEdits?: boolean;
 }
 
 type Run = "idle" | "thinking";
@@ -267,6 +270,8 @@ export class HeadlessSession {
 	private readonly records = new RecordBuffer<EngineUsageRecord, EngineActRecord>();
 	/** Repo-relative files the Engine itself wrote this session (#1714): the ownership evidence a shared-checkout park accepts. */
 	readonly editedPaths = new Set<string>();
+	/** Attributes the files this session's shell commands changed (#1717); present only when the cloud asked (an explicit shared-direct repository). */
+	private readonly shellEdits: ShellEditTracker | null;
 	/**
 	 * Acts whose `tool_result` has not come back yet, keyed by the engine's `tool_use` id.
 	 *
@@ -409,6 +414,7 @@ export class HeadlessSession {
 
 	constructor(readonly config: HeadlessSessionConfig) {
 		this.engineLabel = `${config.clientType}:${config.id}`;
+		this.shellEdits = config.trackShellEdits ? new ShellEditTracker(config.workDir, this.editedPaths) : null;
 		// `pas mcp-auth exec -- codex …` (#1006): spawn the wrapper, but drive the engine after `--`.
 		const parsed = parseCommand(config.command);
 		const { prefix, bin, args } = unwrapLauncher(parsed.bin, parsed.args);
@@ -1062,6 +1068,7 @@ export class HeadlessSession {
 				if (ev.id) this.toolNames.set(ev.id, ev.name);
 				this.noteAct(ev.block);
 				this.noteEdit(ev.name, ev.input);
+				this.shellEdits?.begin(ev.id, ev.input);
 				break;
 			case "tool_result": {
 				// `""` when the call was not seen (a pane that began mid-turn, a runner restart):
@@ -1070,6 +1077,7 @@ export class HeadlessSession {
 				this.toolNames.delete(ev.toolUseId);
 				this.push(renderToolResult(toolResultMark(ev.block), ev.content, tool)); // ↳✓ / ↳✗ (#597)
 				this.settleAct(ev.block);
+				this.shellEdits?.end(ev.toolUseId);
 				break;
 			}
 			case "engine_error":
@@ -1102,6 +1110,7 @@ export class HeadlessSession {
 				// never saw whether it worked" is a materially different claim from silence, and
 				// silence is what a supervisor would read as "it did nothing".
 				this.flushAwaitingActs();
+				this.shellEdits?.clear();
 				this.toolNames.clear(); // no further result is coming for anything still named here
 				this.run = "idle"; // the turn is OVER — a fact, not a guess
 				break;
