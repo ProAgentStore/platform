@@ -74,6 +74,10 @@ export type CodingRunEvent =
 	| "coding.run.provider_fallback_outcome"
 	/** The run ended and the session's original model was put back, so no later run inherits the fallback (#1392). */
 	| "coding.run.provider_fallback_restored"
+	/** The engine's AI subscription is spent (out of funds or at its limit) and the session switched to the owner's next configured engine (#1621). */
+	| "coding.run.engine_fallback"
+	/** A fallback chain was configured and every subscription in it is spent: the owner was alerted (#1621). */
+	| "coding.run.engine_fallback_exhausted"
 	/** The run reached a terminal state. Carries the outcome and the stop reason. */
 	| "coding.run.end";
 

@@ -446,3 +446,12 @@ the platform's Workers AI binding (`byokBrainCall` → `runUserWorkersAi`). If t
 configured, the model call fails and the brain declines. The question moves to `escalated`, and the
 owner gets an alert and an issue comment, so a person answers it instead of the brain. This is pinned
 by `lib/coder-brain-byok.test.ts`.
+
+## Falling back to the next AI subscription (#1621)
+
+A preset may name another preset in `fallbackId` (`PUT /v1/instances/:id/coding/engines`, each engine `{ id, label, command, auth?, fallbackId? }`). When a run's engine reports its subscription spent, the run switches to that preset instead of ending or parking.
+
+- **Detection is the existing one** (`lib/engine-provider-error.ts`, #1326): a `billing` verdict (no credit or quota, which used to end the run `engine_error`) or a `limit` verdict (a usage window, which used to park the run until it reset). `lib/engine-fallback.ts` `quotaStop` reads the run result; transient provider failures are not a spent subscription and keep their own retry ladder.
+- **The switch** (`workflows/coding-session/pause-effects.ts` `switchEngine`): the session's launch command and client type are rewritten, the engine is ended and started on the next preset, and the Pilot is told to resend. The chain is followed once per preset per run (a cycle ends). When the run ends the session's own engine is put back, so the next run tries the primary subscription again.
+- **Logged**: the thread says which subscription ran out and which took over, and the run trace carries `coding.run.engine_fallback`.
+- **Alerted**: when a chain was configured and every subscription in it is spent, `coding.run.engine_fallback_exhausted` is traced and the owner gets an alert notification. A preset with no `fallbackId` behaves exactly as before.

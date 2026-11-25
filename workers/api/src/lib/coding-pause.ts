@@ -31,6 +31,7 @@ import {
 import { type ProviderRetryPolicy, retrySchedule, sayWait } from "./provider-retry.js";
 import type { LoopStopReason } from "./agent-loop.js";
 import { clipMarked } from "./clip-marked.js";
+import { fallBackToNextEngine } from "./engine-fallback.js";
 import { ASK_QUESTION_FULL_MAX, type AskPart } from "./coding-ask.js";
 import type { CapSummary, CodingOutcome, CodingResult } from "./coding-loop.js";
 import { type DeepLink, deepLinkFor } from "./console-links.js";
@@ -90,6 +91,12 @@ export interface PauseDeps {
 	 * command takes no model flag, the session already runs that model, the restart failed — and nothing was changed. Absent: no fallback is possible.
 	 */
 	switchModel?: (model: string) => Promise<{ ok: true; from: string | null } | { ok: false; why: string }>;
+	/**
+	 * Switch THIS session to the next AI subscription (#1621): the next preset on the current preset's `fallbackId` chain that this run has not used
+	 * (`tried`), the session's command and client type rewritten and its engine restarted on it. `exhausted` is true when a chain was configured and has
+	 * nothing left (the owner is alerted); false when none was configured. Absent: no fallback is possible.
+	 */
+	switchEngine?: (tried: string[]) => Promise<{ ok: true; fromId: string; from: string; to: string } | { ok: false; exhausted: boolean; labels: string[]; why: string }>;
 	/** Write one structured provider-retry fact to the run's durable trace (#1391). Absent: nothing is recorded (a test, an old caller). */
 	trace?: (name: string, message: string, data: Record<string, unknown>) => Promise<void>;
 	/** Repo label, for the notification body. */
@@ -267,6 +274,8 @@ export async function resolvePause(
 	input: { round: number; result: CodingResult; state: EngineWaitState },
 ): Promise<PauseVerdict> {
 	const { result } = input;
+	const fellBack = await fallBackToNextEngine(deps, input);
+	if (fellBack) return fellBack;
 	if (result.outcome === "waiting") return waitForEngineReset(deps, input);
 	if (result.outcome === "needs_reauth") return waitForSignIn(deps, input);
 	if (result.outcome === "max_steps") return waitForIterationApproval(deps, input);

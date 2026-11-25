@@ -16,7 +16,9 @@ import { askAnnouncement, whyBeyond } from "../../lib/coding-ask.js";
 import { clipMarked } from "../../lib/clip-marked.js";
 import { traceCodingRun, type CodingRunEvent } from "../../lib/coding-run-trace.js";
 import { readLoopLimits } from "../../lib/loop-limits-store.js";
-import { commandEngineParts } from "../../lib/coding-command.js";
+import { commandEngineParts, deriveClientType } from "../../lib/coding-command.js";
+import { engineFor, readEngines } from "../../lib/coding-engines.js";
+import { nextFallbackEngine } from "../../lib/engine-fallback.js";
 import { modelFlagEngine, readEngineModel, writeEngineModel } from "../../lib/coding-engine-model.js";
 import { type ProviderRetryPolicy, resolveProviderRetry } from "../../lib/provider-retry.js";
 import { codingQuestionSource } from "../../lib/coding-question-source.js";
@@ -26,7 +28,8 @@ import type { CodingGoal } from "../../lib/coding-loop.js";
 import { callRunner, getRunnerConnIgnoringLiveness, type RunnerConn } from "../../lib/runner-client.js";
 import type { RunStep } from "../../lib/runner-availability.js";
 import type { ObjectiveDelivery } from "../../lib/coding-objective-delivery.js";
-import { getSession, setSessionLaunchCommand, touchSessionActivity, touchSessionDriver } from "../../lib/coding-store.js";
+import { getSession, setSessionEngine, setSessionLaunchCommand, touchSessionActivity, touchSessionDriver } from "../../lib/coding-store.js";
+import type { CodingEngine } from "../../lib/coding-engines.js";
 import type { PauseDeps } from "../../lib/coding-pause.js";
 import { setCodingSessionCardStatus } from "../../lib/coding-board.js";
 import { normalizeRunnerNode } from "../../lib/runtime-nodes.js";
@@ -90,6 +93,8 @@ export function makePauseEffects(ctx: PauseEffectsCtx): PauseEffects {
 	/** The session's launch command before the run switched its model (#1392), or null when it never did. Set from a JOURNALLED read, so a replay agrees. */
 	let originalCommand: string | null = null;
 	let switchedTo: string | null = null;
+	/** The session's client type before the run switched ENGINE (#1621), put back with the command at the end of the run. */
+	let originalClientType: string | null = null;
 	/** The `coder_questions` row that park's answer is read from (#1075); null for a takeover with no question. */
 	let parkedQuestionId: string | null = null;
 	/** Resume attempts on a park (#1077): each its own step, since a busy checkout is a retry, not a journalled answer. */
@@ -135,6 +140,38 @@ export function makePauseEffects(ctx: PauseEffectsCtx): PauseEffects {
 			}
 			switchedTo = model;
 			return { ok: true, from };
+		},
+		// The next AI subscription (#1621): the session's command AND client type rewritten to the next preset on the fallback chain, the engine ended and
+		// started on it. Journalled like the model switch above, and a failed restart (a refused API-key preset, no runner) puts the old engine back.
+		switchEngine: async (tried) => {
+			const read = (await runRetry(`efb-read-${round}`, async () => {
+				const [sess, view] = await Promise.all([getSession(env, instanceId, userId, sessionId), readEngines(env, instanceId, userId)]);
+				return { cmd: sess?.launchCommand ?? null, clientType: sess?.clientType ?? null, engines: view.engines };
+			})) as { cmd: string | null; clientType: string | null; engines: CodingEngine[] };
+			const cur = read.cmd ? engineFor(read.engines, read.cmd) : undefined;
+			if (!read.cmd || !read.clientType || !cur) return { ok: false, exhausted: false, labels: [], why: "the session's engine is not one of the instance's presets" };
+			const next = nextFallbackEngine(read.engines, cur.id, tried);
+			const labels = [...tried.map((id) => read.engines.find((e) => e.id === id)?.label ?? id), cur.label];
+			if (!next) return { ok: false, exhausted: tried.length > 0 || !!cur.fallbackId, labels, why: cur.fallbackId ? "its fallback chain has nothing left" : "no fallback is configured" };
+			const clientType = deriveClientType(next.command);
+			try {
+				await runRetry(`efb-set-${round}`, async () => {
+					await setSessionEngine(env, instanceId, userId, sessionId, next.command, clientType);
+					return null;
+				});
+				originalCommand ??= read.cmd;
+				originalClientType ??= read.clientType;
+				await runRetry(`efb-end-${round}`, () => callRunner(getConn(), "/coding/end", { sessionId }));
+				getObjective()?.replaced();
+				goal.clientType = clientType;
+				await runRetry(`efb-start-${round}`, () => startOnRunner());
+			} catch (e) {
+				goal.clientType = read.clientType as typeof goal.clientType;
+				await setSessionEngine(env, instanceId, userId, sessionId, read.cmd, read.clientType).catch(() => undefined);
+				return { ok: false, exhausted: false, labels, why: `the restart on ${next.label} failed: ${e instanceof Error ? clipMarked(e.message, 200, { within: true }) : String(e)}` };
+			}
+			switchedTo = next.label;
+			return { ok: true, fromId: cur.id, from: cur.label, to: next.label };
 		},
 		// One structured fact on the run's durable trace, once however often the park replays (#1391).
 		trace: async (name, message, data) => {
@@ -293,7 +330,8 @@ export function makePauseEffects(ctx: PauseEffectsCtx): PauseEffects {
 			const original = originalCommand;
 			const model = switchedTo;
 			await runRetry("fallback-restore", async () => {
-				await setSessionLaunchCommand(env, instanceId, userId, sessionId, original);
+				if (originalClientType) await setSessionEngine(env, instanceId, userId, sessionId, original, originalClientType);
+				else await setSessionLaunchCommand(env, instanceId, userId, sessionId, original);
 				if (endEngine) await callRunner(getConn(), "/coding/end", { sessionId }).catch(() => undefined);
 				await traceCodingRun(env, { userId, instanceId, sessionId, runId: loopRunId ?? null, repo: goal.repo, cardId }, "coding.run.provider_fallback_restored", `The session's model was put back to ${readEngineModel(original) ?? "the default"} after the fallback ${model ?? ""}.`, {
 					attempt: 0, fallbackModel: model, restoredTo: readEngineModel(original), endedEngine: endEngine,

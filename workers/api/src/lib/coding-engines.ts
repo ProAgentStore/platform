@@ -167,6 +167,8 @@ export interface CodingEngine {
 	label: string;
 	command: string;
 	auth?: EngineAuth;
+	/** The preset to switch a run to when this one's subscription is out of funds or at its limit (#1621). Another preset's id; absent = no fallback. */
+	fallbackId?: string;
 }
 
 

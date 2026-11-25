@@ -144,6 +144,8 @@ export interface EngineWaitState {
 	transientWaits?: number;
 	/** The run's one model fallback, once it has happened (#1392): what it left, what it switched to, and how the first model fared. Absent until then. */
 	fallback?: FallbackRecord;
+	/** Ids of the engine presets this run has already run on and found spent (#1621), so a fallback chain never loops back. */
+	enginesTried?: string[];
 }
 
 /** The first model's whole story, kept so the run's ending can show the full chain of attempts (#1392). */

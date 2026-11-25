@@ -513,6 +513,14 @@ export async function setSessionLaunchCommand(env: Env, instanceId: string, user
 	return (r.meta?.changes ?? 0) > 0;
 }
 
+/** Switch a session to another engine (#1621): its launch command and its client type together, since the runner's env and turn handling follow the type. */
+export async function setSessionEngine(env: Env, instanceId: string, userId: string, sessionId: string, command: string, clientType: string): Promise<boolean> {
+	const r = await env.DB.prepare("UPDATE coding_sessions SET launch_command = ?4, client_type = ?5, updated_at = datetime('now') WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3")
+		.bind(sessionId, instanceId, userId, command, clientType)
+		.run();
+	return (r.meta?.changes ?? 0) > 0;
+}
+
 export async function getSession(env: Env, instanceId: string, userId: string, sessionId: string): Promise<CodingSessionRecord | null> {
 	const row = await env.DB.prepare(
 		"SELECT * FROM coding_sessions WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3",

@@ -69,6 +69,7 @@ export function registerSessionOpenRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		// Sanitize: id (slug), label, command are all required; cap the count + lengths.
 		const seen = new Set<string>();
 		const engines: CodingEngine[] = [];
+		const fallbacks = new Map<string, string>();
 		for (const e of raw.slice(0, 12) as Array<Record<string, unknown>>) {
 			const label = String(e.label ?? "").trim().slice(0, 60);
 			const command = String(e.command ?? "").trim().slice(0, 400);
@@ -81,6 +82,12 @@ export function registerSessionOpenRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 			seen.add(id);
 			const auth = ENGINE_AUTHS.has(e.auth as EngineAuth) ? (e.auth as EngineAuth) : undefined;
 			engines.push(auth && auth !== "auto" ? { id, label, command, auth } : { id, label, command });
+			if (typeof e.fallbackId === "string" && e.fallbackId.trim()) fallbacks.set(id, e.fallbackId.trim());
+		}
+		// Fallback (#1621): kept only when it names ANOTHER preset in this save, so a rename or delete never leaves a dangling pointer.
+		for (const e of engines) {
+			const to = fallbacks.get(e.id);
+			if (to && to !== e.id && engines.some((x) => x.id === to)) e.fallbackId = to;
 		}
 		if (!engines.length) throw new HttpError(400, "At least one engine with a label and command is required.");
 		const defaultEngineId = engines.some((e) => e.id === body.defaultEngineId) ? String(body.defaultEngineId) : engines[0].id;
