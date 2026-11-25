@@ -11,6 +11,34 @@ on:
       - "scripts/lib/appshell-navigation*"
       - "packages/cli/src/background*"
       - ".github/workflows/cross-os.yml"
+      - "scripts/lib/portable-command.test.mjs"
+      - "scripts/lib/test-full-launcher.test.mjs"
+      - "packages/browser-runner/src/coding/inspect.test.ts"
+      - "scripts/lib/fail-before.test.mjs"
+      - "workers/api/src/lib/status-domain-guard.test.ts"
+      - "workers/api/src/lib/status-domain.test.ts"
+      - "packages/browser-runner/src/coding/runtime.test.ts"
+      - "packages/cli/src/runner-lock.test.ts"
+      - "store/console/src/lib/designTokens.test.ts"
+      - "workers/api/src/lib/console-links.test.ts"
+      - "packages/cli/src/windows-process-start.test.ts"
+      - "workers/api/src/host-template-capture.test.ts"
+      - "packages/browser-runner/src/coding/push-guard.test.ts"
+      - "packages/browser-runner/src/coding/secret-file.test.ts"
+      - "scripts/lib/worker-test-deps.test.mjs"
+      - "packages/browser-runner/src/coding/repo-clone-job.test.ts"
+      - "packages/browser-runner/src/coding/tmux-connector.test.ts"
+      - "workers/api/src/lib/delegation-budget.test.ts"
+      - "workers/api/src/lib/engine-machine-login-refresh.test.ts"
+      - "workers/api/src/lib/tmux-coder-seed.test.ts"
+      - "workers/api/src/lib/pipelines/seed-drift.test.ts"
+      - "workers/api/src/lib/agent-claims-lint.test.ts"
+      - "store/console/src/lib/toolLiterals.test.ts"
+      - "packages/browser-runner/src/coding/cleanup.test.ts"
+      - "scripts/lib/worker-test-deps.mjs"
+      - "scripts/test-full.mjs"
+      - "scripts/lib/portable-command.mjs"
+      - "vitest.config.ts"
   workflow_dispatch:
 
 permissions:
@@ -35,6 +63,26 @@ jobs:
         run: pnpm exec vitest run --project integration packages/browser-runner/src/coding/run-worktree.test.ts packages/browser-runner/src/coding/run-worktree-paths.test.ts packages/browser-runner/src/coding/worktree-routes.test.ts packages/browser-runner/src/coding/git-guard.test.ts packages/browser-runner/src/coding/gh-guard.test.ts packages/browser-runner/src/coding/stashes.test.ts packages/browser-runner/src/coding/branches.test.ts
       - name: AppShell CLI entry point and CLI background paths (#1653)
         run: pnpm exec vitest run scripts/lib/appshell-navigation.test.mjs packages/cli/src/background.test.ts
+      - name: #1647 portable command resolution and the full-suite launcher
+        if: success() || failure()
+        run: pnpm exec vitest run scripts/lib/portable-command.test.mjs scripts/lib/test-full-launcher.test.mjs
+      - name: #1648 inspect traversal guard, fail-before, CRLF migration parser
+        if: success() || failure()
+        run: pnpm exec vitest run packages/browser-runner/src/coding/inspect.test.ts scripts/lib/fail-before.test.mjs workers/api/src/lib/status-domain-guard.test.ts workers/api/src/lib/status-domain.test.ts
+      - name: #1649 runtime repo clone, runner lock paths, design tokens, console links
+        if: success() || failure()
+        run: pnpm exec vitest run packages/browser-runner/src/coding/runtime.test.ts packages/cli/src/runner-lock.test.ts store/console/src/lib/designTokens.test.ts workers/api/src/lib/console-links.test.ts
+      - name: #1650 PID identity, template imports, SSH push guard, secret file
+        if: success() || failure()
+        run: pnpm exec vitest run packages/cli/src/windows-process-start.test.ts workers/api/src/host-template-capture.test.ts packages/browser-runner/src/coding/push-guard.test.ts packages/browser-runner/src/coding/secret-file.test.ts scripts/lib/worker-test-deps.test.mjs
+      - name: Install tmux so the #1651 tmux tests run instead of skipping
+        run: brew install tmux
+      - name: #1651 clone errors, tmux, delegation budget, login refresh, seed scanners
+        if: success() || failure()
+        run: pnpm exec vitest run packages/browser-runner/src/coding/repo-clone-job.test.ts packages/browser-runner/src/coding/tmux-connector.test.ts workers/api/src/lib/delegation-budget.test.ts workers/api/src/lib/engine-machine-login-refresh.test.ts workers/api/src/lib/tmux-coder-seed.test.ts workers/api/src/lib/pipelines/seed-drift.test.ts
+      - name: #1652 claims seed scanner, tool literals, socket temp dirs
+        if: success() || failure()
+        run: pnpm exec vitest run workers/api/src/lib/agent-claims-lint.test.ts store/console/src/lib/toolLiterals.test.ts packages/browser-runner/src/coding/cleanup.test.ts
 
   windows:
     runs-on: windows-2022  # pinned, never -latest (#1266; scripts/check-workflow-runner.mjs reads this line, so no matrix)
@@ -51,3 +99,26 @@ jobs:
         run: pnpm exec vitest run --project integration packages/browser-runner/src/coding/run-worktree.test.ts packages/browser-runner/src/coding/run-worktree-paths.test.ts packages/browser-runner/src/coding/worktree-routes.test.ts packages/browser-runner/src/coding/git-guard.test.ts packages/browser-runner/src/coding/gh-guard.test.ts packages/browser-runner/src/coding/stashes.test.ts packages/browser-runner/src/coding/branches.test.ts
       - name: AppShell CLI entry point and CLI background paths (#1653)
         run: pnpm exec vitest run scripts/lib/appshell-navigation.test.mjs packages/cli/src/background.test.ts
+      - name: #1647 portable command resolution and the full-suite launcher
+        if: success() || failure()
+        run: pnpm exec vitest run scripts/lib/portable-command.test.mjs scripts/lib/test-full-launcher.test.mjs
+      - name: #1648 inspect traversal guard, fail-before, CRLF migration parser
+        if: success() || failure()
+        run: pnpm exec vitest run packages/browser-runner/src/coding/inspect.test.ts scripts/lib/fail-before.test.mjs workers/api/src/lib/status-domain-guard.test.ts workers/api/src/lib/status-domain.test.ts
+      - name: #1649 runtime repo clone, runner lock paths, design tokens, console links
+        if: success() || failure()
+        run: pnpm exec vitest run packages/browser-runner/src/coding/runtime.test.ts packages/cli/src/runner-lock.test.ts store/console/src/lib/designTokens.test.ts workers/api/src/lib/console-links.test.ts
+      - name: #1650 PID identity, template imports, SSH push guard, secret file
+        if: success() || failure()
+        run: pnpm exec vitest run packages/cli/src/windows-process-start.test.ts workers/api/src/host-template-capture.test.ts packages/browser-runner/src/coding/push-guard.test.ts packages/browser-runner/src/coding/secret-file.test.ts scripts/lib/worker-test-deps.test.mjs
+      - name: #1651 clone errors, tmux (MSYS2 tmux, appended to PATH), delegation budget, login refresh, seed scanners
+        if: success() || failure()
+        shell: pwsh
+        run: |
+          C:\msys64\usr\bin\pacman.exe -S --noconfirm tmux
+          $env:PATH = "$env:PATH;C:\msys64\usr\bin"
+          tmux -V
+          pnpm exec vitest run packages/browser-runner/src/coding/repo-clone-job.test.ts packages/browser-runner/src/coding/tmux-connector.test.ts workers/api/src/lib/delegation-budget.test.ts workers/api/src/lib/engine-machine-login-refresh.test.ts workers/api/src/lib/tmux-coder-seed.test.ts workers/api/src/lib/pipelines/seed-drift.test.ts
+      - name: #1652 claims seed scanner, tool literals, socket temp dirs
+        if: success() || failure()
+        run: pnpm exec vitest run workers/api/src/lib/agent-claims-lint.test.ts store/console/src/lib/toolLiterals.test.ts packages/browser-runner/src/coding/cleanup.test.ts
