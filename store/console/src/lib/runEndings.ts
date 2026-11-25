@@ -56,6 +56,12 @@ export interface PublishPreview {
 	error?: string;
 }
 
+export interface PublishDone {
+	ok?: boolean;
+	line?: string;
+	error?: string;
+}
+
 /** What the confirmation shows: where it goes, how many commits, and what will NOT be published. Pure. */
 export function publishPrompt(p: NonNullable<PublishPreview["result"]>): string {
 	const commits = typeof p.commits === "number" ? `${p.commits} commit${p.commits === 1 ? "" : "s"}` : "this run's commits";
@@ -82,7 +88,7 @@ export async function publishRunWorktree(instanceId: string, sessionId: string, 
 	if (p.published) return "This run's commits are already on the remote; nothing to publish.";
 	if (!confirmFn(publishPrompt(p))) return null;
 	try {
-		const done = await api<{ ok?: boolean; line?: string; error?: string }>(base, { method: "POST", body: JSON.stringify({ runner_node: session.runnerNode, session_id: sessionId, dry_run: false, expected_head: p.head }) });
+		const done = await api<PublishDone>(base, { method: "POST", body: JSON.stringify({ runner_node: session.runnerNode, session_id: sessionId, dry_run: false, expected_head: p.head }) });
 		return done.line ?? (done.ok ? "Published." : (done.error ?? "The machine did not publish it."));
 	} catch (e) {
 		return e instanceof Error ? e.message : String(e);
