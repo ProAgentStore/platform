@@ -4,6 +4,11 @@ name: Windows full suite
 # uploaded as an artifact so the failures can be triaged by root cause without re-running.
 on:
   workflow_dispatch:
+    inputs:
+      args:
+        description: "Extra vitest arguments, e.g. a path filter (workers/api) or --project integration. Empty runs everything."
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -14,7 +19,7 @@ env:
 jobs:
   windows-full:
     runs-on: windows-2022  # pinned, never -latest (#1266; scripts/check-workflow-runner.mjs reads this line, so no matrix)
-    timeout-minutes: 90
+    timeout-minutes: 300  # the whole suite is ~2.5h on a windows-2022 runner (1632 files); dispatch with `args` to split it
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -31,11 +36,17 @@ jobs:
           (cd store/console && npx vite build)
           (cd store/admin && npx vite build)
       - name: Unit + integration tests (verdict from the JSON report, #920)
-        run: pnpm test:full
+        shell: bash
+        env:
+          VITEST_ARGS: ${{ inputs.args }}
+        # Console output is also kept as an artifact: the JSON report is only written when vitest finishes.
+        run: |
+          mkdir -p test-results
+          pnpm test:full $VITEST_ARGS 2>&1 | tee test-results/console.log
       - name: Upload the JSON report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-vitest-report
+          name: windows-vitest-report-${{ github.run_id }}
           path: test-results/
           if-no-files-found: warn
