@@ -13,6 +13,8 @@ import { installationTokenForOwner } from "./github-app.js";
 import type { Env } from "../types.js";
 
 const SEGMENT = /^[A-Za-z0-9._-]+$/;
+/** GitHub answers in well under this; a hung call must not hold the run's end step open. */
+const DEADLINE_MS = 15_000;
 
 const headers = (token: string) => ({
 	Authorization: `token ${token}`,
@@ -31,14 +33,14 @@ export async function openRunPullRequest(env: Env, userId: string, input: { gith
 	if (!token) return { ok: false, error: `no GitHub App installation covers ${owner}, so the pull request could not be opened` };
 	const base = `https://api.github.com/repos/${owner}/${name}`;
 	try {
-		const res = await fetch(`${base}/pulls`, { method: "POST", headers: headers(token), body: JSON.stringify({ title: input.title.slice(0, 250), head: input.head, base: input.base, body: input.body.slice(0, 60_000) }) });
+		const res = await fetch(`${base}/pulls`, { method: "POST", signal: AbortSignal.timeout(DEADLINE_MS), headers: headers(token), body: JSON.stringify({ title: input.title.slice(0, 250), head: input.head, base: input.base, body: input.body.slice(0, 60_000) }) });
 		if (res.ok) {
 			const pr = (await res.json()) as { number?: number; html_url?: string };
 			return typeof pr.number === "number" && pr.html_url ? { ok: true, number: pr.number, url: pr.html_url, existed: false } : { ok: false, error: "GitHub accepted the pull request but did not say which one" };
 		}
 		if (res.status === 422) {
 			// Most likely "a pull request already exists for <head>": look it up rather than fail a replay.
-			const found = await fetch(`${base}/pulls?state=open&head=${encodeURIComponent(`${owner}:${input.head}`)}&base=${encodeURIComponent(input.base)}&per_page=1`, { headers: headers(token) });
+			const found = await fetch(`${base}/pulls?state=open&head=${encodeURIComponent(`${owner}:${input.head}`)}&base=${encodeURIComponent(input.base)}&per_page=1`, { headers: headers(token), signal: AbortSignal.timeout(DEADLINE_MS) });
 			if (found.ok) {
 				const [pr] = (await found.json()) as Array<{ number?: number; html_url?: string }>;
 				if (pr && typeof pr.number === "number" && pr.html_url) return { ok: true, number: pr.number, url: pr.html_url, existed: true };
