@@ -385,6 +385,8 @@ describe("promotion is a human action", () => {
 			// #1142 `coding_repo_mirror`: POST to the mirror sub-route, which takes no body at all — it
 			// clones what a binding already names onto the instance's machines and cannot carry a policy.
 			`/v1/instances/$\{instance_id}/coding/repos/$\{encodeURIComponent(repo_id)}/mirror`,
+			// #1692 `get_instance_instructions` with `repo_id`: a GET of the effective playbook — read-only free text, no body.
+			`/v1/instances/$\{instance_id}/coding/repos/$\{encodeURIComponent(repo_id)}/playbook`,
 			// The per-repo path, added at #692 for `coding_repo_remove` — the counterpart
 			// `coding_repo_add` never had, without which a binding created by automation could only
 			// be removed by a human in the console. It is reachable ONLY with DELETE, which the next
