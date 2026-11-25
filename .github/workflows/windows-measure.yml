@@ -1,0 +1,71 @@
+name: Windows measure
+# Diagnostics on a real Windows runner (#1726, #1727): where real-schema tests spend their time, and what holds a temp directory.
+# Manual dispatch ONLY, like windows-full-suite.yml, so it can never stop a deploy.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  measure:
+    runs-on: windows-2022  # pinned, never -latest (#1266; scripts/check-workflow-runner.mjs reads this line, so no matrix)
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      FILES: workers/api/src/routes/history-retrieval.test.ts workers/api/src/lib/release-note-queue.test.ts workers/api/src/lib/runner-update-ops.test.ts workers/api/src/workflows/coding-session/workflow-run.test.ts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: git config --global core.autocrlf false
+      - run: pnpm install --frozen-lockfile
+      - name: Runner
+        shell: pwsh
+        run: |
+          node -e "const os=require('node:os');console.log(os.cpus().length+' cpus, '+Math.round(os.totalmem()/2**30)+' GiB, tmp '+os.tmpdir())"
+          Get-PhysicalDisk | Format-Table -AutoSize | Out-String
+          Get-Volume | Format-Table -AutoSize | Out-String
+          Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled, AntivirusEnabled, BehaviorMonitorEnabled, IoavProtectionEnabled | Format-List | Out-String
+          (Get-MpPreference).ExclusionPath
+      - name: Phase micro-benchmark (no Defender change)
+        run: node scripts/bench-real-schema.mjs
+      - name: Real-schema files, current setting (synchronous OFF, journal DELETE)
+        run: |
+          SECONDS=0
+          PAGS_D1_SYNC=OFF PAGS_D1_JOURNAL=DELETE pnpm exec vitest run --project unit $FILES --reporter=verbose 2>&1 | tail -60
+          echo "WALL current: ${SECONDS}s"
+      - name: Real-schema files, synchronous OFF + journal WAL
+        run: |
+          SECONDS=0
+          PAGS_D1_SYNC=OFF PAGS_D1_JOURNAL=WAL pnpm exec vitest run --project unit $FILES --reporter=verbose 2>&1 | tail -60
+          echo "WALL off+wal: ${SECONDS}s"
+      - name: Real-schema files, fsync left on (synchronous FULL, journal DELETE)
+        run: |
+          SECONDS=0
+          PAGS_D1_SYNC=FULL PAGS_D1_JOURNAL=DELETE pnpm exec vitest run --project unit $FILES --reporter=verbose --testTimeout=900000 --hookTimeout=900000 2>&1 | tail -60
+          echo "WALL full+delete: ${SECONDS}s"
+      - name: Real-schema files, fsync left on + journal WAL
+        run: |
+          SECONDS=0
+          PAGS_D1_SYNC=FULL PAGS_D1_JOURNAL=WAL pnpm exec vitest run --project unit $FILES --reporter=verbose --testTimeout=900000 --hookTimeout=900000 2>&1 | tail -60
+          echo "WALL full+wal: ${SECONDS}s"
+      - name: Defender exclusion for temp and workspace, then the current setting again
+        shell: pwsh
+        run: |
+          Add-MpPreference -ExclusionPath $env:TEMP, $env:GITHUB_WORKSPACE, $env:RUNNER_TEMP
+          Add-MpPreference -ExclusionProcess node.exe
+          "Exclusions: " + ((Get-MpPreference).ExclusionPath -join ", ")
+          node scripts/bench-real-schema.mjs
+          $env:PAGS_D1_SYNC = "OFF"; $env:PAGS_D1_JOURNAL = "DELETE"
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          pnpm exec vitest run --project unit $env:FILES.Split(" ") --reporter=verbose 2>&1 | Select-Object -Last 60
+          "WALL defender-excluded current: $($sw.Elapsed.TotalSeconds)s"

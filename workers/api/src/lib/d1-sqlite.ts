@@ -88,7 +88,8 @@ export function migrationSchemaDb(): DatabaseSync {
  * statement fsyncs, which a Windows CI disk is slow at: history-retrieval.test.ts (1,200 rows inserted one by one) timed out at 120s there
  * (#1723; fsync is the suspected cause, not measured). The statements, their results and the schema are unchanged.
  */
-const NO_FSYNC = "PRAGMA synchronous = OFF";
+// MEASUREMENT KNOBS (#1726), removed once the numbers are in.
+const NO_FSYNC = `PRAGMA synchronous = ${process.env.PAGS_D1_SYNC ?? "OFF"}; PRAGMA journal_mode = ${process.env.PAGS_D1_JOURNAL ?? "DELETE"}`;
 
 /** Shared by `migrationSchemaDb` (`:memory:`) and the template builder (a real path). */
 function buildMigratedDb(location: string): DatabaseSync {
