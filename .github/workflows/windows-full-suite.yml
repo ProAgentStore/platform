@@ -19,7 +19,7 @@ env:
 jobs:
   windows-full:
     runs-on: windows-2022  # pinned, never -latest (#1266; scripts/check-workflow-runner.mjs reads this line, so no matrix)
-    timeout-minutes: 300  # the whole suite is ~2.5h on a windows-2022 runner (1632 files); dispatch with `args` to split it
+    timeout-minutes: 120  # the whole suite (1632 files) took ~27 min here once the test databases stopped fsyncing; `args` splits it
     steps:
       - uses: actions/checkout@v4
         with:

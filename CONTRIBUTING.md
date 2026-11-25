@@ -73,6 +73,11 @@ configured distribution); shell-dependent fixtures must verify the executable th
 Missing optional shells are reported as skipped, and `PAGS_REQUIRE_SHELLS` retains CI's
 requirement that those checks run. Skipped tests do not prove the missing capability.
 
+The whole suite runs on a real Windows runner with the manually dispatched workflow `Windows full suite`
+(`.github/workflows/windows-full-suite.yml`, never on push, never a deploy dependency); it uploads the JSON
+report and console log. Pass `args` to split it (a path filter, or `--exclude`). The checkout is LF on every OS
+(`.gitattributes`), and the job sets `core.autocrlf=false` because tests compare what git writes byte for byte.
+
 The `scripts/fail-before.mjs` apply/restore helper remains POSIX-only: native Windows
 cannot preserve its exact permission-bit contract. Windows calls refuse before changing
 files or recovery journals; restore still requires the original repository identity in a
