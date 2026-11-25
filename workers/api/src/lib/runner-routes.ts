@@ -81,6 +81,8 @@ export const RUNNER_ROUTES: Readonly<Record<string, RunnerRoute>> = {
 	"/coding/branch-integrate": once(),
 	"/coding/branch-delete": once(),
 	"/coding/stash-drop": once(),
+	// The owner's discard of one run's isolated worktree (#1709): destructive, so a repeat after an unknown outcome is the caller's call.
+	"/coding/worktree-discard": once(),
 	"/coding/park-snapshot": once(),
 	"/coding/park-restore": once(),
 	"/coding/clone": once(),

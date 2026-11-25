@@ -4,6 +4,7 @@ import MarkdownText from "../../components/MarkdownText";
 import { useCallback, useEffect, useState } from "react";
 import { objectiveCardKey, postBoardOrder } from "../../lib/boardOrder";
 import { api } from "@proagentstore/sdk/client";
+import { abandonRun, discardRunWorktree } from "../../lib/runEndings";
 import { loopStopControl, type LoopPhase } from "../../lib/loopStopState";
 import { canContinueRun, continueBody, endingLabel, previewLines, type ContinuePreview } from "../../lib/loopContinue";
 import { activityLabel, isOpen, runActivity, type RunHealth } from "../../lib/workInFlight";
@@ -36,6 +37,8 @@ type LoopRun = {
 	maxIterations: number;
 	/** A stop the server accepted but the run has not reached yet (#376) — see lib/loopStopState.ts. */
 	cancelRequested?: boolean;
+	/** The run's session: what its isolated checkout is addressed by (#1709). */
+	sessionId?: string | null;
 	/**
 	 * The platform's own verdict, sent by `GET /loop` (#589).
 	 *
@@ -155,6 +158,29 @@ export default function LoopRunsPanel({ instanceId, onReport }: PanelProps) {
 		} catch (e) {
 			setMsg(e instanceof Error ? e.message : String(e));
 		}
+		setBusy(false);
+	};
+
+	/** The owner's decision that a run is over: its questions are cleared and nothing can resume it (#1709). */
+	const abandon = async (runId: string) => {
+		if (!window.confirm("Abandon this run? It stops, its open questions are cleared, and nothing can resume it. Its work in the repository is not touched.")) return;
+		setBusy(true);
+		setMsg("");
+		try {
+			await abandonRun(instanceId, runId);
+			await load();
+		} catch (e) {
+			setMsg(e instanceof Error ? e.message : String(e));
+		}
+		setBusy(false);
+	};
+
+	/** Remove one run's isolated checkout after a preview on its machine (#1709). */
+	const discard = async (sessionId: string) => {
+		setBusy(true);
+		setMsg("");
+		const out = await discardRunWorktree(instanceId, sessionId, (t) => window.confirm(t)).catch((e) => (e instanceof Error ? e.message : String(e)));
+		if (out) setMsg(out);
 		setBusy(false);
 	};
 
@@ -278,20 +304,35 @@ export default function LoopRunsPanel({ instanceId, onReport }: PanelProps) {
 						<div className="flex items-start justify-between gap-2">
 							<span className="text-sm min-w-0 truncate" title={plainMarkdown(r.objective)}>{plainMarkdown(r.objective)}</span>
 							{ctl.phase !== "ended" ? (
-								<Button
-									size="sm"
-									disabled={busy || !ctl.canStop}
-									onClick={() => stop(r.runId)}
-									title={ctl.hint ?? undefined}
-									className="whitespace-nowrap"
-								>
-									{ctl.actionLabel}
-								</Button>
+								<span className="flex items-center gap-1.5 shrink-0">
+									<Button
+										size="sm"
+										disabled={busy || !ctl.canStop}
+										onClick={() => stop(r.runId)}
+										title={ctl.hint ?? undefined}
+										className="whitespace-nowrap"
+									>
+										{ctl.actionLabel}
+									</Button>
+									<Button size="sm" variant="danger" disabled={busy} onClick={() => void abandon(r.runId)} title="End the run for good: clears its questions so nothing can resume it" className="whitespace-nowrap" data-testid="loop-abandon">
+										Abandon
+									</Button>
+									{r.sessionId && (
+										<Button size="sm" disabled={busy} onClick={() => void discard(r.sessionId as string)} title="Remove this run's isolated checkout on its machine (previews first)" className="whitespace-nowrap" data-testid="loop-discard">
+											Discard checkout
+										</Button>
+									)}
+								</span>
 							) : (
 								<span className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 min-w-0 max-w-[70%]">
 									<span className={`text-xs font-semibold ${TONE[r.status] ?? "text-muted"}`}>
 										{endingLabel(r)}
 									</span>
+									{r.sessionId && (
+										<button type="button" disabled={busy} onClick={() => void discard(r.sessionId as string)} title="Remove this run's isolated checkout on its machine (previews first)" className="text-xs underline text-muted hover:text-accent" data-testid="loop-discard-ended">
+											Discard checkout
+										</button>
+									)}
 									{/*
 									  * Offered only after an ending with no verdict (#806). The reason label stays
 									  * beside it: "Hit the step limit · Continue" is the sentence the owner needs,

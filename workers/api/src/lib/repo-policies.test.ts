@@ -379,6 +379,9 @@ describe("promotion is a human action", () => {
 			// #1012 `retarget_repository_binding`: POST to the retarget sub-route, whose body is a GitHub
 			// coordinate and version only — it cannot carry a policy (the route never reads one).
 			`/v1/instances/$\{encodeURIComponent(instance_id)}/coding/repos/$\{encodeURIComponent(repo_id)}/retarget`,
+			// #1709 `coding_worktree_discard`: POST to the worktree-discard sub-route, whose body is a machine, a session and a head — it
+			// cannot carry a policy (the route never reads one). Written out in full (not through `route()`) so the MCP parity check can read it.
+			`/v1/instances/$\{encodeURIComponent(instance_id)}/coding/repos/$\{encodeURIComponent(repo_id)}/worktrees/discard`,
 			// The COLLECTION — list repos, add a repo. Cannot carry a policy: the field is accepted
 			// only by the per-repo route below.
 			`/v1/instances/$\{instance_id}/coding/repos`,

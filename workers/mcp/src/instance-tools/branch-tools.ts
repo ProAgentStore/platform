@@ -5,7 +5,8 @@ import { audit, dryRun, requireConfirmation, requirePermission } from "../safety
 import type { InstanceToolsCtx } from "./shared.js";
 
 /**
- * Branches and stashes in a repo's checkout, on the machine that holds it (#1700, #1701).
+ * Branches and stashes in a repo's checkout, on the machine that holds it (#1700, #1701), and the owner's two endings for a run (#1709):
+ * abandon it, and discard its isolated worktree. Both are owner-only: no agent tool reaches them.
  *
  * The git is the runner's; the API route is `workers/api/src/routes/coding-branch-actions.ts`. Two shapes:
  *
@@ -21,7 +22,7 @@ import type { InstanceToolsCtx } from "./shared.js";
 export function registerBranchTools(server: McpServer, ctx: InstanceToolsCtx): void {
 	const { env, tokenFor, safetyFor } = ctx;
 	const tokenField = z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in.");
-	const route = (instance_id: string, repo_id: string, sub: "branches" | "branches/integrate" | "branches/delete" | "stashes" | "stashes/drop") => `/v1/instances/${encodeURIComponent(instance_id)}/coding/repos/${encodeURIComponent(repo_id)}/${sub}`;
+	const route = (instance_id: string, repo_id: string, sub: "branches" | "branches/integrate" | "branches/delete" | "stashes" | "stashes/drop" | "worktrees/discard") => `/v1/instances/${encodeURIComponent(instance_id)}/coding/repos/${encodeURIComponent(repo_id)}/${sub}`;
 	const common = {
 		token: tokenField,
 		instance_id: z.string().describe("Instance ID or slug"),
@@ -32,21 +33,28 @@ export function registerBranchTools(server: McpServer, ctx: InstanceToolsCtx): v
 
 	server.tool(
 		"coding_branches",
-		"List a repo's branches on the machine that holds its checkout (#1700): local branches (tip, upstream, ahead/behind its upstream and the default branch, default / protected / checked-out-in-which-work-tree, linked worktrees included) and the remote's heads. Remote heads are read LIVE (`ls-remote`) and marked `source: \"live\"`; tracking refs the remote no longer reports are `cached-only` and `cacheStale` marks a cache behind the remote — a cached ref is never presented as live. `protected.onRemote` is GitHub's answer, or null when it could not be read (`protectionKnown: false`); `protected.byName` is the conventional names (main, master, release/*...). With `compare: <branch>` it compares that branch against the default (freshly fetched): ahead/behind, the unique commits (50) and changed files (200) with totals. With `preview` it shows what integrating or deleting that branch would do — unique commits and files, the exact `tip` to pass back as `expected_tip`, the checks state, and the refusal that would apply — changing nothing. A machine that is offline, too old, or lacks access is named with a `reason`, never an empty list. Read-only.",
+		"List a repo's branches on the machine that holds its checkout (#1700): local branches (tip, upstream, ahead/behind its upstream and the default branch, default / protected / checked-out-in-which-work-tree, linked worktrees included) and the remote's heads. Remote heads are read LIVE (`ls-remote`) and marked `source: \"live\"`; tracking refs the remote no longer reports are `cached-only` and `cacheStale` marks a cache behind the remote — a cached ref is never presented as live. `protected.onRemote` is GitHub's answer, or null when it could not be read (`protectionKnown: false`); `protected.byName` is the conventional names (main, master, release/*...). With `compare: <branch>` it compares that branch against the default (freshly fetched): ahead/behind, the unique commits (50) and changed files (200) with totals. With `preview` it shows what integrating or deleting that branch would do (or, with `discard_worktree` and `session_id`, what discarding that run's isolated worktree would remove: the changed files and the exact `head` to pass back as `expected_head`) — unique commits and files, the exact `tip` to pass back as `expected_tip`, the checks state, and the refusal that would apply — changing nothing. A machine that is offline, too old, or lacks access is named with a `reason`, never an empty list. Read-only.",
 		{
 			...common,
 			runner_node: optionalNode,
 			compare: z.string().optional().describe("Branch to compare against the default branch."),
 			base: z.string().optional().describe("With compare: compare against this branch instead of the default."),
-			preview: z.enum(["integrate", "delete_local", "delete_remote"]).optional().describe("Preview that mutation for `branch` (read-only; nothing is changed). Needs runner_node."),
+			preview: z.enum(["integrate", "delete_local", "delete_remote", "discard_worktree"]).optional().describe("Preview that mutation for `branch` (read-only; nothing is changed). Needs runner_node. `discard_worktree` previews coding_worktree_discard for `session_id` instead of a branch."),
 			branch: z.string().optional().describe("The branch a preview is for."),
+			session_id: z.string().optional().describe("With preview `discard_worktree`: the session (csess_...) whose isolated worktree would be discarded."),
 		},
-		async ({ token, instance_id, repo_id, runner_node, compare, base: baseBranch, preview, branch }) => {
+		async ({ token, instance_id, repo_id, runner_node, compare, base: baseBranch, preview, branch, session_id }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const denied = await requirePermission(safetyFor(token), "read", "coding_branches", { instance_id, repo_id, runner_node, compare, preview, branch });
+			const denied = await requirePermission(safetyFor(token), "read", "coding_branches", { instance_id, repo_id, runner_node, compare, preview, branch, session_id });
 			if (denied) return denied;
 			const q = new URLSearchParams();
+			if (preview === "discard_worktree") {
+				if (!session_id || !runner_node) return jsonText({ error: "preview discard_worktree needs both `session_id` and `runner_node`" });
+				q.set("runner_node", runner_node);
+				q.set("session_id", session_id);
+				return jsonText(await authedCall(`${route(instance_id, repo_id, "worktrees/discard")}?${q}`, sessionToken, {}, env));
+			}
 			if (runner_node) q.set("runner_node", runner_node);
 			if (compare) q.set("compare", compare);
 			if (compare && baseBranch) q.set("base", baseBranch);
@@ -156,6 +164,59 @@ export function registerBranchTools(server: McpServer, ctx: InstanceToolsCtx): v
 			if (unconfirmed) return unconfirmed;
 			const data = (await authedCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify({ runner_node, sha, dry_run: false }) }, env)) as { error?: string };
 			await audit(safetyFor(token), { tool: "coding_stash_drop", action: data.error ? "failed" : "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"coding_run_abandon",
+		"Abandon a coding run: the owner's decision that this run is over (#1709). Stopping a run only asks it to stop; abandoning also clears what could resume it. Every question the run still holds is closed and marked used, so a parked question stops waiting, the brain and the minute sweep leave it alone, and an answer that arrives later is only recorded (`already_applied`), never acted on. The run is then asked to stop and its parked workflow woken; a parked run whose workflow is already gone is settled `cancelled` here. Idempotent, and on a run that already ended it only clears leftovers (`outcome: \"already_ended\"`). It never touches the run's worktree or branch: discard an isolated run's worktree separately with coding_worktree_discard. Owner only; an agent has no tool for this. Requires `confirm: \"coding_run_abandon\"`. `destructive` scope.",
+		{
+			token: tokenField,
+			instance_id: z.string().describe("Instance ID or slug"),
+			run_id: z.string().describe("The run id from coding_loop_status or coding_loop_start."),
+			confirm: z.string().optional().describe('Must be "coding_run_abandon".'),
+			dry_run: z.boolean().optional().describe("Describe the request without contacting anything."),
+		},
+		async ({ token, instance_id, run_id, confirm, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, run_id };
+			const denied = await requirePermission(safetyFor(token), "destructive", "coding_run_abandon", input);
+			if (denied) return denied;
+			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/coding/runs/${encodeURIComponent(run_id)}/abandon`;
+			if (dry_run) return dryRun(safetyFor(token), "coding_run_abandon", "abandon a run and clear what could resume it", input, { endpoint, method: "POST", effect: "Every unused question of the run would be closed and marked used, the run asked to stop and its parked workflow woken. Nothing in the repository is touched.", reversible: "No: the run cannot be resumed. Its work stays in the repository; start a new run for the objective." });
+			const unconfirmed = await requireConfirmation(safetyFor(token), "coding_run_abandon", confirm, "coding_run_abandon", input);
+			if (unconfirmed) return unconfirmed;
+			const data = (await authedCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify({}) }, env)) as { error?: string };
+			await audit(safetyFor(token), { tool: "coding_run_abandon", action: data.error ? "failed" : "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"coding_worktree_discard",
+		"Discard ONE run's isolated worktree on the machine that holds it (#1709, #1670): the owner's explicit decision to throw that run's uncommitted work away. Preview first with coding_branches `preview: \"discard_worktree\"` and `session_id`: it lists the changed files (untracked included) and the `head` to pass as `expected_head`. The machine removes only a worktree it can verify it manages (inside its managed root, listed by the repository, marked for that run), never the shared checkout and never another run's worktree. Nothing is committed. A commit that exists only in that worktree is first pinned on `refs/pags/discarded/<run>`, so it stays recoverable; the uncommitted files are not. Refused with a named `reason` for a worktree it does not manage (`not_managed`), a run whose engine is still running (`session_live`: abandon the run first), a moved head (`stale_head`) and a removal the repository declined (`refused`). Reads back that the worktree is gone and returns a receipt. Owner only; an agent has no tool for this. Requires `confirm: \"coding_worktree_discard\"`, `runner_node`, `session_id` and `expected_head`. `destructive` scope.",
+		{
+			...common,
+			runner_node: node,
+			session_id: z.string().describe("The session (csess_...) whose isolated worktree to discard; its uuid is the worktree's run id."),
+			expected_head: z.string().describe("The worktree's full 40-character HEAD SHA, as the preview returned it. A different current head refuses."),
+			confirm: z.string().optional().describe('Must be "coding_worktree_discard".'),
+			dry_run: z.boolean().optional().describe("Describe the request without contacting anything. For the machine's own preview use coding_branches preview discard_worktree."),
+		},
+		async ({ token, instance_id, repo_id, runner_node, session_id, expected_head, confirm, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, repo_id, runner_node, session_id, expected_head };
+			const denied = await requirePermission(safetyFor(token), "destructive", "coding_worktree_discard", input);
+			if (denied) return denied;
+			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/coding/repos/${encodeURIComponent(repo_id)}/worktrees/discard`;
+			if (dry_run) return dryRun(safetyFor(token), "coding_worktree_discard", "discard one run's isolated worktree", input, { endpoint, method: "POST", effect: "The machine would verify it manages that run's worktree, refuse a live engine or a moved head, pin any commit that exists only there, remove just that worktree and read back that it is gone. Nothing is committed.", reversible: "Committed work: yes, from refs/pags/discarded/<run>. Uncommitted files: no." });
+			const unconfirmed = await requireConfirmation(safetyFor(token), "coding_worktree_discard", confirm, "coding_worktree_discard", input);
+			if (unconfirmed) return unconfirmed;
+			const data = (await authedCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify({ runner_node, session_id, expected_head, dry_run: false }) }, env)) as { error?: string };
+			await audit(safetyFor(token), { tool: "coding_worktree_discard", action: data.error ? "failed" : "completed", input, result: data });
 			return jsonText(data);
 		},
 	);

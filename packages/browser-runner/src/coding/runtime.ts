@@ -422,6 +422,8 @@ export class CodingRuntime {
 		return this.parkWorkDir(input);
 	}
 
+	worktreeRoot = (): string => worktreeRootFor(this.reposBaseDir); // #1709: where this machine's managed per-run checkouts live
+
 	/** Stash or discard a checkout's local changes with a backup, then optionally fast-forward it (#1324, `checkout-clean.ts`). */
 	checkoutClean(input: { workDir?: string; repoId?: string; action: CheckoutCleanAction; label: string; pull?: boolean; branch?: string }) {
 		return cleanCheckout(this.parkWorkDir(input), input);

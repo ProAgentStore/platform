@@ -2,6 +2,7 @@ import { browserObservation } from "./browser-observation-routes.js";
 import { websiteAccessFromRequest } from "./website-access-request.js";
 import { withBrowserRequest } from "./browser-request.js";
 import { handleBranchRoute } from "./coding/branch-routes.js";
+import { handleWorktreeRoute } from "./coding/worktree-routes.js";
 import { handleCleanupRoute } from "./coding/cleanup-routes.js";
 import { readRecordAck } from "./coding/record-cursor.js";
 import { outgoing, redactPanesOf, secureTerminalRoute } from "./coding/pane-redact.js";
@@ -400,6 +401,8 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	try {
 		const branches = await handleBranchRoute(req.method ?? "GET", path, (i) => runner.coding.repoWorkDir(i), () => readJson<Record<string, unknown>>(req));
 		if (branches) return json(res, 200, branches.body);
+		const wt = await handleWorktreeRoute(req.method ?? "GET", path, runner.coding, () => readJson<Record<string, unknown>>(req)); // #1709
+		if (wt) return json(res, 200, wt.body);
 	} catch (e: unknown) {
 		return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
 	}

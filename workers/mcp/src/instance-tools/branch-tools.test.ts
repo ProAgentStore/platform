@@ -106,3 +106,51 @@ describe.each([
 		expect(s.events().some((e) => e.tool === tool && e.action === "completed")).toBe(false);
 	});
 });
+
+// #1709: the owner's two endings for a run.
+describe("coding_branches preview discard_worktree", () => {
+	it("is a read-scope GET for the session's worktree and needs the machine and the session", async () => {
+		const { calls, run } = setup({ scopes: ["read"] });
+		expect(JSON.parse((await run("coding_branches", { ...base, preview: "discard_worktree" })).content[0].text).error).toMatch(/needs both/);
+		expect(calls).toHaveLength(0);
+		await run("coding_branches", { ...base, preview: "discard_worktree", session_id: "csess_x" });
+		expect(calls).toEqual([{ method: "GET", body: null, url: "https://api.test/v1/instances/i1/coding/repos/r1/worktrees/discard?runner_node=Macmini.modem&session_id=csess_x" }]);
+	});
+});
+
+describe.each([
+	["coding_worktree_discard", { ...base, session_id: "csess_x", expected_head: TIP }, "/v1/instances/i1/coding/repos/r1/worktrees/discard", { runner_node: "Macmini.modem", session_id: "csess_x", expected_head: TIP, dry_run: false }],
+	["coding_run_abandon", { instance_id: "i1", run_id: "run-1" }, "/v1/instances/i1/coding/runs/run-1/abandon", {}],
+])("%s", (tool, args, path, sent) => {
+	it("is refused without the destructive scope or the exact confirm, before any network call", async () => {
+		const readOnly = setup({ scopes: ["read", "write", "runtime"] });
+		expect((await readOnly.run(tool, { ...args, confirm: tool })).content[0].text).toMatch(/destructive/i);
+		const s = setup();
+		await s.run(tool, args);
+		await s.run(tool, { ...args, confirm: "yes" });
+		expect(readOnly.calls).toHaveLength(0);
+		expect(s.calls).toHaveLength(0);
+	});
+
+	it("a dry run never touches the network", async () => {
+		const s = setup();
+		expect(JSON.parse((await s.run(tool, { ...args, dry_run: true })).content[0].text).dryRun).toBe(true);
+		expect(s.calls).toHaveLength(0);
+	});
+
+	it("with the confirm it POSTs the exact request and audits it", async () => {
+		const s = setup();
+		await s.run(tool, { ...args, confirm: tool });
+		expect(s.calls).toHaveLength(1);
+		expect(s.calls[0]).toMatchObject({ method: "POST", url: `https://api.test${path}` });
+		expect(JSON.parse(s.calls[0].body ?? "{}")).toEqual(sent);
+		expect(s.events().some((e) => e.tool === tool && e.action === "completed")).toBe(true);
+	});
+
+	it("audits a refusal as failed, not completed", async () => {
+		const s = setup({ status: 409, body: { ok: true, result: { ok: false, reason: "stale_head" } } });
+		await s.run(tool, { ...args, confirm: tool });
+		expect(s.events().some((e) => e.tool === tool && e.action === "failed")).toBe(true);
+		expect(s.events().some((e) => e.tool === tool && e.action === "completed")).toBe(false);
+	});
+});

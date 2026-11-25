@@ -136,6 +136,7 @@ const PARAMS: Record<string, string> = {
 	sessionId: "csess-1",
 	number: "7",
 	action: "stash",
+	runId: "run-1",
 };
 
 function concrete(pattern: string): string {
@@ -219,6 +220,9 @@ const ROUTES = [
 	"POST /:instanceId/coding/repos/:repoId/branches/integrate",
 	"POST /:instanceId/coding/repos/:repoId/branches/delete",
 	"POST /:instanceId/coding/repos/:repoId/stashes/drop",
+	"POST /:instanceId/coding/runs/:runId/abandon",
+	"GET /:instanceId/coding/repos/:repoId/worktrees/discard",
+	"POST /:instanceId/coding/repos/:repoId/worktrees/discard",
 	"GET /:instanceId/coding/repos/:repoId/pulls",
 	"GET /:instanceId/coding/repos/:repoId/pulls/:number",
 	"GET /:instanceId/coding/timeline",
@@ -343,6 +347,12 @@ const OWNERSHIP: Record<string, string[]> = {
 		"POST /:instanceId/coding/repos/:repoId/branches/integrate",
 		"POST /:instanceId/coding/repos/:repoId/branches/delete",
 		"POST /:instanceId/coding/repos/:repoId/stashes/drop",
+	],
+	// The owner's abandon of a run and discard of one run's isolated worktree (#1709).
+	"coding-run-actions.ts": [
+		"POST /:instanceId/coding/runs/:runId/abandon",
+		"GET /:instanceId/coding/repos/:repoId/worktrees/discard",
+		"POST /:instanceId/coding/repos/:repoId/worktrees/discard",
 	],
 	// The PR surface (#401) — the two routes that read pull requests and attribute them to agent
 	// runs. Its own module for the same reason the others are: one answerable question per file.

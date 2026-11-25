@@ -25,10 +25,13 @@ import type { Env } from "../types.js";
 /** The CLI release whose runner serves the branch and stash routes. Named in the refusal. */
 export const BRANCH_TOOLS_MIN_CLI = "0.4.252";
 
+/** The CLI release whose runner serves the owner's worktree discard (#1709). */
+export const WORKTREE_DISCARD_MIN_CLI = "0.4.255";
+
 /** Above the runner's own git timeouts (a live `ls-remote`, a fetch, a push) so a slow remote is reported, not cut off. */
 export const BRANCH_TIMEOUT_MS = 120_000;
 
-export type BranchRunnerPath = "/coding/branches" | "/coding/branch-integrate" | "/coding/branch-delete" | "/coding/stashes" | "/coding/stash-drop";
+export type BranchRunnerPath = "/coding/branches" | "/coding/branch-integrate" | "/coding/branch-delete" | "/coding/stashes" | "/coding/stash-drop" | "/coding/worktree-discard";
 
 export type BranchFailure = "no_repo" | "unreachable" | "unconfirmed" | "old_runner" | "refused" | "failed";
 
@@ -54,7 +57,7 @@ export async function callBranchRunner<T>(
 		return { ok: true, machine, repo: { id: repo.id, name: repo.name }, result };
 	} catch (e) {
 		const message = e instanceof Error ? e.message : String(e);
-		if (/→ 404|not found/i.test(message)) return { ok: false, reason: "old_runner", machine, error: runnerUpgradeClause({ what: "inspect or change this repo's branches and stashes", minCli: BRANCH_TOOLS_MIN_CLI, node: machine }) };
+		if (/→ 404|not found/i.test(message)) return { ok: false, reason: "old_runner", machine, error: input.path === "/coding/worktree-discard" ? runnerUpgradeClause({ what: "discard a run's isolated worktree", minCli: WORKTREE_DISCARD_MIN_CLI, node: machine }) : runnerUpgradeClause({ what: "inspect or change this repo's branches and stashes", minCli: BRANCH_TOOLS_MIN_CLI, node: machine }) };
 		if (isRunnerUnreachable(e)) {
 			return { ok: false, reason: "unconfirmed", ...(input.mutating ? { outcome: "unknown" as const } : {}), machine, error: `${machine ? `The machine ${machine}` : "The machine"} went away before it answered (${clipMarked(message, 120, { within: true })}).${input.mutating ? " It is NOT known whether the change ran: read the branches or stashes again and compare against the receipt you expected before repeating it." : ""}` };
 		}

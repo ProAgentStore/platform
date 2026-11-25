@@ -155,7 +155,7 @@ Confirm before destructive actions.
 
 ## What `initialize` Answers
 
-- `serverInfo.version`: `0.1.230`
+- `serverInfo.version`: `0.1.231`
 
 That is the same value the published MCP-registry manifest (`server.json`) carries, and both
 are read from one constant — `MCP_SERVER_VERSION` in `workers/mcp/src/server-version.ts` —
@@ -274,6 +274,8 @@ Destructive or overwrite-style tools require an exact `confirm` value. By conven
 - `coding_branch_integrate`: `confirm: "coding_branch_integrate"` (#1700)
 - `coding_branch_delete`: `confirm: "coding_branch_delete"` (#1700)
 - `coding_stash_drop`: `confirm: "coding_stash_drop"` (#1701)
+- `coding_run_abandon`: `confirm: "coding_run_abandon"` (#1709)
+- `coding_worktree_discard`: `confirm: "coding_worktree_discard"` (#1709)
 - `set_application_runner_settings`: `confirm: "auto_submit_real_submissions"`, and only when enabling auto-submit — the owner's acknowledgement that submissions are real and irreversible (#1039)
 - `remove_repo`: `confirm: "remove_all_repos"`, and only when removing **all** indexed repos
 
@@ -334,7 +336,7 @@ The two published hints are **derived, not hand-maintained per tool**.
 `workers/mcp/src/tool-metadata.ts` classifies every tool `read` / `write` / `runtime` /
 `destructive` in one table, and `annotationsFor()` maps that classification onto the two
 hints. The classification is then derived **back out of the handlers** by `index.test.ts`,
-which drives all 442 tools under two different scope sets and reads the required scope out
+which drives all 444 tools under two different scope sets and reads the required scope out
 of each refusal — so a tool announced read-only that enforces a write gate fails the build
 rather than reaching a host. `conformance.test.ts` asserts the same thing against a real
 `tools/list` response.
@@ -579,7 +581,7 @@ More recipes, with real argument names, are in
 
 ## Tool Surface
 
-The server registers **442 tools**. 413 are always present. The remaining 29 are gated to
+The server registers **444 tools**. 415 are always present. The remaining 29 are gated to
 the console surfaces of the connected user's own subscribed agents, so the surface is
 per-connection:
 
