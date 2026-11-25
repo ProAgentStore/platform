@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { npmArgv } from "./npm-argv.fixture.js";
 import { latestPublishedRelease, latestPublishedVersion, npmFailure, npmInvocation, quoteCmdArg } from "./payload.js";
 
 /** The real `execFile` call `latestPublishedVersion` makes, captured — nothing is spawned. */
@@ -65,6 +66,19 @@ describe("npmInvocation (#1020)", () => {
 	});
 });
 
+describe("npmArgv — the argv npm receives, through every route (#1725)", () => {
+	const args = ["install", "--prefix", "C:\\Users\\John Doe\\.config\\x y\\", "--flag=a&b", "@proagentstore/cli@0.4.116"];
+	it("plain npm, npm-cli.js through node, and cmd.exe all unwrap to the same argv", () => {
+		expect(npmArgv("npm", args)).toEqual(args);
+		const direct = npmInvocation(args, win([`${APPDATA_NPM}\\npm.cmd`, cliIn(APPDATA_NPM)]));
+		expect(direct.file).toBe(NODE);
+		expect(npmArgv(direct.file, direct.args)).toEqual(args);
+		const viaCmd = npmInvocation(args, win([]));
+		expect(viaCmd.file).toMatch(/cmd\.exe$/);
+		expect(npmArgv(viaCmd.file, viaCmd.args)).toEqual(args);
+	});
+});
+
 describe("latestPublishedVersion on win32 — the production call (#1020)", () => {
 	const real = process.platform;
 	afterEach(() => {
@@ -77,11 +91,15 @@ describe("latestPublishedVersion on win32 — the production call (#1020)", () =
 		expect(await latestPublishedVersion()).toBe("0.4.116");
 		expect(calls).toHaveLength(1);
 		expect(calls[0].file).not.toBe("npm");
-		// A real Windows host has npm-cli.js, which takes the direct-Node route instead; the cmd.exe route is the one asserted elsewhere.
-		if (real === "win32") return;
-		// This host has no npm-cli.js at Windows paths, so it is the quoted cmd.exe route, verbatim.
-		expect(calls[0].opts.windowsVerbatimArguments).toBe(true);
-		expect(calls[0].args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+		// Which route depends on the host: a real Windows host has npm-cli.js beside its npm.cmd and takes the direct-Node route, a
+		// POSIX host has no npm-cli.js at Windows paths and takes the quoted cmd.exe route, verbatim. Either way npm gets the same argv.
+		if (real === "win32") {
+			expect(calls[0].file === process.execPath || /cmd(\.exe)?$/i.test(calls[0].file)).toBe(true);
+		} else {
+			expect(calls[0].opts.windowsVerbatimArguments).toBe(true);
+			expect(calls[0].args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+		}
+		expect(npmArgv(calls[0].file, calls[0].args)).toEqual(["view", "@proagentstore/cli", "version"]);
 	});
 
 	it("says WHY npm could not be asked — the spawn failure a shell-less npm.cmd produced (#1054)", async () => {

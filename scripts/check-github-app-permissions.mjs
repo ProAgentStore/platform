@@ -10,13 +10,14 @@
  * Not part of CI: it needs a GitHub login with org-admin rights, and the state it checks is the owner's to change.
  */
 import { execFileSync } from "node:child_process";
+import { execShimSync } from "./lib/portable-command.mjs";
 import { comparePermissions, formatReport, readState } from "./lib/github-app-permissions.mjs";
 
 const DEFAULT_ORGS = ["ProAgentStore", "proappstore-online"];
 
 function ghGet(path) {
 	try {
-		return JSON.parse(execFileSync("gh", ["api", path], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }));
+		return JSON.parse(execShimSync("gh", ["api", path], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }));
 	} catch (e) {
 		throw new Error(String(e.stderr || e.message || e).trim());
 	}

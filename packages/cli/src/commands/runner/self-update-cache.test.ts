@@ -7,11 +7,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { npmArgv } from "../../bootstrap/npm-argv.fixture.js";
 import { writeInstalled } from "../../bootstrap/test-payload.js";
 
 const npmCalls: string[][] = [];
 vi.mock("node:child_process", () => ({
-	execFile: (_cmd: string, args: string[], _opts: unknown, cb: (e: Error | null, out: { stdout: string }) => void) => {
+	execFile: (cmd: string, rawArgs: string[], _opts: unknown, cb: (e: Error | null, out: { stdout: string }) => void) => {
+		// What npm was asked, however this host wrapped it: plain, npm-cli.js through node, or cmd.exe (bootstrap/npm-invocation.test.ts).
+		const args = npmArgv(cmd, rawArgs);
 		npmCalls.push(args);
 		// `npm install --prefix <dir> … @proagentstore/cli@<v>` lays the package out under the prefix.
 		if (args[0] === "install") writeInstalled(args[2], args[args.length - 1].split("@").pop() as string);
@@ -39,9 +42,7 @@ afterEach(() => {
 	delete process.env[BOOTSTRAP_ENV];
 });
 
-// npm is spawned through cmd.exe or npm-cli.js on Windows (bootstrap/npm-invocation.ts, tested there), so the argv recorded by this
-// POSIX-shaped execFile mock is not what a Windows host passes.
-describe.skipIf(process.platform === "win32")("installVersion", () => {
+describe("installVersion", () => {
 	it("bootstrapped: installs the release into the stub's cache", async () => {
 		process.env[BOOTSTRAP_ENV] = "/x/dist/bootstrap.js";
 		await installVersion("0.4.70");
@@ -58,7 +59,7 @@ describe.skipIf(process.platform === "win32")("installVersion", () => {
 	});
 });
 
-describe.skipIf(process.platform === "win32")("installVersion probes the new payload before it is swapped in (#1148)", () => {
+describe("installVersion probes the new payload before it is swapped in (#1148)", () => {
 	beforeEach(() => { process.env[BOOTSTRAP_ENV] = "/x/dist/bootstrap.js"; });
 
 	it("runs the candidate's own entry point, expecting exactly the installed version, and only then puts it on trial", async () => {

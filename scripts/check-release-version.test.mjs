@@ -1,8 +1,9 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { envWithTool, writeFakeTool } from "./lib/fake-tool.mjs";
 import { evaluateRelease, formatProblems, PACKAGES, shippedFiles } from "./lib/release-gate.mjs";
 
 const CLI = PACKAGES[0];
@@ -74,9 +75,7 @@ describe("evaluateRelease (#1321)", () => {
 	});
 });
 
-// A CI guard, run on ubuntu (ci.yml). It calls `npm` by bare name, which Windows cannot resolve to npm.cmd without a shell, and the fake npm
-// here is a `#!/bin/sh` script, which Windows cannot execute: not a Windows scenario (#1723).
-describe.skipIf(process.platform === "win32")("the script, against a real git history with a fake npm", () => {
+describe("the script, against a real git history with a fake npm", () => {
 	const dir = mkdtempSync(join(tmpdir(), "release-gate-"));
 	const bin = join(dir, "bin");
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -96,11 +95,17 @@ describe.skipIf(process.platform === "win32")("the script, against a real git hi
 	};
 	/** A fake npm: `published` is the list of name@version it knows; anything else is a 404; `down` makes it unreachable. */
 	const fakeNpm = (published, down = false) => {
-		mkdirSync(bin, { recursive: true });
-		writeFileSync(join(bin, "npm"), `#!/bin/sh\n${down ? 'echo "npm ERR! network" >&2; exit 1' : `case "$2" in ${published.map((p) => `"${p}") echo "\${2##*@}";;`).join(" ")} *) echo "npm ERR! code E404" >&2; exit 1;; esac`}\n`);
-		chmodSync(join(bin, "npm"), 0o755);
+		writeFakeTool(
+			bin,
+			"npm",
+			down
+				? 'process.stderr.write("npm ERR! network\\n"); process.exit(1);'
+				: `const spec = process.argv[3] ?? "";
+if (${JSON.stringify(published)}.includes(spec)) process.stdout.write(spec.split("@").pop() + "\\n");
+else { process.stderr.write("npm ERR! code E404\\n"); process.exit(1); }`,
+		);
 	};
-	const run = (base, head) => spawnSync(process.execPath, [join(import.meta.dirname, "check-release-version.mjs"), base, head], { cwd: join(dir, "repo"), encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
+	const run = (base, head) => spawnSync(process.execPath, [join(import.meta.dirname, "check-release-version.mjs"), base, head], { cwd: join(dir, "repo"), encoding: "utf8", env: envWithTool(bin) });
 
 	mkdirSync(join(dir, "repo"), { recursive: true });
 	git("init", "-q", "-b", "main");

@@ -8,6 +8,7 @@
  * cannot resolve) it says so and exits 0: there is no range to judge.
  */
 import { execFileSync } from "node:child_process";
+import { execShimSync } from "./lib/portable-command.mjs";
 import { evaluateRelease, formatProblems, PACKAGES } from "./lib/release-gate.mjs";
 
 const git = (args) => execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
@@ -24,7 +25,7 @@ function versionAt(ref, file) {
 /** true / false, or null when npm cannot be reached (a 404 for an unpublished version is `false`, not an error). */
 function publishedOnNpm(name, version) {
 	try {
-		return execFileSync("npm", ["view", `${name}@${version}`, "version"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30_000 }).trim() === version;
+		return execShimSync("npm", ["view", `${name}@${version}`, "version"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30_000 }).trim() === version;
 	} catch (e) {
 		const text = `${e.stderr ?? ""}${e.stdout ?? ""}`;
 		return /E404|No match found|is not in this registry/i.test(text) ? false : null;

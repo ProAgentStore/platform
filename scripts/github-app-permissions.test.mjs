@@ -1,8 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { envWithTool, writeFakeTool } from "./lib/fake-tool.mjs";
 import { comparePermissions, formatReport, meets, missingPermissions, readState, REQUIRED_APP_PERMISSIONS } from "./lib/github-app-permissions.mjs";
 
 const COMPLETE = Object.fromEntries(Object.entries(REQUIRED_APP_PERMISSIONS).map(([k, v]) => [k, v.level]));
@@ -102,15 +103,19 @@ describe("readState", () => {
 	});
 });
 
-// A CI guard, run on ubuntu (ci.yml). It calls `gh` by bare name, which Windows cannot resolve to gh.cmd without a shell, and the fake gh
-// here is a `#!/bin/sh` script, which Windows cannot execute: not a Windows scenario (#1723).
-describe.skipIf(process.platform === "win32")("the script, with a fake gh on PATH", () => {
+describe("the script, with a fake gh on PATH", () => {
 	const dir = mkdtempSync(join(tmpdir(), "fake-gh-"));
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 	const run = (app, installs) => {
-		writeFileSync(join(dir, "gh"), `#!/bin/sh\ncase "$2" in\n/apps/proagentstore) echo '${JSON.stringify({ permissions: app })}';;\n/orgs/*/installations) echo '${JSON.stringify({ installations: installs })}';;\n*) echo "HTTP 404" >&2; exit 1;;\nesac\n`);
-		chmodSync(join(dir, "gh"), 0o755);
-		return spawnSync(process.execPath, [join(import.meta.dirname, "check-github-app-permissions.mjs"), "o"], { encoding: "utf8", env: { ...process.env, PATH: `${dir}:${process.env.PATH}` } });
+		writeFakeTool(
+			dir,
+			"gh",
+			`const path = process.argv[3] ?? "";
+if (path === "/apps/proagentstore") process.stdout.write(${JSON.stringify(JSON.stringify({ permissions: app }))} + "\\n");
+else if (/^\\/orgs\\/[^/]+\\/installations$/.test(path)) process.stdout.write(${JSON.stringify(JSON.stringify({ installations: installs }))} + "\\n");
+else { process.stderr.write("HTTP 404\\n"); process.exit(1); }`,
+		);
+		return spawnSync(process.execPath, [join(import.meta.dirname, "check-github-app-permissions.mjs"), "o"], { encoding: "utf8", env: envWithTool(dir) });
 	};
 
 	it("exits 1 and prints the diff while anything is missing", () => {
