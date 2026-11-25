@@ -8,6 +8,7 @@
  */
 
 import type { GitProviderId } from "./git-providers.js";
+import type { StrategyPreset } from "./checkout-strategy.js";
 import type { DeclaredRepoPolicies } from "./repo-policies.js";
 
 export type CodingClientType = "claude" | "gemini" | "codex" | "grok";
@@ -85,6 +86,11 @@ export interface CodingRepo {
 	 * `mergePolicy`, so this module keeps no policy vocabulary of its own.
 	 */
 	policies?: DeclaredRepoPolicies;
+	/**
+	 * Checkout isolation + publishing preset (#1670, migration 0350). Undefined = nothing chosen,
+	 * which resolves to shared/direct (`resolveRepoStrategy`) — today's behaviour, never a migration.
+	 */
+	strategy?: StrategyPreset;
 	createdAt: string;
 	updatedAt: string;
 }

@@ -882,7 +882,7 @@ describe("merge authority is set through this route, and only with a value it kn
 		// `policies` joined it in #322, which is why the message is pinned: every field this route
 		// can change has to be NAMED here, or a caller sending the one that was forgotten is told
 		// their request was empty.
-		expect(body.error).toBe("name, urls, mergePolicy, workdir or policies is required");
+		expect(body.error).toBe("name, urls, mergePolicy, workdir, policies or strategy is required");
 	});
 });
 

@@ -29,6 +29,7 @@ import { listCheckoutsForInstance, type CheckoutRow } from "../lib/coding-repo-c
 import { createRepo, deleteRepo, findExistingRepoBinding, getActiveSessionForRepo, getRepo, listRepos, listSessions, updateRepo, updateRepoClone } from "../lib/coding-store.js";
 import { folderHeldByAnother, folderTakenRefusal } from "../lib/coding-repo-folder.js";
 import { checkWorkdirVia, cloneStatusForVerdict, isWorkdirBroken, type WorkdirVerdict } from "../lib/coding-workdir.js";
+import { sanitizeStrategy, type StrategyPreset } from "../lib/checkout-strategy.js";
 import { sanitizeRepoPolicies, type DeclaredRepoPolicies } from "../lib/repo-policies.js";
 import type { CloneStatus, CodingRepo } from "../lib/coding-types.js";
 import { mergePolicyPatch } from "../lib/coding-authority.js";
@@ -723,6 +724,7 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 			mergePolicy?: string;
 			workdir?: string;
 			policies?: unknown;
+			strategy?: unknown;
 		};
 		const name = typeof body.name === "string" ? body.name.trim() : undefined;
 		const hasUrls = body.urls !== undefined && typeof body.urls === "object";
@@ -737,12 +739,20 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 			if (!parsed.ok) return c.json({ error: parsed.error }, 400);
 			policies = parsed.value;
 		}
+		// #1670 — checkout isolation + publishing preset. Owner-only, like `policies`: this route is
+		// not reachable from any agent tool, so no agent can move a repo between direct and PR publishing.
+		let strategy: StrategyPreset | null | undefined;
+		if (body.strategy !== undefined) {
+			const parsed = sanitizeStrategy(body.strategy);
+			if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+			strategy = parsed.value;
+		}
 		const workdirIn = typeof body.workdir === "string" ? body.workdir.trim() : undefined;
 		// Blanking is refused rather than stored: every tool addresses this repo BY its workdir, so
 		// an empty one is not a state anyone wants — it is a delete, and delete has its own route.
 		if (workdirIn === "") return c.json({ error: "A folder is required. To remove this repo, delete it." }, 400);
-		if (!name && !hasUrls && policy.value === undefined && workdirIn === undefined && policies === undefined) {
-			return c.json({ error: "name, urls, mergePolicy, workdir or policies is required" }, 400);
+		if (!name && !hasUrls && policy.value === undefined && workdirIn === undefined && policies === undefined && strategy === undefined) {
+			return c.json({ error: "name, urls, mergePolicy, workdir, policies or strategy is required" }, 400);
 		}
 
 		// Only a MOVE needs the extra read and the session check. A save that resends the same path
@@ -774,14 +784,26 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 
 		// What the repo claimed BEFORE, read only when the claim is changing — the audit below needs it.
 		const before = policies !== undefined ? ((await getRepo(c.env, instanceId, uid, repoId))?.policies ?? null) : undefined;
+		const strategyBefore = strategy !== undefined ? (await getRepo(c.env, instanceId, uid, repoId))?.strategy : undefined;
 		const ok = await updateRepo(c.env, instanceId, uid, repoId, {
 			name: name || undefined,
 			urls: hasUrls ? body.urls : undefined,
 			mergePolicy: policy.value,
 			workdir: moving ? workdirIn : undefined,
 			policies,
+			strategy,
 		});
 		if (!ok) throw new HttpError(404, "Repo not found");
+		if (strategy !== undefined) {
+			await logEvent(c.env, {
+				source: "coding",
+				event: "repo.strategy_set",
+				userId: uid,
+				instanceId,
+				message: `checkout/publishing strategy on repo ${repoId} set to ${strategy ?? "shared-direct (default)"} by the owner`,
+				context: { repoId, before: strategyBefore ?? null, after: strategy, by: uid },
+			});
+		}
 		// #322: a policy is the one thing that acts with nobody present, so WHO promoted it, and
 		// from what, is part of the record — not only what it later did (`policy.act`).
 		if (policies !== undefined) {

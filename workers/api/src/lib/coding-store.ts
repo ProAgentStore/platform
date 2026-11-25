@@ -1,5 +1,6 @@
 import { closeCodingSessionCards, upsertCodingSessionCard } from "./coding-board.js";
 import { parseMergePolicy } from "./coding-authority.js";
+import { parseStrategy, type StrategyPreset } from "./checkout-strategy.js";
 import { gitProviderFor, type GitProviderId } from "./git-providers.js";
 import { parseRepoPolicies, type DeclaredRepoPolicies } from "./repo-policies.js";
 import { recordRunEvent } from "./run-events.js";
@@ -54,6 +55,8 @@ export interface RepoRow {
 	instructions: string | null;
 	merge_policy: string | null;
 	policies: string | null;
+	/** #1670 (migration 0350): a strategy preset name; NULL = shared/direct. */
+	strategy?: string | null;
 	created_at: string;
 	updated_at: string;
 }
@@ -119,6 +122,7 @@ export function toRepo(r: RepoRow): CodingRepo {
 		// Same treatment as `mergePolicy`: undefined means "declared nothing", and what that
 		// resolves to is decided in one place (`resolveRepoPolicyMode`), never defaulted here.
 		policies: parseRepoPolicies(r.policies),
+		strategy: parseStrategy(r.strategy),
 		createdAt: r.created_at,
 		updatedAt: r.updated_at,
 	};
@@ -319,6 +323,8 @@ export async function updateRepo(
 		 * "turn this one off" indistinguishable from "leave it alone" over the wire.
 		 */
 		policies?: DeclaredRepoPolicies;
+		/** #1670 — a preset, or `null` to clear back to shared/direct; `undefined` leaves it. */
+		strategy?: StrategyPreset | null;
 	},
 ): Promise<boolean> {
 	const urlsJson =
@@ -336,6 +342,7 @@ export async function updateRepo(
 		     merge_policy = COALESCE(?7, merge_policy),
 		     workdir = COALESCE(?8, workdir),
 		     policies = CASE WHEN ?10 = 1 THEN ?9 ELSE policies END,
+		     strategy = CASE WHEN ?12 = 1 THEN ?11 ELSE strategy END,
 		     updated_at = datetime('now')
 		 WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3`,
 	)
@@ -354,6 +361,8 @@ export async function updateRepo(
 			// `policies` from clearing the column — COALESCE cannot express "write NULL on purpose".
 			patch.policies === undefined || !Object.keys(patch.policies).length ? null : JSON.stringify(patch.policies),
 			patch.policies === undefined ? 0 : 1,
+			patch.strategy ?? null,
+			patch.strategy === undefined ? 0 : 1,
 		)
 		.run();
 	return (res.meta.changes ?? 0) > 0;

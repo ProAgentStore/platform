@@ -1583,6 +1583,46 @@ describe("PUT /coding/repos/:id — the folder is editable, and checked when it 
 			expect(updateBinds(ctx)?.[HAS_POLICIES]).toBe(0);
 		});
 	});
+
+	// #1670 — the checkout/publishing preset. Optional, owner-only, and never a migration of an existing repo.
+	describe("checkout and publishing strategy", () => {
+		const STRATEGY = 10;
+		const HAS_STRATEGY = 11;
+		const updateBinds = (ctx: ReturnType<typeof movableEnv>) =>
+			ctx.issued.find((s) => s.sql.startsWith("UPDATE coding_repos SET name"))?.binds;
+
+		it("stores one of the three presets", async () => {
+			const ctx = movableEnv(repoRow());
+			const { status } = await put({ strategy: "isolated-pr" }, ctx);
+			expect(status).toBe(200);
+			expect(updateBinds(ctx)?.[STRATEGY]).toBe("isolated-pr");
+			expect(updateBinds(ctx)?.[HAS_STRATEGY]).toBe(1);
+		});
+
+		it("null clears back to the default, written on purpose", async () => {
+			const ctx = movableEnv(repoRow());
+			const { status } = await put({ strategy: null }, ctx);
+			expect(status).toBe(200);
+			expect(updateBinds(ctx)?.[STRATEGY]).toBeNull();
+			expect(updateBinds(ctx)?.[HAS_STRATEGY]).toBe(1);
+		});
+
+		it("refuses an unknown or unsupported value and writes nothing", async () => {
+			for (const bad of ["shared-pr", "fork-pr", "", 7, { checkout: "worktree" }]) {
+				const ctx = movableEnv(repoRow());
+				const { status, body } = await put({ strategy: bad }, ctx);
+				expect(status).toBe(400);
+				expect(String(body.error)).toContain("shared-direct");
+				expect(ctx.issued.some((s) => s.sql.startsWith("UPDATE coding_repos"))).toBe(false);
+			}
+		});
+
+		it("a request that does not mention it leaves the column alone", async () => {
+			const ctx = movableEnv(repoRow());
+			await put({ name: "renamed" }, ctx);
+			expect(updateBinds(ctx)?.[HAS_STRATEGY]).toBe(0);
+		});
+	});
 });
 
 /**
