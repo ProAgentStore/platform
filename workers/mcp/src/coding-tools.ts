@@ -52,6 +52,8 @@ export interface CodingRepoRow {
 	name?: string;
 	/** `owner/repo` when the repo is hosted on GitHub; absent for a local-only checkout (#743). */
 	githubRepo?: string;
+	/** The checkout and publishing preset the repo runs on (#1710): shared-direct | isolated-direct | isolated-pr. Read-only here. */
+	effectiveStrategy?: string;
 }
 
 /**
@@ -442,7 +444,7 @@ export function registerCodingSessionTools(
 
 	server.tool(
 		"coding_repos_list",
-		"List all repos registered in a coding instance, with their status and active sessions. Each repo carries `checkouts`: its per-machine checkouts `{machineId, workdir, cloneStatus, cloneError, lastVerifiedAt}` (#1142), so you can see which machines hold it before repinning with set_instance_runner_node. Answers `{repos, hint}` — `hint` is present when a repo is hosted on GitHub, and names the tools that reach it directly (list_instance_tools, then call_instance_tool) instead of through the terminal.",
+		"List all repos registered in a coding instance, with their status and active sessions. Each repo carries `effectiveStrategy`, its checkout and publishing preset (shared-direct, isolated-direct or isolated-pr), READ-ONLY: only the owner changes it, in the console, and no tool can (#1710). Each repo carries `checkouts`: its per-machine checkouts `{machineId, workdir, cloneStatus, cloneError, lastVerifiedAt}` (#1142), so you can see which machines hold it before repinning with set_instance_runner_node. Answers `{repos, hint}` — `hint` is present when a repo is hosted on GitHub, and names the tools that reach it directly (list_instance_tools, then call_instance_tool) instead of through the terminal.",
 		{
 			instance_id: z.string().describe("Instance ID"),
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),

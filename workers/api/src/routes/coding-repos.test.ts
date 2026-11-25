@@ -1099,6 +1099,13 @@ describe("GET /coding/repos — the path is re-checked on every list", () => {
 		return { body: (await res.json()) as { repos: Array<Record<string, unknown>>; recheck?: Record<string, unknown> }, issued };
 	}
 
+	// #1710 — the listing says what each repo does, so the console card and the MCP listing never re-derive the default.
+	it("reports the effective checkout preset: stored, or shared-direct when nothing was chosen", async () => {
+		getBoundRunnerConn.mockResolvedValue(null);
+		const { body } = await listRepos([row({ strategy: "isolated-pr" }), row({ id: "repo-2" }), row({ id: "repo-3", strategy: "bogus" })]);
+		expect(body.repos.map((r) => r.effectiveStrategy)).toEqual(["isolated-pr", "shared-direct", "shared-direct"]);
+	});
+
 	it("downgrades a repo whose checkout has gone since it was added", async () => {
 		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
 		callRunner.mockResolvedValue({ checked: true, path: "/home/u/dev/chess-academy", exists: false });

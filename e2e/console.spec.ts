@@ -5322,6 +5322,34 @@ test.describe("mobile — a repo whose path is unusable says so (#405)", () => {
 		await expect(page.locator("#repo-settings-workdir")).toHaveValue(brokenRepo.workdir);
 		await expect(page.getByTestId("repo-settings-clone-error")).toContainText(LONG_PATH);
 	});
+
+	test("mobile — the repo card shows its checkout preset and the sheet saves a change at phone width (#1710)", async ({ page }) => {
+		await page.setViewportSize({ width: 320, height: 812 });
+		const puts: Array<Record<string, unknown>> = [];
+		page.on("request", (req) => {
+			if (req.method() === "PUT" && /\/coding\/repos\/[^/]+$/.test(req.url())) puts.push(req.postDataJSON());
+		});
+		await mockSoloCoder(page);
+		await page.goto("/console/instances/inst-1/coding");
+		await page.waitForLoadState("networkidle");
+
+		// A repo that chose nothing shows the default, and an owner who changes nothing sends no preset.
+		await page.getByTestId("repo-unusable").getByRole("button", { name: "Fix the folder" }).click();
+		const select = page.locator("#repo-settings-strategy");
+		await expect(select).toBeVisible();
+		await expect(select).toHaveValue("shared-direct");
+		await expect(page.getByTestId("repo-settings-strategy-note")).toContainText("straight to main stay as they are");
+
+		await select.selectOption("isolated-pr");
+		const { mainOv, docOv, wide } = await measureOverflow(page);
+		expect(mainOv, `<main> overflows by ${mainOv}px`).toBeLessThanOrEqual(1);
+		expect(docOv, `page overflows by ${docOv}px`).toBeLessThanOrEqual(1);
+		expect(wide, `content past the right edge: ${wide.join(", ")}`).toEqual([]);
+
+		await page.getByRole("button", { name: "Save" }).click();
+		await expect.poll(() => puts.length).toBeGreaterThan(0);
+		expect(puts[0].strategy).toBe("isolated-pr");
+	});
 });
 
 /**

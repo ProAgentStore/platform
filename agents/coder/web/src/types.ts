@@ -32,6 +32,8 @@ export interface CodingRepo {
 	webUrl?: string;
 	urls?: { dev?: string; staging?: string; prod?: string };
 	instructions?: string;
+	/** Checkout + publishing preset the repo actually runs on (#1710): the stored one, or shared-direct. */
+	effectiveStrategy?: string;
 }
 
 export interface CodingSession {

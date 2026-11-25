@@ -29,7 +29,7 @@ import { listCheckoutsForInstance, type CheckoutRow } from "../lib/coding-repo-c
 import { createRepo, deleteRepo, findExistingRepoBinding, getActiveSessionForRepo, getRepo, listRepos, listSessions, updateRepo, updateRepoClone } from "../lib/coding-store.js";
 import { folderHeldByAnother, folderTakenRefusal } from "../lib/coding-repo-folder.js";
 import { checkWorkdirVia, cloneStatusForVerdict, isWorkdirBroken, type WorkdirVerdict } from "../lib/coding-workdir.js";
-import { sanitizeStrategy, type StrategyPreset } from "../lib/checkout-strategy.js";
+import { DEFAULT_STRATEGY_PRESET, sanitizeStrategy, type StrategyPreset } from "../lib/checkout-strategy.js";
 import { sanitizeRepoPolicies, type DeclaredRepoPolicies } from "../lib/repo-policies.js";
 import type { CloneStatus, CodingRepo } from "../lib/coding-types.js";
 import { mergePolicyPatch } from "../lib/coding-authority.js";
@@ -204,7 +204,7 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		const bare = await listRepos(c.env, instanceId, uid);
 		// Each binding's per-machine checkouts (#1142), beside the binding's own single workdir/status.
 		const checkouts = await listCheckoutsForInstance(c.env, instanceId, uid).catch(() => new Map<string, CheckoutRow[]>());
-		const withCheckouts = (rs: CodingRepo[]) => rs.map((r) => ({ ...r, checkouts: checkouts.get(r.id) ?? [] }));
+		const withCheckouts = (rs: CodingRepo[]) => rs.map((r) => ({ ...r, effectiveStrategy: r.strategy ?? DEFAULT_STRATEGY_PRESET, checkouts: checkouts.get(r.id) ?? [] }));
 		const repos = withCheckouts(bare);
 		const local = bare.filter((r) => r.workdir).slice(0, MAX_VERIFY_PER_LIST);
 		if (!local.length) return c.json({ repos, recheck: { ran: false, checked: 0 } satisfies RecheckReport });

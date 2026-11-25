@@ -7,6 +7,7 @@ import { repoRepairNotice } from "./repo-repair";
 import { Settings, Trash2, Lock } from "lucide-react";
 import Button from "./Button";
 import RepoRetargetSection from "./RepoRetargetSection";
+import { repoStrategy, STRATEGY_KEEP_NOTE, STRATEGY_OPTIONS, strategyOption, type StrategyPreset } from "./repo-strategy";
 
 /**
  * Per-repo settings sheet: name, FOLDER, special instructions (rules), launch URLs, and delete.
@@ -34,6 +35,7 @@ export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved, 
 	const [dev, setDev] = useState(repo.urls?.dev || "");
 	const [staging, setStaging] = useState(repo.urls?.staging || "");
 	const [prod, setProd] = useState(repo.urls?.prod || "");
+	const [strategy, setStrategy] = useState<StrategyPreset>(() => repoStrategy(repo));
 	const [saving, setSaving] = useState(false);
 	const [deleting, setDeleting] = useState(false);
 	/**
@@ -96,6 +98,8 @@ export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved, 
 					// Only when it is set. An unchanged value is a no-op on the server (it compares
 					// before it moves), so this costs nothing and keeps one payload shape.
 					...(folder ? { workdir: folder } : {}),
+					// Owner-only preset (#1710): sent only when changed, so a plain save never rewrites it.
+					...(strategy !== repoStrategy(repo) ? { strategy } : {}),
 				}),
 			});
 			await api(`/v1/instances/${instanceId}/coding/repos/${repo.id}/instructions`, {
@@ -167,6 +171,12 @@ export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved, 
 				) : (
 					<p className="text-xs text-muted-soft mb-3">Checked on your connected machine when you save.</p>
 				)}
+
+				<label htmlFor="repo-settings-strategy" className="block text-xs font-bold text-muted mb-1">How runs check out and publish</label>
+				<select id="repo-settings-strategy" value={strategy} onChange={(e) => setStrategy(e.target.value as StrategyPreset)} className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-sm mb-1">
+					{STRATEGY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+				</select>
+				<p data-testid="repo-settings-strategy-note" className="text-xs text-muted-soft mb-3 break-words">{strategyOption(strategy).detail} {STRATEGY_KEEP_NOTE}</p>
 
 				{/* Read-only details */}
 				<div className="grid grid-cols-2 gap-2 mb-3">

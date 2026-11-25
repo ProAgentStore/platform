@@ -57,7 +57,8 @@ function gitMessage(e: unknown): string {
 	return (raw.split("\n").map((l) => l.trim()).find((l) => l && !/^hint:/i.test(l)) ?? "git failed").replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, "<remote>").slice(0, 200);
 }
 
-const norm = (p: string) => (process.platform === "win32" ? p.toLowerCase() : p).replace(/\\/g, "/").replace(/\/+$/, "");
+/** A path as it is compared and hashed: separators unified, trailing slash dropped, and lower-cased only on Windows. `platform` is injectable so the three OS path shapes are testable on any host (#1710). */
+export const norm = (p: string, platform: NodeJS.Platform = process.platform) => (platform === "win32" ? p.toLowerCase() : p).replace(/\\/g, "/").replace(/\/+$/, "");
 function realish(p: string): string {
 	try {
 		return realpathSync(p);
