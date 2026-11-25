@@ -22,7 +22,7 @@ const SWEEP_WINDOW_MS = 14 * 24 * 60 * 60_000;
 /** One save_document call per document the application has: resume, cover letter, and the owner's answers. */
 async function documents(env: Env, userId: string, app: JobApplication): Promise<Array<Record<string, unknown>>> {
 	const lead = (app.lead ?? {}) as Partial<LocalArtifactLead>;
-	const url = lead.leadUrl ?? lead.lead?.url ?? "";
+	const url = lead.leadUrl?.trim() || lead.lead?.url?.trim() || "";
 	// A run built from the CV book (#1624 phase 2) records which revision and playbook produced these documents.
 	const run = app.tailoringRunId ? await getTailorRun(env, app.instanceId, userId, app.tailoringRunId).catch(() => null) : null;
 	const from = cvProvenance(run?.policy.uploadedSources);

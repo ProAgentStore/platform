@@ -15,15 +15,71 @@ const calls: Array<{ tool: string; args: Record<string, unknown>; instanceId: st
 let outcome: { ok: true } | { ok: false; reason: "failed" | "no_grant"; detail: string } = { ok: true };
 const cvCalls: Array<{ tool: string; args: Record<string, unknown>; instanceId: string; url: string }> = [];
 let cvOutcome: { ok: true } | { ok: false; reason: "failed" | "no_grant"; detail: string } = { ok: true };
+/**
+ * SYNTHETIC stores that follow the published tool contracts (list_app_tools for the jobs and cv apps), so a write can be
+ * read back through the app's own read tool. They validate required params the way the real tools declare them. They are
+ * NOT the live apps: they prove what PAGS sends and records, not how jobs.proappstore.online or cv.proappstore.online behave.
+ * Off by default (`fake = false`), so the canned `outcome` / `cvOutcome` tests above are untouched.
+ */
+let fake = false;
+type Row = Record<string, unknown>;
+const jobsStore = new Map<string, Row>();
+const cvStore = new Map<string, Row>(); // key: external_id|kind
+const missing = (args: Record<string, unknown>, required: string[]) => required.filter((k) => typeof args[k] !== "string" || !(args[k] as string).trim());
+const bad = (detail: string) => ({ ok: false as const, reason: "failed" as const, detail });
+function fakeJobs(tool: string, args: Record<string, unknown>) {
+	if (tool === "save_tailored_application") {
+		const m = missing(args, ["external_id", "source_url", "title", "company_name"]);
+		if (m.length) return bad(`missing required param: ${m.join(", ")}`);
+		const prior = jobsStore.get(String(args.external_id));
+		jobsStore.set(String(args.external_id), { ...args, status: prior?.status ?? "tailored" }); // a re-save keeps the status
+		return { ok: true as const };
+	}
+	if (tool === "set_tailored_status") {
+		const row = jobsStore.get(String(args.external_id));
+		if (!row) return bad("tailored application not found");
+		if (!["tailored", "approved", "submitted", "failed", "archived"].includes(String(args.status))) return bad(`bad status ${String(args.status)}`);
+		jobsStore.set(String(args.external_id), { ...row, status: args.status, ...(args.note ? { note: args.note } : {}), ...(args.submitted_at ? { submitted_at: args.submitted_at } : {}) });
+		return { ok: true as const };
+	}
+	if (tool === "get_my_tailored") {
+		const row = jobsStore.get(String(args.external_id));
+		return { ok: true as const, data: row ? [row] : "No results found." };
+	}
+	return bad(`unexpected jobs tool ${tool}`);
+}
+function fakeCv(tool: string, args: Record<string, unknown>) {
+	if (tool === "save_document") {
+		const m = missing(args, ["external_id", "kind", "company", "position", "content_md"]);
+		if (m.length) return bad(`missing required param: ${m.join(", ")}`);
+		if (!["resume", "cover_letter", "answers"].includes(String(args.kind))) return bad(`bad kind ${String(args.kind)}`);
+		const key = `${String(args.external_id)}|${String(args.kind)}`;
+		cvStore.set(key, { ...args, status: cvStore.get(key)?.status ?? "tailored" });
+		return { ok: true as const };
+	}
+	if (tool === "set_document_status") {
+		const rows = [...cvStore.values()].filter((r) => r.external_id === args.external_id && (!args.kind || r.kind === args.kind));
+		if (!rows.length) return bad("no documents for that application");
+		for (const r of rows) Object.assign(r, { status: args.status, ...(args.note ? { status_note: args.note } : {}), ...(args.submitted_at ? { submitted_at: args.submitted_at } : {}) });
+		return { ok: true as const };
+	}
+	if (tool === "get_document") {
+		const rows = [...cvStore.values()].filter((r) => r.external_id === args.external_id && (!args.kind || r.kind === args.kind));
+		return { ok: true as const, data: rows.length ? rows : "No results found." };
+	}
+	return bad(`unexpected cv tool ${tool}`);
+}
 vi.mock("../jobs-app.js", () => ({
 	JOBS_MCP_URL: "https://mcp.proappstore.online/mcp/apps/jobs",
 	CV_MCP_URL: "https://mcp.proappstore.online/mcp/apps/cv",
 	callJobsTool: async (_env: unknown, who: { instanceId: string }, tool: string, args: Record<string, unknown>) => {
 		calls.push({ tool, args, instanceId: who.instanceId });
+		if (fake) return fakeJobs(tool, args);
 		return outcome;
 	},
 	callAppTool: async (_env: unknown, who: { instanceId: string }, url: string, tool: string, args: Record<string, unknown>) => {
 		cvCalls.push({ tool, args, instanceId: who.instanceId, url });
+		if (fake) return url.endsWith("/apps/cv") ? fakeCv(tool, args) : fakeJobs(tool, args);
 		return cvOutcome;
 	},
 	jobsAccountProblem: async () => null,
@@ -33,6 +89,7 @@ const { moveApplication } = await import("../local-apply/store.js");
 const { settleApplication, setApplicationMirror } = await import("./store.js");
 const { syncApplicationToJobs, syncPendingToJobs, JOBS_SYNC_RETRY_MS } = await import("../jobs-tailored.js");
 const { syncApplicationToCv, syncPendingToCv } = await import("../cv-documents.js");
+const { callJobsTool, callAppTool, CV_MCP_URL } = await import("../jobs-app.js");
 // What index.ts does at startup: both mirrors, Jobs first.
 setApplicationMirror(async (e, u, id) => {
 	await syncApplicationToJobs(e, u, id);
@@ -77,6 +134,9 @@ async function readyApplication() {
 }
 
 beforeEach(() => {
+	fake = false;
+	jobsStore.clear();
+	cvStore.clear();
 	calls.length = 0;
 	outcome = { ok: true };
 	cvCalls.length = 0;
@@ -222,5 +282,131 @@ describe("#1624: tailoring completion and Runner outcomes -> CV save_document / 
 		await readyApplication();
 		const health = await pipelineHealth(env(), "owner", { scouts: [], tailors: ["tailor"], runners: [] }, [], Date.now());
 		expect(health.problems.map((p) => p.code)).not.toContain("cv_sync_failing");
+	});
+});
+
+describe("#1631 / #1624: a lead with no URL cannot be saved to Jobs, and says so", () => {
+	const row = () => d1.sqlite.prepare("SELECT jobs_synced_key AS k, jobs_sync_error AS e, jobs_sync_at AS at, cv_synced_key AS ck, cv_sync_error AS ce FROM job_applications WHERE id='application'").get() as { k: string | null; e: string | null; at: number | null; ck: string | null; ce: string | null };
+	const noUrl = () => d1.exec(`UPDATE job_applications SET lead = '{"lead":{"title":"Engineer","company":"Acme","location":"Melbourne"}}' WHERE id='application'`);
+
+	it("makes no save_tailored_application call and records a distinct no_url error; the CV mirror is unaffected", async () => {
+		noUrl();
+		await readyApplication();
+		expect(calls.filter((c) => c.tool === "save_tailored_application")).toHaveLength(0);
+		expect(calls).toHaveLength(0);
+		expect(row().k).toBeNull();
+		expect(row().e).toContain("no_url:");
+		expect(row().e).toContain("source_url");
+		expect(row().at).not.toBeNull();
+		// CV takes job_url as optional, so the documents still copy.
+		expect(cvCalls.map((c) => c.tool)).toContain("save_document");
+		expect(row()).toMatchObject({ ck: "tailor-run|materials_ready", ce: null });
+	});
+
+	it("the sweep does not loop on it; correcting the lead and syncing again saves it and clears the error", async () => {
+		noUrl();
+		await readyApplication();
+		d1.exec(`UPDATE job_applications SET updated_at = ${Date.now()}`);
+		expect(await syncPendingToJobs(env(), Date.now() + JOBS_SYNC_RETRY_MS + 1000)).toBe(0);
+		expect(calls).toHaveLength(0);
+		d1.exec(`UPDATE job_applications SET lead = '{"leadUrl":"https://jobs.example.com/job","lead":{"title":"Engineer","company":"Acme"}}'`);
+		await syncApplicationToJobs(env(), "owner", "application");
+		expect(calls.map((c) => c.tool)).toEqual(["save_tailored_application"]);
+		expect(calls[0].args.source_url).toBe("https://jobs.example.com/job");
+		expect(row()).toMatchObject({ k: "tailor-run|materials_ready", e: null });
+	});
+
+	it("an empty leadUrl falls through to the lead's own url instead of being sent as an empty string", async () => {
+		d1.exec(`UPDATE job_applications SET lead = '{"leadUrl":"  ","lead":{"title":"Engineer","company":"Acme","url":"https://jobs.example.com/inner"}}' WHERE id='application'`);
+		await readyApplication();
+		expect(calls[0].args.source_url).toBe("https://jobs.example.com/inner");
+	});
+});
+
+describe("synthetic: write, then read back through the app's own read tool", () => {
+	const who = { userId: "owner", instanceId: "tailor" };
+	const submit = async () => {
+		const get = async () => (await d1.DB.prepare("SELECT id, status, state_version AS stateVersion FROM job_applications WHERE id='application'").first()) as never;
+		await moveApplication(env(), await get(), "owner", { to: "filling", actor: "runner", actorInstanceId: "apply", runId: "fill", bindRun: "fill" }, 3000);
+		await moveApplication(env(), await get(), "owner", { to: "submitted", actor: "runner", actorInstanceId: "apply", runId: "fill", expectRun: "fill", submitted: { at: "2026-11-07T01:02:03.000Z", url: "https://jobs.example.com/done" } }, 4000);
+	};
+
+	it("synthetic: Jobs save_tailored_application + set_tailored_status, then get_my_tailored returns what was written", async () => {
+		fake = true;
+		await readyApplication();
+		await submit();
+
+		// Materials ready saves once; the submit re-saves (which keeps the status) and then sets it.
+		expect(calls.map((c) => c.tool)).toEqual(["save_tailored_application", "save_tailored_application", "set_tailored_status"]);
+		expect(calls[0].args).toMatchObject({ external_id: "application", source_url: "https://jobs.example.com/job", title: "Engineer", company_name: "Acme" });
+
+		const read = await callJobsTool(env(), who, "get_my_tailored", { external_id: "application" });
+		expect(read.ok).toBe(true);
+		const [stored] = (read as { data: Row[] }).data;
+		expect(stored).toMatchObject({
+			external_id: "application",
+			source_url: "https://jobs.example.com/job",
+			title: "Engineer",
+			company_name: "Acme",
+			resume_md: "Synthetic resume text\n",
+			cover_letter_md: "Synthetic cover_letter text\n",
+			status: "submitted",
+			submitted_at: Date.parse("2026-11-07T01:02:03.000Z"),
+		});
+		expect(JSON.parse(String(stored.answers))).toEqual([{ question: "Work rights?", answer: "Citizen" }]);
+		// Nothing is held for an application PAGS never sent.
+		expect(await callJobsTool(env(), who, "get_my_tailored", { external_id: "other" })).toEqual({ ok: true, data: "No results found." });
+	});
+
+	it("synthetic: CV save_document + set_document_status, then get_document returns each document that was written", async () => {
+		fake = true;
+		await readyApplication();
+		await submit();
+
+		// Three documents when the materials are ready, the same three re-saved on submit (keyed by external_id + kind, so
+		// they replace rather than duplicate), then one status call.
+		expect(cvCalls.filter((c) => c.tool === "save_document").map((c) => c.args.kind)).toEqual(["resume", "cover_letter", "answers", "resume", "cover_letter", "answers"]);
+		expect(cvCalls.filter((c) => c.tool === "set_document_status")).toHaveLength(1);
+
+		const read = await callAppTool(env(), who, CV_MCP_URL, "get_document", { external_id: "application" });
+		expect(read.ok).toBe(true);
+		const docs = (read as { data: Row[] }).data;
+		expect(docs.map((d) => d.kind).sort()).toEqual(["answers", "cover_letter", "resume"]);
+		for (const d of docs) expect(d).toMatchObject({ external_id: "application", company: "Acme", position: "Engineer", status: "submitted", submitted_at: Date.parse("2026-11-07T01:02:03.000Z") });
+		expect(docs.find((d) => d.kind === "resume")?.content_md).toBe("Synthetic resume text\n");
+		expect(docs.find((d) => d.kind === "answers")?.content_md).toBe("**Work rights?**\n\nCitizen");
+		// One kind, as the tool's `kind` param narrows it.
+		const one = await callAppTool(env(), who, CV_MCP_URL, "get_document", { external_id: "application", kind: "cover_letter" });
+		expect((one as { data: Row[] }).data).toHaveLength(1);
+	});
+
+	it("the fakes enforce the published required params, so a write PAGS got wrong would fail here", async () => {
+		fake = true;
+		expect(await callJobsTool(env(), who, "save_tailored_application", { external_id: "x", source_url: "", title: "t", company_name: "c" })).toMatchObject({ ok: false, detail: expect.stringContaining("source_url") });
+		expect(await callAppTool(env(), who, CV_MCP_URL, "save_document", { external_id: "x", kind: "resume", company: "c", position: "p" })).toMatchObject({ ok: false, detail: expect.stringContaining("content_md") });
+	});
+});
+
+describe("PAGS keeps the references to what it sent", () => {
+	it("after a sync the application row holds the Jobs and CV keys and times, and the exact stored documents' receipts", async () => {
+		fake = true;
+		await readyApplication();
+		const r = () => d1.sqlite.prepare("SELECT jobs_synced_key AS jk, jobs_sync_at AS jat, jobs_sync_error AS je, cv_synced_key AS ck, cv_sync_at AS cat, cv_sync_error AS ce, tailoring_run_id AS run FROM job_applications WHERE id='application'").get() as Record<string, unknown>;
+		expect(r()).toMatchObject({ jk: "tailor-run|materials_ready", je: null, ck: "tailor-run|materials_ready", ce: null, run: "tailor-run" });
+		expect(typeof r().jat).toBe("number");
+		expect(typeof r().cat).toBe("number");
+
+		// The sha-pinned receipts the Runner verifies are untouched by the mirrors: one per role, with a hash and a size.
+		const receipts = d1.sqlite.prepare("SELECT role, sha256, bytes FROM application_documents WHERE application_id='application' AND tailoring_run_id='tailor-run' ORDER BY role").all() as Array<{ role: string; sha256: string; bytes: number }>;
+		expect(receipts.map((x) => x.role)).toEqual(["cover_letter", "profile", "resume"]);
+		for (const x of receipts) {
+			expect(x.sha256).toMatch(/^[0-9a-f]{64}$/);
+			expect(x.bytes).toBeGreaterThan(0);
+		}
+
+		// A later state moves the keys forward and keeps the run reference.
+		const get = async () => (await d1.DB.prepare("SELECT id, status, state_version AS stateVersion FROM job_applications WHERE id='application'").first()) as never;
+		await moveApplication(env(), await get(), "owner", { to: "archived", actor: "owner", actorInstanceId: "tailor", reason: "not_interested" }, 3000);
+		expect(r()).toMatchObject({ jk: "tailor-run|archived", ck: "tailor-run|archived", run: "tailor-run" });
 	});
 });

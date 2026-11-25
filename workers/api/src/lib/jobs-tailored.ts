@@ -61,7 +61,8 @@ async function saveArgs(env: Env, userId: string, app: JobApplication): Promise<
 	const { resume, coverLetter } = await tailoredTexts(env, userId, app);
 	return {
 		external_id: app.id,
-		source_url: lead.leadUrl ?? lead.lead?.url ?? "",
+		// `||`, not `??`: an empty leadUrl must fall through to the lead's own url, and a blank one is no url at all.
+		source_url: (lead.leadUrl?.trim() || lead.lead?.url?.trim() || ""),
 		title: lead.lead?.title || "Untitled role",
 		company_name: lead.lead?.company || "Unknown company",
 		...(lead.lead?.location ? { location: lead.lead.location } : {}),
@@ -89,7 +90,12 @@ export async function syncApplicationToJobs(env: Env, userId: string, applicatio
 		if (prior === key) return;
 		const who = { userId, instanceId: app.instanceId };
 		const fail = (step: string, out: { reason: string; detail: string }) => record(env, app.id, { error: clipMarked(`${out.reason === "failed" ? step : out.reason}: ${out.detail}`, 400) }, now);
-		const saved = await callJobsTool(env, who, "save_tailored_application", await saveArgs(env, userId, app));
+		const args = await saveArgs(env, userId, app);
+		// `save_tailored_application` requires a source_url (jobs#19). A lead stored without one can never be saved, so say
+		// so — a distinct `no_url:` reason the sweep does not retry — instead of sending "" and recording an opaque tool error.
+		// Fixing the lead and moving the application re-runs this inline and clears it.
+		if (!args.source_url) return void (await fail("save_tailored_application", { reason: "no_url", detail: "save_tailored_application needs a source_url and this lead has none." }));
+		const saved = await callJobsTool(env, who, "save_tailored_application", args);
 		if (!saved.ok) return void (await fail("save_tailored_application", saved));
 		// A re-save keeps Jobs' status, so only a move AWAY from a recorded end state (a retried fill) or into one needs a status call.
 		const status = app.status === "materials_ready" ? (prior && !prior.endsWith("|materials_ready") ? "tailored" : null) : JOBS_STATUS[app.status as keyof typeof JOBS_STATUS];
@@ -117,6 +123,7 @@ export async function syncPendingToJobs(env: Env, now = Date.now(), limit = 10):
 		  WHERE status IN ('materials_ready', 'submitted', 'failed', 'archived') AND tailoring_run_id IS NOT NULL
 		    AND (resume_artifact IS NOT NULL OR cover_letter_artifact IS NOT NULL)
 		    AND COALESCE(jobs_synced_key, '') != tailoring_run_id || '|' || status
+		    AND COALESCE(jobs_sync_error, '') NOT LIKE 'no_url:%'
 		    AND updated_at >= ?1 AND (jobs_sync_at IS NULL OR jobs_sync_at <= ?2)
 		  ORDER BY updated_at DESC LIMIT ?3`,
 	)
