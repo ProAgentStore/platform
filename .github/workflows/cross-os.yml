@@ -42,5 +42,6 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # git-guard.test.ts is left out here until #1719: the guard shim is a POSIX sh script.
       - name: Managed checkout and coding git tests (real git, no network)
-        run: pnpm exec vitest run --project integration packages/browser-runner/src/coding/run-worktree.test.ts packages/browser-runner/src/coding/run-worktree-paths.test.ts packages/browser-runner/src/coding/worktree-routes.test.ts packages/browser-runner/src/coding/git-guard.test.ts packages/browser-runner/src/coding/stashes.test.ts packages/browser-runner/src/coding/branches.test.ts
+        run: pnpm exec vitest run --project integration packages/browser-runner/src/coding/run-worktree.test.ts packages/browser-runner/src/coding/run-worktree-paths.test.ts packages/browser-runner/src/coding/worktree-routes.test.ts packages/browser-runner/src/coding/stashes.test.ts packages/browser-runner/src/coding/branches.test.ts

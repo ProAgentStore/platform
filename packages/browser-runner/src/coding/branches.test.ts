@@ -1,11 +1,16 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { branchInventory, compareBranch, deleteBranch, integrateBranch, isProtectedName, readChecks } from "./branches.js";
 import type { GhRunner } from "./merge-evidence.js";
 
+/** One spelling of a path for comparison: real (macOS /private, Windows 8.3 names), forward slashes, case-folded on Windows. git prints worktrees as C:/... where tmpdir() gives C:\\... (#1715). */
+const samePath = (p: string) => {
+	const real = realpathSync.native(p).replace(/\\/g, "/");
+	return process.platform === "win32" ? real.toLowerCase() : real;
+};
 const git = (dir: string, ...argv: string[]) => execFileSync("git", argv, { cwd: dir, encoding: "utf-8" }).trim();
 const ident = (dir: string) => {
 	git(dir, "config", "user.email", "t@example.com");
@@ -77,7 +82,7 @@ describe("branchInventory", () => {
 		const linked = join(root, "linked");
 		git(work, "worktree", "add", "-q", linked, "feature");
 		const inv = await branchInventory(work);
-		expect(inv.local.find((b) => b.name === "feature")!.checkedOutAt.map((p) => p.replace(/^\/private/, ""))).toEqual([linked.replace(/^\/private/, "")]);
+		expect(inv.local.find((b) => b.name === "feature")!.checkedOutAt.map(samePath)).toEqual([samePath(linked)]);
 		// and the same answer from inside the linked tree
 		const fromLinked = await branchInventory(linked);
 		expect(fromLinked.local.find((b) => b.name === "main")!.checkedOutAt).toHaveLength(1);
