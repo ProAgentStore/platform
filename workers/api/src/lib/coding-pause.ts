@@ -31,7 +31,7 @@ import {
 import { type ProviderRetryPolicy, retrySchedule, sayWait } from "./provider-retry.js";
 import type { LoopStopReason } from "./agent-loop.js";
 import { clipMarked } from "./clip-marked.js";
-import { fallBackToNextEngine } from "./engine-fallback.js";
+import { fallBackToNextEngine, type SwitchEngine } from "./engine-fallback.js";
 import { ASK_QUESTION_FULL_MAX, type AskPart } from "./coding-ask.js";
 import type { CapSummary, CodingOutcome, CodingResult } from "./coding-loop.js";
 import { type DeepLink, deepLinkFor } from "./console-links.js";
@@ -96,7 +96,7 @@ export interface PauseDeps {
 	 * (`tried`), the session's command and client type rewritten and its engine restarted on it. `exhausted` is true when a chain was configured and has
 	 * nothing left (the owner is alerted); false when none was configured. Absent: no fallback is possible.
 	 */
-	switchEngine?: (tried: string[]) => Promise<{ ok: true; fromId: string; from: string; to: string } | { ok: false; exhausted: boolean; labels: string[]; why: string }>;
+	switchEngine?: SwitchEngine;
 	/** Write one structured provider-retry fact to the run's durable trace (#1391). Absent: nothing is recorded (a test, an old caller). */
 	trace?: (name: string, message: string, data: Record<string, unknown>) => Promise<void>;
 	/** Repo label, for the notification body. */

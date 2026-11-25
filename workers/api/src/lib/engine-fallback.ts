@@ -10,11 +10,21 @@
  */
 
 import { clipMarked } from "./clip-marked.js";
-import type { CodingEngine } from "./coding-engines.js";
 import type { CodingResult } from "./coding-loop.js";
-import type { PauseDeps, PauseVerdict } from "./coding-pause.js";
 import type { EngineWaitState } from "./coding-wait.js";
 import type { ProviderErrorRecord } from "./engine-provider-error.js";
+
+/** The session switch `PauseDeps.switchEngine` performs (#1621); `exhausted` is true when a chain was configured and has nothing left. */
+export type SwitchEngine = (tried: string[]) => Promise<{ ok: true; fromId: string; from: string; to: string } | { ok: false; exhausted: boolean; labels: string[]; why: string }>;
+
+/** The slice of `PauseDeps` the fallback uses — declared here so this module never imports `coding-pause.ts` (a static cycle the import-graph test forbids). */
+export interface FallbackDeps {
+	repo: string;
+	switchEngine?: SwitchEngine;
+	trace?: (name: string, message: string, data: Record<string, unknown>) => Promise<void>;
+	notify: (title: string, body: string, key: string, alert: boolean) => Promise<void>;
+	announce: (message: string) => Promise<void>;
+}
 
 /** A refused turn that means the subscription behind the engine is spent: `billing` (no credit — nothing waiting fixes it) or `limit` (a usage window that reopens later). */
 export type QuotaStop = "billing" | "limit";
@@ -34,7 +44,7 @@ export function quotaStop(result: { outcome: string; waitKind?: "limit" | "trans
  * The next preset to run on after `currentId`: follow the `fallbackId` chain, skipping any preset this run already
  * used (`tried`) so a cycle (A to B to A) ends instead of looping. Null when the chain has nothing left.
  */
-export function nextFallbackEngine(engines: readonly CodingEngine[], currentId: string, tried: readonly string[]): CodingEngine | null {
+export function nextFallbackEngine<E extends { id: string; fallbackId?: string }>(engines: readonly E[], currentId: string, tried: readonly string[]): E | null {
 	const seen = new Set([...tried, currentId]);
 	let cur = engines.find((e) => e.id === currentId);
 	for (let hop = 0; cur?.fallbackId && hop < engines.length; hop++) {
@@ -68,7 +78,7 @@ export function enginesExhaustedMessage(repo: string, labels: readonly string[])
  * (billing) or parking (limit). Null when this is not that, or no switch is possible — then the ordinary ending or park applies, and when a configured
  * chain is used up the owner is alerted, because nothing will recover on its own then.
  */
-export async function fallBackToNextEngine(deps: PauseDeps, input: { result: CodingResult; state: EngineWaitState }): Promise<PauseVerdict | null> {
+export async function fallBackToNextEngine(deps: FallbackDeps, input: { result: CodingResult; state: EngineWaitState }): Promise<{ resume: true; resumeNote: string } | null> {
 	const { result, state } = input;
 	const why = quotaStop(result);
 	if (!why || !deps.switchEngine) return null;
