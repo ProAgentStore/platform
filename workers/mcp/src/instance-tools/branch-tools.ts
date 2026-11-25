@@ -238,7 +238,7 @@ export function registerBranchTools(server: McpServer, ctx: InstanceToolsCtx): v
 			const input = { instance_id, repo_id, runner_node, session_id, expected_head };
 			const denied = await requirePermission(safetyFor(token), "destructive", "coding_worktree_publish", input);
 			if (denied) return denied;
-			const endpoint = route(instance_id, repo_id, "worktrees/publish");
+			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/coding/repos/${encodeURIComponent(repo_id)}/worktrees/publish`; // written out in full, like the discard, so the MCP parity check can read it
 			if (dry_run) return dryRun(safetyFor(token), "coding_worktree_publish", "publish one ended run's isolated worktree", input, { endpoint, method: "POST", effect: "The machine would refuse a live engine or a moved head, then push the run's commits with a plain push (to the target for isolated-direct, to the run branch plus an opened pull request for isolated-pr), read the remote back, and remove the worktree only if that read back and it is clean. Uncommitted files are never published.", reversible: "Not automatically: a published commit is on the remote. A pushed run branch can be deleted; the receipt names what was pushed." });
 			const unconfirmed = await requireConfirmation(safetyFor(token), "coding_worktree_publish", confirm, "coding_worktree_publish", input);
 			if (unconfirmed) return unconfirmed;

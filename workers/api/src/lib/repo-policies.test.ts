@@ -382,6 +382,8 @@ describe("promotion is a human action", () => {
 			// #1709 `coding_worktree_discard`: POST to the worktree-discard sub-route, whose body is a machine, a session and a head — it
 			// cannot carry a policy (the route never reads one). Written out in full (not through `route()`) so the MCP parity check can read it.
 			`/v1/instances/$\{encodeURIComponent(instance_id)}/coding/repos/$\{encodeURIComponent(repo_id)}/worktrees/discard`,
+			// #1717 `coding_worktree_publish`: POST to the worktree-publish sub-route — a machine, a session and a head, no policy. Written out in full for the parity check.
+			`/v1/instances/$\{encodeURIComponent(instance_id)}/coding/repos/$\{encodeURIComponent(repo_id)}/worktrees/publish`,
 			// The COLLECTION — list repos, add a repo. Cannot carry a policy: the field is accepted
 			// only by the per-repo route below.
 			`/v1/instances/$\{instance_id}/coding/repos`,
