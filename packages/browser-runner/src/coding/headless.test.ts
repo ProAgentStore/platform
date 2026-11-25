@@ -262,7 +262,13 @@ for (const method of ["start", "input"] as const) {
 }
 const removeDir = (dir: string) => {
 	for (const s of touched) if (s.config.workDir === dir) s.stop();
-	rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+	try {
+		rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+	} catch (e) {
+		// Three of these directories (turn-err, stale, tool-ok) stayed locked on a Windows runner even after their engines were stopped and
+		// the removal retried for over a minute; the holder is not identified (#1724). A temp dir left on a CI runner is harmless, a failed file is not.
+		if (process.platform !== "win32" || (e as NodeJS.ErrnoException).code !== "EBUSY") throw e;
+	}
 };
 
 describe("HeadlessSession (stream-json engine)", () => {
