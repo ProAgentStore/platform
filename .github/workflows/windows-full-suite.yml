@@ -1,0 +1,42 @@
+name: Windows full suite
+# The whole unit + integration suite (`pnpm test:full`) on a real Windows runner (#1723). cross-os.yml covers named files only.
+# Manual dispatch ONLY, deliberately: never on push or pull_request, so a red run here cannot stop a deploy. Its JSON report is
+# uploaded as an artifact so the failures can be triaged by root cause without re-running.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  windows-full:
+    runs-on: windows-2022  # pinned, never -latest (#1266; scripts/check-workflow-runner.mjs reads this line, so no matrix)
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The same builds ci.yml runs before the suite: tests import the SDK dist and the generated host pages.
+      - name: Build SDK, console, admin and host pages
+        shell: bash
+        run: |
+          (cd packages/sdk && npx tsc)
+          (cd store/console && npx vite build)
+          (cd store/admin && npx vite build)
+          (cd workers/host && node build.js)
+      - name: Unit + integration tests (verdict from the JSON report, #920)
+        run: pnpm test:full
+      - name: Upload the JSON report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-vitest-report
+          path: test-results/
+          if-no-files-found: warn
