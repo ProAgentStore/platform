@@ -54,7 +54,11 @@ const git = (args: string[], env = BASE_ENV) =>
 	process.platform === "win32" && env !== BASE_ENV
 		? spawnSync("cmd.exe", ["/d", "/c", "git", ...args], { cwd: repo, env, encoding: "utf8" })
 		: spawnSync("git", args, { cwd: repo, env, encoding: "utf8" });
-const sh = (shell: string, script: string, env: NodeJS.ProcessEnv) => spawnSync(shell, ["-c", script], { cwd: repo, env, encoding: "utf8" });
+const sh = (shell: string, script: string, env: NodeJS.ProcessEnv) => {
+	// MSYSTEM (set on the CI image) makes an MSYS bash put `/<MSYSTEM>/bin` in front of PATH, ahead of the guard.
+	const { MSYSTEM: _msystem, ...clean } = env;
+	return spawnSync(shell, process.platform === "win32" ? ["--noprofile", "--norc", "-c", script] : ["-c", script], { cwd: repo, env: process.platform === "win32" ? clean : env, encoding: "utf8" });
+};
 const installed = (bin: string) => spawnSync("sh", ["-c", `command -v ${bin}`]).status === 0;
 
 /** Everything foreign or owned that must not move: object identities, the index, and file bytes. */
