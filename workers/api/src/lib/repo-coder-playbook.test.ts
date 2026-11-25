@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { Env } from "../types.js";
+import { readStandingInstructions } from "./coding-standing-constraints.js";
 import { composePlaybook, resolveRepoCoderPlaybook } from "./repo-coder-playbook.js";
 
 interface Fixture {
@@ -109,5 +110,33 @@ describe("effective Repo Coder playbook (#1691)", () => {
 		const imports = [...src.matchAll(/^import .* from "(.+)";$/gm)].map((m) => m[1]);
 		expect(imports).toEqual(["../types.js"]);
 		expect(src).not.toMatch(/\b(UPDATE|INSERT INTO|DELETE FROM)\b/);
+	});
+});
+
+describe("delivery of the effective playbook (#1692)", () => {
+	const synthetic = "If a pre-push check fails: preserve the work, compare with a clean main, and leave the hook enabled.";
+
+	it("the Pilot standing instructions are the resolver text, template layer included", async () => {
+		const f = base();
+		f.repos[0].instructions = synthetic;
+		const env = envFor(f);
+		const standing = await readStandingInstructions(env, { instanceId: "i1", userId: "u1", repoId: "r1" });
+		expect(standing).toBe((await resolveRepoCoderPlaybook(env, { instanceId: "i1", userId: "u1", repoId: "r1" })).text);
+		expect(standing).toContain("TEMPLATE default");
+		expect(standing?.endsWith(synthetic)).toBe(true);
+		// another repo of the same instance, and another owner, never see it
+		expect(await readStandingInstructions(env, { instanceId: "i1", userId: "u1", repoId: "r2" })).not.toContain("preserve the work");
+		expect(await readStandingInstructions(env, { instanceId: "i1", userId: "u2", repoId: "r1" })).toBeUndefined();
+	});
+
+	it("every verified entry point reads the one resolver, and none rebuilds the join", () => {
+		const root = join(__dirname, "..");
+		for (const rel of ["lib/coding-standing-constraints.ts", "routes/coding-drive.ts", "routes/coding-brains.ts", "routes/coding-repos.ts"]) {
+			const src = readFileSync(join(root, rel), "utf8");
+			expect(src, rel).toContain("resolveRepoCoderPlaybook");
+			expect(src, rel).not.toContain("readSpecialInstructions");
+		}
+		// the direct turn wraps the text once; the runner/headless seam adds nothing of its own
+		expect(readFileSync(join(root, "routes/coding-drive.ts"), "utf8").match(/Project rules/g)).toHaveLength(1);
 	});
 });

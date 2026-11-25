@@ -18,15 +18,11 @@ import type { Env } from "../types.js";
 import type { CodingGoal } from "./coding-loop.js";
 import { listDirectives, RUN_DIRECTIVES_MAX } from "./coding-ownership.js";
 import { activeConstraints, constraintSources } from "./coding-scope-constraints.js";
-import { readSpecialInstructions } from "../routes/coding-shared.js";
+import { resolveRepoCoderPlaybook } from "./repo-coder-playbook.js";
 
-/** Instance Special Instructions + the repo's own rules, joined as every other surface joins them. */
+/** The effective playbook text (#1691): template + instance Special Instructions + the repo's own rules, one resolver for every surface (#1692). */
 export async function readStandingInstructions(env: Env, input: { instanceId: string; userId: string; repoId: string }): Promise<string | undefined> {
-	const instance = await readSpecialInstructions(env, input.instanceId, input.userId);
-	const repo = await env.DB.prepare("SELECT instructions FROM coding_repos WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3")
-		.bind(input.repoId, input.instanceId, input.userId)
-		.first<{ instructions: string | null }>();
-	return [instance, repo?.instructions].filter(Boolean).join("\n\n") || undefined;
+	return (await resolveRepoCoderPlaybook(env, input)).text;
 }
 
 /**

@@ -6,6 +6,7 @@ import { useUploader } from "../lib/use-uploader";
 import { showsConnector } from "../lib/connectorState";
 import { showsKnowledgeSubTab, type SurfaceCaps } from "../lib/surfaces";
 import { buttonClass, cardClass } from "../lib/control-classes";
+import EffectivePlaybook from "../components/EffectivePlaybook";
 import CredentialsSection from "../components/CredentialsSection";
 import FilesSection from "../components/FilesSection";
 import LoadFailed from "../components/LoadFailed";
@@ -800,6 +801,7 @@ export default function KnowledgeTab({ instanceId, caps }: Props) {
 							</div>
 						</>
 					)}
+					{caps.surfaces.includes("coding") && <EffectivePlaybook instanceId={instanceId} />}
 				</div>
 			)}
 

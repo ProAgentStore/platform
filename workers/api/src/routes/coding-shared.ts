@@ -36,19 +36,6 @@ export async function requireOwned(
 	return { uid: session.uid, instanceId, session };
 }
 
-/** The instance's Special Instructions (user rules) from its JSON config. */
-export async function readSpecialInstructions(env: Env, instanceId: string, userId: string): Promise<string | undefined> {
-	const row = await env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2")
-		.bind(instanceId, userId)
-		.first<{ config: string }>();
-	try {
-		const cfg = JSON.parse(row?.config || "{}") as { specialInstructions?: string };
-		return cfg.specialInstructions || undefined;
-	} catch {
-		return undefined;
-	}
-}
-
 /**
  * The machine that owns this session — routing follows the session's stamped node, and null when
  * that machine is not actually connected (#532).

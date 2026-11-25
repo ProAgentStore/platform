@@ -38,9 +38,16 @@
  *   `agents.config.behaviour` is typed style. So `agents.config.instructions` is the template layer,
  *   and NOTHING writes it yet: it is empty on every template until a follow-up adds an authenticated,
  *   versioned provider edit. Resolving an empty layer is the behaviour-preserving default.
- * - The resolver is not yet the single source for the Pilot (`coding-standing-constraints.ts`) or
- *   the direct turn path (`routes/coding-drive.ts`); both still join instance + repo themselves.
- *   Delivering this view across callers and launch routes, and showing it in UI/MCP, is #1692.
+ * - Delivery (#1692). The resolver is the one source for: the Pilot (`readStandingInstructions` in
+ *   `coding-standing-constraints.ts`, refreshed before every decision — fresh, delegated, resumed,
+ *   queued and recovery runs all go through it), the owner's direct turn (`routes/coding-drive.ts`,
+ *   wrapped once as "Project rules"), the co-pilot (`routes/coding-brains.ts`), and the read-only view
+ *   (`GET …/coding/repos/:repoId/playbook`, MCP `get_instance_instructions` with `repo_id`, the console
+ *   Rules & Tips panel). EXCEPTIONS, deliberately not injected: controller-authored turns sent by a
+ *   chat brain (`coding-brains.ts` `delegate`, `storage-tools.ts` send-to-repo) — the brain composing
+ *   them is itself given these rules — and the runner/headless seam, which forwards the turn it is
+ *   given and resolves nothing. Claude (persistent) and Codex/other (one-shot) engines receive the
+ *   same text because both are fed through the same turn; the engine itself is not tested here.
  */
 import type { Env } from "../types.js";
 

@@ -161,15 +161,17 @@ export function registerSettingsTools(server: McpServer, ctx: InstanceToolsCtx):
 
 	server.tool(
 		"get_instance_instructions",
-		"Read a subscribed instance's Special Instructions (the subscriber's free-text rules injected at the top of the agent's prompt — console Knowledge → Rules & Tips).",
+		"Read a subscribed instance's Special Instructions (the subscriber's free-text rules injected at the top of the agent's prompt — console Knowledge → Rules & Tips). For a coding instance pass `repo_id` (from coding_repos_list) to read the EFFECTIVE playbook for that repo instead (#1692): `{text, layers:[{source: template|instance|repo, origin, text}], precedence, empty}`, the layers lowest precedence first (a later layer wins on a conflict) and `text` exactly what the Pilot, the co-pilot and a direct message are given. Free-text guidance only: it grants no capability and changes no merge, question or approval setting. The Operator Manual is caller reference and is not a layer; read it with get_instance_operator_manual.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
+			repo_id: z.string().optional().describe("Coding repo ID from coding_repos_list. Returns the effective playbook for that repo (template + instance + repo layers) instead of the instance's own text."),
 		},
-		async ({ token, instance_id }) => {
+		async ({ token, instance_id, repo_id }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const data = await authedCall(`/v1/instances/${instance_id}/instructions`, sessionToken, {}, env);
+			const path = repo_id ? `/v1/instances/${instance_id}/coding/repos/${encodeURIComponent(repo_id)}/playbook` : `/v1/instances/${instance_id}/instructions`;
+			const data = await authedCall(path, sessionToken, {}, env);
 			return jsonText(data);
 		},
 	);

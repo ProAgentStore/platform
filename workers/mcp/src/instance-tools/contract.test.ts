@@ -388,7 +388,7 @@ const TABLE: Record<string, Row> = {
 	get_instance_board_config: ["board", "none", null, null, "instance_id,token"],
 	get_instance_behaviour_schema: ["settings", "none", null, null, "token"],
 	get_instance_connection_guide: ["guide", "read", null, null, "instance_id,token"],
-	get_instance_instructions: ["settings", "none", null, null, "instance_id,token"],
+	get_instance_instructions: ["settings", "none", null, null, "instance_id,repo_id,token"],
 	get_instance_notification_policy: ["settings", "none", null, null, "instance_id,token"],
 	get_notification_vocabulary: ["settings", "none", null, null, "token"],
 	get_instance_operator_manual: ["settings", "none", null, null, "context_offset,instance_id,token"],

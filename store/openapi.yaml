@@ -235,6 +235,13 @@ tags:
       `GET …/coding/repos/{repoId}/retargets` returns the audit history and labels each session
       with the coordinate the binding had when it started.
 
+      **Effective playbook (#1691, #1692).** `GET …/coding/repos/{repoId}/playbook` is the read-only view of the
+      free-text Instructions the coder is given for that repo: `{text, layers:[{source: template|instance|repo, origin, text}],
+      precedence, empty, repoName}`, layers lowest precedence first (template defaults, the owner's instance Special
+      Instructions, the repo's own Instructions; a later layer wins on a conflict). It is the one resolver the Pilot,
+      the co-pilot and direct messages use. Guidance only: it grants no capability and changes no merge, question or approval
+      setting. The Operator Manual is caller reference and is not a layer. `404` unknown repo.
+
       **Per-machine checkouts (#1142).** A binding is one repo; where it lives is per machine. `GET …/coding/repos`
       returns each repo with `checkouts: [{machineId, workdir, cloneStatus, cloneError, lastVerifiedAt}]` beside
       the binding's own `workdir`/`cloneStatus`. `POST …/coding/repos/{repoId}/mirror` puts the repo on every

@@ -30,9 +30,10 @@ import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { optionsFor, type SurfaceSpec } from "../lib/surface-options.js";
 import { noteUnmeteredHeadlessDrive } from "../lib/engine-metering.js";
 import { startSessionOnRunner } from "../lib/coding-session-open.js";
-import { getSessionRunnerConn, readSpecialInstructions, requireOwned } from "./coding-shared.js";
+import { getSessionRunnerConn, requireOwned } from "./coding-shared.js";
 import { withTurnReplay } from "../lib/coding-turn-replay.js";
 import { dispatchOwnedTurn } from "../lib/coding-dispatch.js";
+import { resolveRepoCoderPlaybook } from "../lib/repo-coder-playbook.js";
 import { describeOwner, runnerEngineProbe } from "../lib/coding-ownership.js";
 import type { Env } from "../types.js";
 
@@ -192,9 +193,7 @@ export function registerCopilotRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		const memory = await contextForCopilot(c.env, sessionId);
 		// Inject instance + repo instructions into the co-pilot prompt.
 		const repo = session ? await getRepo(c.env, instanceId, uid, session.repoId) : null;
-		const instanceInstructions = await readSpecialInstructions(c.env, instanceId, uid);
-		const repoInstructions = repo?.instructions;
-		const combined = [instanceInstructions, repoInstructions].filter(Boolean).join("\n\n") || undefined;
+		const combined = session ? (await resolveRepoCoderPlaybook(c.env, { instanceId, userId: uid, repoId: session.repoId })).text : undefined;
 		// Pass the runner connection + workDir so a substantive question can READ the real code
 		// (read_file/git_diff/…) to ground its answer. Omitted for the auto-summary path (no
 		// question) and when the runner is offline (conn null) → cheap terminal-only single shot.

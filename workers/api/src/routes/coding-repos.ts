@@ -36,6 +36,7 @@ import { mergePolicyPatch } from "../lib/coding-authority.js";
 import { patchInstanceConfig } from "../lib/instance-config.js";
 import { parseRepoRef } from "../lib/git-providers.js";
 import { sqlTime } from "../lib/sql-time.js";
+import { resolveRepoCoderPlaybook } from "../lib/repo-coder-playbook.js";
 import { getSessionRunnerConn, pickNextIssue, requireOwned } from "./coding-shared.js";
 import { addPairedRepo, duplicateBinding, duplicateCoderWarning, isUniqueViolation } from "./coding-repo-add.js";
 import { registerRepoRetargetRoutes } from "./coding-repo-retarget.js";
@@ -487,6 +488,21 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		const repo = await getRepo(c.env, instanceId, uid, c.req.param("repoId"));
 		if (!repo) throw new HttpError(404, "Repo not found");
 		return c.json({ instructions: repo.instructions || "" });
+	});
+
+	/**
+	 * The EFFECTIVE playbook for one repo (#1692, #1691): template defaults, the owner's instance Special Instructions and this
+	 * repo's rules, in precedence order with where each came from. Read-only and the same resolver the Pilot, the co-pilot and the
+	 * direct turn use, so what this shows is what the engine is given. Free text only: it carries no permission, and nothing here
+	 * changes merge/question policy, approvals or checks.
+	 */
+	codingRoutes.get("/:instanceId/coding/repos/:repoId/playbook", async (c) => {
+		const { uid, instanceId } = await requireOwned(c);
+		const repoId = c.req.param("repoId");
+		const repo = await getRepo(c.env, instanceId, uid, repoId);
+		if (!repo) throw new HttpError(404, "Repo not found");
+		const playbook = await resolveRepoCoderPlaybook(c.env, { instanceId, userId: uid, repoId });
+		return c.json({ ...playbook, empty: playbook.layers.length === 0, repoName: repo.name });
 	});
 
 	codingRoutes.put("/:instanceId/coding/repos/:repoId/instructions", async (c) => {

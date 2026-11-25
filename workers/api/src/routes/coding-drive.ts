@@ -15,10 +15,11 @@ import { logError } from "../lib/error-log.js";
 import { sessionAttachment } from "../lib/session-attachment.js";
 import { resolveCloneCredential } from "../lib/git-credentials.js";
 import { callRunner } from "../lib/runner-client.js";
-import { getSessionRunnerConn, readSpecialInstructions, requireOwned } from "./coding-shared.js";
+import { getSessionRunnerConn, requireOwned } from "./coding-shared.js";
 import { withTurnReplay } from "../lib/coding-turn-replay.js";
 import { describeOwner, repoFreeForRun, runnerEngineProbe } from "../lib/coding-ownership.js";
 import { dispatchOwnedTurn } from "../lib/coding-dispatch.js";
+import { resolveRepoCoderPlaybook } from "../lib/repo-coder-playbook.js";
 import type { Env } from "../types.js";
 
 /**
@@ -101,7 +102,7 @@ export function registerDriveRoutes(codingRoutes: Hono<{ Bindings: Env }>): void
 				// …then prepend the combined rules (instance Special Instructions + per-repo Rules). Manual
 				// sends bypass the autonomous brain (which injects rules into its own prompt), so without
 				// this the CLI never sees them. This makes the rules bind the CLI no matter how it's driven.
-				const combined = [await readSpecialInstructions(c.env, instanceId, uid), repoRow?.instructions].filter(Boolean).join("\n\n");
+				const combined = (await resolveRepoCoderPlaybook(c.env, { instanceId, userId: uid, repoId: session.repoId })).text;
 				const text = combined ? `[Project rules — follow these for everything you do:\n${combined}\n]\n\n${action.text}` : action.text;
 				// #693 slice 2: an engine with no memory of its own gets the platform's record with the turn.
 				return withTurnReplay(c.env, { instanceId, userId: uid, repoId: session.repoId, clientType: session.clientType }, { ...action, text });
