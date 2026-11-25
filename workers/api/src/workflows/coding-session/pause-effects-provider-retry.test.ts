@@ -208,6 +208,54 @@ describe("the model switch rewrites the session's stored command and restarts it
 		expect(starts).toBe(0);
 	});
 
+	// #1720: the relaunch makes the same isolation check a fresh open, a park-resume and the heal make, inside its existing step.
+	describe("an isolated repository whose runner relaunched without a worktree (#1720)", () => {
+		const NO_WORKTREE = /set to isolated-pr.*did not report an isolated worktree/;
+		const effectsStarting = (startOnRunner: () => Promise<unknown>) => {
+			return makePauseEffects({
+				env, step: {} as never, goal: { repo: "acme/app" } as never, instanceId: "i1", userId: "u1", sessionId: "s1", repoId: "r1", boardTaskId: undefined, loopRunId: "run-9", driverId: null,
+				workflowInstanceId: undefined, cloneUrl: undefined, branch: undefined, token: undefined, tokenUsername: undefined, cardId: null,
+				runRetry: (async (label: string, fn: () => Promise<unknown>) => {
+					labels.push(label);
+					return fn();
+				}) as never,
+				postToChat: async () => {}, getConn: () => ({}) as never, setConn: () => {}, nextN: () => 0, startOnRunner, getObjective: () => null,
+			});
+		};
+
+		it("ends the session inside the same step, fails the switch with the sentence and puts the old command back", async () => {
+			seedSession();
+			d1.exec("UPDATE coding_repos SET strategy = 'isolated-pr' WHERE id = 'r1'");
+			const out = await effectsStarting(async () => ({ engine: "codex" })).deps(2, "platform_interrupt").switchModel?.("gpt-5.1-codex-mini");
+			expect(out).toMatchObject({ ok: false, why: expect.stringMatching(NO_WORKTREE) });
+			expect(sessionCommand()).toBe(CODEX);
+			expect(callRunner.mock.calls.map((c) => c[1])).toEqual(["/coding/end", "/coding/end"]); // the fallback's own end, then the isolation refusal's
+			expect(labels).toEqual(["fallback-read-2", "fallback-set-2", "fallback-end-2", "fallback-start-2"]); // no new step name
+		});
+
+		it("carries on when the runner did report a worktree", async () => {
+			seedSession();
+			d1.exec("UPDATE coding_repos SET strategy = 'isolated-pr' WHERE id = 'r1'");
+			const out = await effectsStarting(async () => ({ checkout: { mode: "worktree", path: "/wt/x" } })).deps(0, "platform_interrupt").switchModel?.("gpt-5.1-codex-mini");
+			expect(out).toEqual({ ok: true, from: "gpt-5.1-codex" });
+			expect(callRunner.mock.calls.map((c) => c[1])).toEqual(["/coding/end"]);
+		});
+
+		it("refuses the reauth relaunch the same way, in its own step", async () => {
+			seedSession();
+			d1.exec("UPDATE coding_repos SET strategy = 'isolated-pr' WHERE id = 'r1'");
+			await expect(effectsStarting(async () => ({})).deps(1, "platform_interrupt").restartEngine?.()).rejects.toThrow(NO_WORKTREE);
+			expect(labels).toEqual(["reauth-end-1", "reauth-start-1"]);
+		});
+
+		it("a repository with no stored strategy is never refused", async () => {
+			seedSession();
+			expect(await effectsStarting(async () => ({})).deps(0, "platform_interrupt").switchModel?.("gpt-5.1-codex-mini")).toEqual({ ok: true, from: "gpt-5.1-codex" });
+			await effectsStarting(async () => ({})).deps(1, "platform_interrupt").restartEngine?.();
+			expect(callRunner.mock.calls.map((c) => c[1])).toEqual(["/coding/end", "/coding/end"]); // only the relaunches' own ends
+		});
+	});
+
 	it("never touches another session's command", async () => {
 		seedSession();
 		d1.exec(`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, status, client_type, launch_command) VALUES ('s2', 'i1', 'r1', 'u1', 'ended', 'codex', '${CODEX}')`);

@@ -25,6 +25,7 @@ import { codingQuestionSource } from "../../lib/coding-question-source.js";
 import { postIssueComment } from "../../lib/github-issues.js";
 import { applyQuestionsPolicy, runQuestionsPolicy } from "../../lib/question-policy.js";
 import type { CodingGoal } from "../../lib/coding-loop.js";
+import { endIfNotIsolated } from "../../lib/isolated-run.js";
 import { callRunner, getRunnerConnIgnoringLiveness, type RunnerConn } from "../../lib/runner-client.js";
 import type { RunStep } from "../../lib/runner-availability.js";
 import type { ObjectiveDelivery } from "../../lib/coding-objective-delivery.js";
@@ -101,6 +102,19 @@ export function makePauseEffects(ctx: PauseEffectsCtx): PauseEffects {
 	let unparks = 0;
 	/** Ticks taken by this run's parks (#1686): each its own journalled step, numbered so a replay finds the same names. */
 	let ticks = 0;
+	/**
+	 * A relaunch inside its existing journalled step (#1720, as #1718 does for the heal): the engine started, then the isolation check every relaunch of a
+	 * session makes. An isolated repository whose runner came up without a worktree has its session ended inside the step (once) and the relaunch fails
+	 * with the sentence, so the caller's own failure path reports it. No added step; a repository with no stored strategy is never refused.
+	 */
+	const relaunch = async (name: string): Promise<void> => {
+		const r = (await runRetry(name, async () => {
+			const started = (await startOnRunner()) as { checkout?: unknown } | null;
+			const notIsolated = await endIfNotIsolated(env, getConn(), { instanceId, userId, repoId, sessionId }, started);
+			return notIsolated ? { ...started, notIsolated } : started;
+		})) as { notIsolated?: string } | null;
+		if (r?.notIsolated) throw new Error(r.notIsolated);
+	};
 	const deps = (round: number, wait: RunWaitReason): PauseDeps => ({
 		repo: goal.repo,
 		sourceIssue: () => codingQuestionSource(env, { instanceId, userId, sessionId, runId: loopRunId ?? null }, { askedAt: Date.now() }),
@@ -133,7 +147,7 @@ export function makePauseEffects(ctx: PauseEffectsCtx): PauseEffects {
 				originalCommand ??= cmd;
 				await runRetry(`fallback-end-${round}`, () => callRunner(getConn(), "/coding/end", { sessionId }));
 				getObjective()?.replaced();
-				await runRetry(`fallback-start-${round}`, () => startOnRunner());
+				await relaunch(`fallback-start-${round}`);
 			} catch (e) {
 				await setSessionLaunchCommand(env, instanceId, userId, sessionId, cmd).catch(() => undefined);
 				return { ok: false, why: `the restart on ${model} failed: ${e instanceof Error ? clipMarked(e.message, 200, { within: true }) : String(e)}` };
@@ -164,7 +178,7 @@ export function makePauseEffects(ctx: PauseEffectsCtx): PauseEffects {
 				await runRetry(`efb-end-${round}`, () => callRunner(getConn(), "/coding/end", { sessionId }));
 				getObjective()?.replaced();
 				goal.clientType = clientType;
-				await runRetry(`efb-start-${round}`, () => startOnRunner());
+				await relaunch(`efb-start-${round}`);
 			} catch (e) {
 				goal.clientType = read.clientType as typeof goal.clientType;
 				await setSessionEngine(env, instanceId, userId, sessionId, read.cmd, read.clientType).catch(() => undefined);
@@ -281,7 +295,7 @@ export function makePauseEffects(ctx: PauseEffectsCtx): PauseEffects {
 		// An ended-and-started engine has read nothing its predecessor read: the objective is owed to it again (#1019).
 		restartEngine: () => runRetry(`reauth-end-${round}`, () => callRunner(getConn(), "/coding/end", { sessionId })).then(() => {
 				getObjective()?.replaced();
-				return runRetry(`reauth-start-${round}`, () => startOnRunner());
+				return relaunch(`reauth-start-${round}`);
 			}).then(() => undefined),
 		sleep: (label, ms) => step.sleep(label, ms),
 		notify: (title, body, key, alert, url, type) =>
