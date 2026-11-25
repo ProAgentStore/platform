@@ -75,7 +75,7 @@ export default function BoardTab({ instanceId, apply }: { instanceId: string; ap
 	const [truncated, setTruncated] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [retrying, setRetrying] = useState<Set<string>>(new Set());
-	const [view, setView] = useState<BoardView>("kanban");
+	const [view, setView] = useState<BoardView>("lanes"); // the four lanes are the default board (#1698)
 	/** The application action in flight, so its button can say so and cannot be double-sent. */
 	const [busy, setBusy] = useState<string | null>(null);
 	const [editingCols, setEditingCols] = useState(false);
@@ -100,7 +100,7 @@ export default function BoardTab({ instanceId, apply }: { instanceId: string; ap
 			setItems(data.items || []);
 			if (!repo) setRepos(issueRepos(data.items || []));
 			if (data.columns?.length) setServerCols(data.columns);
-			if (!viewInit.current && (data.view === "kanban" || data.view === "list")) { setView(data.view); viewInit.current = true; }
+			if (!viewInit.current && (data.view === "lanes" || data.view === "kanban" || data.view === "list")) { setView(data.view); viewInit.current = true; }
 			setTruncated(data.truncated === true);
 			setError(null);
 		} catch (e) {
@@ -113,7 +113,7 @@ export default function BoardTab({ instanceId, apply }: { instanceId: string; ap
 	const changeView = useCallback(async (v: BoardView) => {
 		setView(v);
 		viewInit.current = true;
-		if (v === "issues" || v === "lanes") return; // client-only views: never saved as the server's kanban | list
+		if (v === "issues") return; // client-only: the saved choice is lanes | kanban | list
 		try { await api(`/v1/instances/${instanceId}/board-config`, { method: "PUT", body: JSON.stringify({ view: v }) }); } catch { /* non-fatal */ }
 	}, [instanceId]);
 

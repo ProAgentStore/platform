@@ -14,14 +14,14 @@ type Card = Record<string, unknown>;
 const base = { needsYou: false, waitingToResume: false, nativeStatus: "running", updatedAt: 1, instanceId: "inst-1" };
 const session = (id: string, over: Card = {}): Card => ({ ...base, cardId: `csess-${id}`, kind: "coding-session", lane: "in_progress", title: `Session ${id}`, native: { status: "active", sessionId: id }, ...over });
 
-async function mockBoard(page: Page, state: { cards: Card[] }) {
+async function mockBoard(page: Page, state: { cards: Card[]; view?: string }) {
 	await page.addInitScript((t) => window.localStorage.setItem("pags:session", t), TOKEN);
 	await page.route(`${API}/**`, async (route) => {
 		const path = new URL(route.request().url()).pathname;
 		const json = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(data) });
 		if (path === "/v1/auth/me") return json({ id: "user-1", login: "tester", name: "Test User", display_name: "Test User", avatar: "https://example.com/a.png", roles: ["user"], boardConfig: null });
 		if (path === "/v1/instances/my/instances") return json({ instances: [INSTANCE] });
-		if (path === "/v1/instances/inst-1/board") return json({ columns: [], items: [], view: "kanban", truncated: false });
+		if (path === "/v1/instances/inst-1/board") return json({ columns: [], items: [], view: state.view ?? "kanban", truncated: false });
 		if (path === "/v1/instances/inst-1/board/projection") return json({ lanes: [], cards: state.cards });
 		if (path === "/v1/triggers/preview") return json({ issues: [] });
 		return json({});
@@ -73,6 +73,80 @@ test.describe("the four-lane board (#1698)", () => {
 		await expect(queuedCard.getByTestId("badge-needs-you")).toHaveCount(0);
 		await expect(page.locator('[data-card-id="csess-s1"]')).toHaveCount(1); // never a duplicate owner action
 		await expect(lane(page, "blocked").locator('[data-card-id="csess-s1"]')).toHaveCount(0);
+	});
+
+	test("the four lanes are the default board: no click, and Board stays one click away", async ({ page }) => {
+		await mockBoard(page, { view: "lanes", cards: [session("s1")] });
+		await page.goto("/console/instances/inst-1/board");
+		await expect(page.getByTestId("execution-lanes")).toBeVisible();
+		await expect(page.getByTitle("Runs and sessions by lane")).toHaveAttribute("aria-pressed", "true");
+		await page.getByTitle("Board view").click();
+		await expect(page.getByTestId("execution-lanes")).toHaveCount(0);
+		await page.getByTitle("Runs and sessions by lane").click();
+		await expect(page.getByTestId("execution-lanes")).toBeVisible();
+	});
+
+	test("unstarted tickets are Queued in the picker's order with a rank, and a deferred question keeps its one card", async ({ page }) => {
+		await mockBoard(page, {
+			view: "lanes",
+			cards: [
+				{ ...base, cardId: "ticket:b", kind: "queued-ticket", lane: "queued", queueRank: 1, title: "Second ticket", nativeStatus: "unstarted", native: { status: "unstarted", ticketId: "b", pickup: "agent" } },
+				{ ...base, cardId: "ticket:a", kind: "queued-ticket", lane: "queued", queueRank: 0, title: "First ticket", nativeStatus: "unstarted", native: { status: "unstarted", ticketId: "a", pickup: "agent" } },
+				session("s9", {
+					lane: "blocked",
+					needsYou: true,
+					blocker: { what: "Waiting for your answer: Which branch?", nextOwner: "owner" },
+					ownerAction: { itemId: "coder_question:q9", triage: { status: "deferred", needsComputer: true, deferUntil: null } },
+				}),
+			],
+		});
+		await page.goto("/console/instances/inst-1/board");
+		await expect(lane(page, "queued").getByTestId("execution-card")).toHaveCount(2);
+		const titles = await lane(page, "queued").locator('[data-testid="execution-card"] .font-semibold').allTextContents();
+		expect(titles).toEqual(["First ticket", "Second ticket"]);
+		await expect(lane(page, "queued").getByTestId("badge-queue-rank").first()).toHaveText("Next to run");
+		const blocked = lane(page, "blocked").locator('[data-card-id="csess-s9"]');
+		await expect(blocked.getByTestId("badge-needs-you")).toBeVisible();
+		await expect(blocked.getByTestId("badge-triage")).toHaveText(["Deferred", "Needs computer"]);
+		await expect(page.locator('[data-card-id="csess-s9"]')).toHaveCount(1);
+	});
+
+	test("a projection answer without cards shows the failure, and the page does not crash", async ({ page }) => {
+		await page.addInitScript((t) => window.localStorage.setItem("pags:session", t), TOKEN);
+		await page.route(`${API}/**`, async (route) => {
+			const path = new URL(route.request().url()).pathname;
+			const json = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(data) });
+			if (path === "/v1/auth/me") return json({ id: "user-1", login: "tester", name: "Test User", display_name: "Test User", avatar: "https://example.com/a.png", roles: ["user"], boardConfig: null });
+			if (path === "/v1/instances/my/instances") return json({ instances: [INSTANCE] });
+			if (path === "/v1/instances/inst-1/board") return json({ columns: [], items: [], view: "lanes", truncated: false });
+			return json({}); // the projection included: {}
+		});
+		await page.goto("/console/instances/inst-1/board");
+		await expect(page.getByText(/the lanes/i).first()).toBeVisible();
+		await expect(page.getByTestId("execution-lanes")).toHaveCount(0);
+		await page.getByTitle("Board view").click(); // the rest of the board still works
+		await expect(page.getByTitle("Board view")).toHaveAttribute("aria-pressed", "true");
+	});
+
+	test("a task held for approval is Blocked on you, and Approve posts to the endpoint the Board already uses", async ({ page }) => {
+		const posts: string[] = [];
+		const state = {
+			view: "lanes",
+			cards: [{ ...base, cardId: "task:t1", kind: "task", lane: "blocked", needsYou: true, nativeStatus: "needs_approval", title: "Apply to Acme", blocker: { what: "Waiting for your approval", nextOwner: "owner" }, native: { status: "needs_approval", taskId: "t1" } }] as Card[],
+		};
+		await mockBoard(page, state);
+		await page.route(`${API}/v1/instances/inst-1/tasks/t1/approve`, async (route) => {
+			posts.push(route.request().method());
+			state.cards = [{ ...state.cards[0], lane: "in_progress", needsYou: false, blocker: undefined, nativeStatus: "running", native: { status: "running", taskId: "t1" } }];
+			await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+		});
+		await page.goto("/console/instances/inst-1/board");
+		const card = lane(page, "blocked").locator('[data-card-id="task:t1"]');
+		await expect(card.getByTestId("badge-needs-you")).toBeVisible();
+		await card.getByTestId("approve").click();
+		await expect.poll(() => posts).toEqual(["POST"]);
+		await expect(lane(page, "in_progress").locator('[data-card-id="task:t1"]')).toBeVisible({ timeout: 15_000 });
+		await expect(page.locator('[data-card-id="task:t1"]')).toHaveCount(1);
 	});
 
 	test("an unreadable projection shows its failure with Retry, not an empty board", async ({ page }) => {

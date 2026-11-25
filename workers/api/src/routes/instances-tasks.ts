@@ -250,9 +250,9 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 		const instanceId = c.req.param("instanceId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
 		const body = (await c.req.json().catch(() => ({}))) as { columns?: unknown; view?: unknown };
-		const patch: { columns?: BoardColumn[] | null; view?: "kanban" | "list" } = {};
+		const patch: { columns?: BoardColumn[] | null; view?: "lanes" | "kanban" | "list" } = {};
 		if ("columns" in body) patch.columns = body.columns === null ? null : (body.columns as BoardColumn[]);
-		if (body.view === "kanban" || body.view === "list") patch.view = body.view;
+		if (body.view === "kanban" || body.view === "list" || body.view === "lanes") patch.view = body.view;
 		return c.json(await setInstanceBoardConfig(c.env, instanceId, session.uid, patch));
 	});
 

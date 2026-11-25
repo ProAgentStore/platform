@@ -63,11 +63,11 @@ describe("boardConfigForInstance", () => {
 	// An agent row whose slug/category yield the generic default columns.
 	const agentRow = { slug: "some-agent", category: "other", agent_config: "{}", instance_config: "{}" };
 
-	it("returns the agent's default columns + kanban view when no instance override is set", async () => {
+	it("returns the agent's default columns + the lanes view when no instance override is set (#1698)", async () => {
 		const { env } = mockEnv({ first: () => agentRow });
 		const cfg = await boardConfigForInstance(env, "inst-1", "u1");
 		expect(cfg.source).toBe("agent");
-		expect(cfg.view).toBe("kanban");
+		expect(cfg.view).toBe("lanes");
 		expect(cfg.columns).toEqual(cfg.agentColumns);
 		expect(cfg.columns.length).toBeGreaterThan(0);
 	});
@@ -83,10 +83,24 @@ describe("boardConfigForInstance", () => {
 		expect(cfg.agentColumns).not.toEqual(cfg.columns);
 	});
 
-	it("defaults to kanban when the stored view is anything other than 'list'", async () => {
+	it("defaults to lanes when the stored view is not one someone chose (#1698); an explicit Board or List choice is kept, and the stored columns are untouched", async () => {
+		const view = async (boardView: unknown, extra: Record<string, unknown> = {}) => {
+			const { env } = mockEnv({ first: () => ({ ...agentRow, instance_config: JSON.stringify({ boardView, ...extra }) }) });
+			return boardConfigForInstance(env, "inst-1", "u1");
+		};
+		expect((await view("garbage")).view).toBe("lanes");
+		expect((await view(undefined)).view).toBe("lanes");
+		expect((await view("kanban")).view).toBe("kanban");
+		expect((await view("list")).view).toBe("list");
+		expect((await view("lanes")).view).toBe("lanes");
+		// Creator- and owner-configured columns are preserved as they were and still drive the Board and List views:
+		const withColumns = await view(undefined, { boardColumns: [{ id: "todo", title: "Todo", statuses: ["queued"] }] });
+		expect(withColumns.view).toBe("lanes");
+		expect(withColumns.source).toBe("instance");
+		expect(withColumns.columns.map((c) => c.id)).toContain("todo");
 		const { env } = mockEnv({ first: () => ({ ...agentRow, instance_config: JSON.stringify({ boardView: "garbage" }) }) });
 		const cfg = await boardConfigForInstance(env, "inst-1", "u1");
-		expect(cfg.view).toBe("kanban");
+		expect(cfg.view).toBe("lanes");
 		expect(cfg.source).toBe("agent");
 	});
 

@@ -197,6 +197,35 @@ describe("mixed coding, application, scan and queued records", () => {
 	});
 });
 
+describe("unstarted tickets and generic runtime tasks (#1698 approved design)", () => {
+	const ticket = (over: Partial<{ ticketId: string; status: string; instanceId: string; userId: string }> = {}): BoardIdentityRecord => ({ kind: "queued-ticket", instanceId: "inst-1", userId: "u1", ticketId: "t-1", status: "unstarted", ...over });
+	const taskRec = (over: Partial<{ taskId: string; status: string; instanceId: string; userId: string }> = {}): BoardIdentityRecord => ({ kind: "task", instanceId: "inst-1", userId: "u1", taskId: "task-1", status: "running", ...over });
+
+	it("a ticket is ticket:<id>, the same card on every call, distinct from any run or session", () => {
+		expect(id(ticket())).toBe("ticket:t-1");
+		expect(id(ticket({ status: "budget_closed" }))).toBe("ticket:t-1");
+		expect(id(ticket({ ticketId: "t-2" }))).not.toBe(id(ticket()));
+	});
+
+	it("a runtime task is task:<id>: a retry is a new task, so a new card, however alike the two are", () => {
+		expect(id(taskRec({ taskId: "a" }))).toBe("task:a");
+		expect(id(taskRec({ taskId: "a" }))).not.toBe(id(taskRec({ taskId: "b" })));
+		expect(cardIdentityForRecord(taskRec({ taskId: "a" }), SCOPE).attempts).toEqual(["a"]);
+	});
+
+	it("both kinds are owner- and instance-scoped like the rest, and refuse an empty id", () => {
+		for (const r of [ticket({ instanceId: "inst-2" }), taskRec({ instanceId: "inst-2" })]) expect(() => cardIdentityForRecord(r, SCOPE)).toThrow(/different instance/);
+		for (const r of [ticket({ userId: "u2" }), taskRec({ userId: "u2" })]) expect(() => cardIdentityForRecord(r, SCOPE)).toThrow(/different owner/);
+		expect(() => id(ticket({ ticketId: "" }))).toThrow(/ticketId/);
+		expect(() => id(taskRec({ taskId: "" }))).toThrow(/taskId/);
+	});
+
+	it("no id of any kind collides, even when the raw ids are the same string", () => {
+		const ids = [coding({ sessionId: "x" }), scan({ runId: "x" }), attempt({ runId: "x" }), queued({ entryId: "x" }), ticket({ ticketId: "x" }), taskRec({ taskId: "x" })].map((r) => id(r));
+		expect(new Set(ids).size).toBe(ids.length);
+	});
+});
+
 describe("this slice stays out of the board builder", () => {
 	it("imports nothing from the builder, routes, MCP or console", () => {
 		const src = readFileSync(join(__dirname, "board-identity.ts"), "utf8");

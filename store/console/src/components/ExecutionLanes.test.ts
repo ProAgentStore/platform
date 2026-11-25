@@ -6,7 +6,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
-import { EXECUTION_LANES, type ExecutionCard, cardHref, groupExecutionCards, kindLabel } from "../lib/executionLanes";
+import { EXECUTION_LANES, type ExecutionCard, cardHref, groupExecutionCards, kindLabel, triageChips } from "../lib/executionLanes";
 import { ExecutionLanesBoard } from "./ExecutionLanes";
 
 const card = (over: Partial<ExecutionCard> & Pick<ExecutionCard, "cardId" | "kind" | "lane">): ExecutionCard => ({
@@ -104,6 +104,72 @@ describe("the four lanes", () => {
 		expect(kindLabel({ kind: "scan", native: { status: "" } })).toBe("Scan run");
 		expect(kindLabel({ kind: "application-attempt", native: { status: "", runKind: "fill" } })).toBe("Application run");
 		expect(kindLabel({ kind: "application-attempt", native: { status: "", runKind: "tailor" } })).toBe("Tailor run");
+	});
+});
+
+describe("unstarted work, runs and the owner's triage (#1698 approved design)", () => {
+	it("the Queued lane reads in the order work will start: ranked tickets first (next, then the line), the rest newest first", () => {
+		const html = render([
+			card({ cardId: "task:new", kind: "task", lane: "queued", updatedAt: 90 }),
+			card({ cardId: "ticket:b", kind: "queued-ticket", lane: "queued", queueRank: 1, updatedAt: 1, native: { status: "unstarted", ticketId: "b", pickup: "agent" } }),
+			card({ cardId: "ticket:a", kind: "queued-ticket", lane: "queued", queueRank: 0, updatedAt: 5, native: { status: "unstarted", ticketId: "a", pickup: "agent" } }),
+		]);
+		const at = (id: string) => html.indexOf(`data-card-id="${id}"`);
+		expect(at("ticket:a")).toBeGreaterThan(-1);
+		expect(at("ticket:a")).toBeLessThan(at("ticket:b"));
+		expect(at("ticket:b")).toBeLessThan(at("task:new"));
+		expect(html).toContain(">Next to run<");
+		expect(html).toContain(">#2 in line<");
+	});
+
+	it("a ticket the owner has to release says so, and a ticket with a rank does not", () => {
+		const human = render([card({ cardId: "ticket:h", kind: "queued-ticket", lane: "queued", native: { status: "unstarted", ticketId: "h", pickup: "human" } })]);
+		expect(human).toContain('data-testid="release-line"');
+		expect(human).not.toContain('data-testid="badge-queue-rank"');
+		const agent = render([card({ cardId: "ticket:a", kind: "queued-ticket", lane: "queued", queueRank: 0, native: { status: "unstarted", ticketId: "a", pickup: "agent" } })]);
+		expect(agent).not.toContain('data-testid="release-line"');
+	});
+
+	it("a task is a Run with its own page, and a ticket or objective has none", () => {
+		expect(kindLabel({ kind: "task", native: { status: "" } })).toBe("Run");
+		expect(kindLabel({ kind: "queued-ticket", native: { status: "" } })).toBe("Ticket");
+		expect(cardHref("i", { kind: "task", native: { status: "", taskId: "t 1" } })).toBe("/instances/i/tasks/t%201");
+		expect(cardHref("i", { kind: "queued-ticket", native: { status: "", ticketId: "t" } })).toBeNull();
+	});
+
+	it("shows the owner's triage as quiet chips: nothing for New, Deferred / Discussed / Needs computer otherwise; the card is the same one", () => {
+		const base = card({ cardId: "csess-s1", kind: "coding-session", lane: "blocked", needsYou: true, blocker: { what: "Waiting for your answer: q?", nextOwner: "owner" } });
+		const plain = render([{ ...base, ownerAction: { itemId: "coder_question:q1", triage: { status: "new", needsComputer: false, deferUntil: null } } }]);
+		expect(plain).not.toContain('data-testid="badge-triage"');
+		const deferred = render([{ ...base, ownerAction: { itemId: "coder_question:q1", triage: { status: "deferred", needsComputer: true, deferUntil: "2026-12-01T00:00:00Z" } } }]);
+		expect(deferred).toContain(">Deferred<");
+		expect(deferred).toContain(">Needs computer<");
+		// Deferring changes a chip, never the lane, the badge or the number of cards:
+		expect(deferred).toContain('data-testid="badge-needs-you"');
+		expect(laneHtml(deferred, "blocked")).toContain('data-card-id="csess-s1"');
+		expect((deferred.match(/data-card-id=/g) ?? []).length).toBe(1);
+		expect(triageChips({ ownerAction: { itemId: "x", triage: { status: "discussed", needsComputer: false, deferUntil: null } } })).toEqual(["Discussed"]);
+		expect(triageChips({})).toEqual([]);
+	});
+});
+
+describe("the one inline action the default board keeps: Approve (#1698)", () => {
+	const approving = card({ cardId: "task:t1", kind: "task", lane: "blocked", needsYou: true, blocker: { what: "Waiting for your approval", nextOwner: "owner" }, native: { status: "needs_approval", taskId: "t1" } });
+	const html = (cards: ExecutionCard[], withHandler: boolean) =>
+		renderToStaticMarkup(createElement(MemoryRouter, null, createElement(ExecutionLanesBoard, { instanceId: "i", cards, ...(withHandler ? { onApprove: () => {} } : {}) })));
+
+	it("a task held for approval shows Approve, in Blocked with the Needs you badge", () => {
+		const out = html([approving], true);
+		expect(out).toContain('data-testid="approve"');
+		expect(laneHtml(out, "blocked")).toContain('data-testid="approve"');
+		expect(out).toContain('data-testid="badge-needs-you"');
+		expect(out).toContain("Waiting for your approval · Next: you");
+	});
+
+	it("no Approve for any other card or status, nor when nothing can handle it", () => {
+		expect(html([card({ cardId: "task:t2", kind: "task", lane: "in_progress", native: { status: "running", taskId: "t2" } })], true)).not.toContain('data-testid="approve"');
+		expect(html([card({ cardId: "csess-s1", kind: "coding-session", lane: "blocked", native: { status: "needs_approval", sessionId: "s1" } })], true)).not.toContain('data-testid="approve"');
+		expect(html([approving], false)).not.toContain('data-testid="approve"');
 	});
 });
 

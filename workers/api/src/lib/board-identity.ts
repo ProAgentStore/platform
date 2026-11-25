@@ -12,6 +12,8 @@
  *                        `applicationRunsForCards` already returns. The application itself stays data; `applicationId` is
  *                        metadata on the card and is NOT part of its identity, so a second attempt at the same application,
  *                        job or issue is a second card. `kind` is in the id so the two tables can never collide.
+ *   queued-ticket        `ticket:<ticketId>`      accepted work no run has started (the ticket queue's own unstarted rows).
+ *   task                 `task:<taskId>`         one generic runtime task (a retry is a new task, so a new card).
  *   queued-objective     `objective:<entryId>`     an accepted objective with no session yet (`objectiveJobKey`), pending and
  *                        distinct from any session card. It carries `linkedSessionCardId` once its session is known.
  *
@@ -126,7 +128,25 @@ export interface QueuedObjectiveRecord {
 	sessionId?: string | null;
 }
 
-export type BoardIdentityRecord = CodingSessionRecord | ScanRecord | ApplicationAttemptRecord | QueuedObjectiveRecord;
+/** A ticket nothing has started yet: accepted, unstarted work (`tickets`, no run linked, not picked). Once a run starts, the run's card owns it. */
+export interface QueuedTicketRecord {
+	kind: "queued-ticket";
+	instanceId: string;
+	userId?: string;
+	ticketId: string;
+	status: string;
+}
+
+/** A generic runtime task (`instance_runtime_tasks`) that is not itself a session, scan or application card: one run, one card. */
+export interface TaskRecord {
+	kind: "task";
+	instanceId: string;
+	userId?: string;
+	taskId: string;
+	status: string;
+}
+
+export type BoardIdentityRecord = CodingSessionRecord | ScanRecord | ApplicationAttemptRecord | QueuedObjectiveRecord | QueuedTicketRecord | TaskRecord;
 
 export interface BoardCardIdentity {
 	/** The stable card id. Never derived from a job URL, a GitHub issue or an applicant. */
@@ -141,6 +161,12 @@ export interface BoardCardIdentity {
 	/** Queued objectives only: the session card this entry became, when the caller could resolve it. */
 	linkedSessionCardId?: string;
 }
+
+/** A queued ticket's card id. */
+export const queuedTicketCardId = (ticketId: string): string => `ticket:${ticketId}`;
+
+/** A runtime task's card id: one per task, so a retry (a new task) is a new card. */
+export const taskCardId = (taskId: string): string => `task:${taskId}`;
 
 /** The application-attempt card id: one per execution, with the run kind in it so the two run tables cannot collide. */
 export const applicationAttemptCardId = (runKind: "fill" | "tailor", runId: string): string => `app-attempt-${runKind}-${runId}`;
@@ -186,6 +212,12 @@ export function cardIdentityForRecord(record: BoardIdentityRecord, scope: BoardI
 			const entryId = required(record.entryId, "entryId");
 			const session = typeof record.sessionId === "string" && record.sessionId.trim() !== "" ? record.sessionId : undefined;
 			return { cardId: objectiveJobKey(entryId), ...base, ...(session ? { linkedSessionCardId: codingCardId(session) } : {}) };
+		}
+		case "queued-ticket":
+			return { cardId: queuedTicketCardId(required(record.ticketId, "ticketId")), ...base };
+		case "task": {
+			const taskId = required(record.taskId, "taskId");
+			return { cardId: taskCardId(taskId), ...base, attempts: [taskId] };
 		}
 	}
 }

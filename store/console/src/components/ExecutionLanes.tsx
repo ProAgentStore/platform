@@ -2,13 +2,14 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import { Layers } from "lucide-react";
+import Button from "./Button";
 import LoadFailed from "./LoadFailed";
-import { EXECUTION_LANES, type ExecutionCard, type ExecutionProjection, OUTCOME_LABEL, OWNER_LABEL, cardHref, groupExecutionCards, kindLabel } from "../lib/executionLanes";
+import { EXECUTION_LANES, type ExecutionCard, type ExecutionProjection, OUTCOME_LABEL, OWNER_LABEL, cardHref, groupExecutionCards, kindLabel, triageChips } from "../lib/executionLanes";
 
 const POLL_MS = 5000;
 
 /** One card of the four-lane board: what it is, where it stands, what blocks it and who acts next. Presentational. */
-export function ExecutionCardView({ instanceId, card }: { instanceId: string; card: ExecutionCard }) {
+export function ExecutionCardView({ instanceId, card, onApprove }: { instanceId: string; card: ExecutionCard; onApprove?: (card: ExecutionCard) => void }) {
 	const href = cardHref(instanceId, card);
 	return (
 		<div className="border border-line rounded-lg bg-panel p-2.5 text-sm flex flex-col gap-1.5" data-testid="execution-card" data-card-id={card.cardId}>
@@ -17,6 +18,8 @@ export function ExecutionCardView({ instanceId, card }: { instanceId: string; ca
 				{card.needsYou && <span className="text-warning border border-warning-line rounded-full px-1.5 py-0.5" data-testid="badge-needs-you">Needs you</span>}
 				{card.waitingToResume && <span className="border border-line rounded-full px-1.5 py-0.5" data-testid="badge-waiting-to-resume">Waiting to resume</span>}
 				{card.outcome && <span className="border border-line rounded-full px-1.5 py-0.5" data-testid="badge-outcome">{OUTCOME_LABEL[card.outcome]}</span>}
+				{card.queueRank !== undefined && <span className="border border-line rounded-full px-1.5 py-0.5" data-testid="badge-queue-rank">{card.queueRank === 0 ? "Next to run" : `#${card.queueRank + 1} in line`}</span>}
+				{triageChips(card).map((chip) => <span key={chip} className="border border-line rounded-full px-1.5 py-0.5" data-testid="badge-triage">{chip}</span>)}
 			</div>
 			<div className="font-semibold break-words">{card.title}</div>
 			{card.blocker && (
@@ -25,6 +28,12 @@ export function ExecutionCardView({ instanceId, card }: { instanceId: string; ca
 				</div>
 			)}
 			{card.waitingToResume && <div className="text-xs text-muted" data-testid="waiting-line">Your answer is recorded; waiting for the run to apply it.</div>}
+			{card.kind === "queued-ticket" && card.native.pickup === "human" && !card.blocker && <div className="text-xs text-muted" data-testid="release-line">Not started: waiting for you to release it.</div>}
+			{onApprove && card.kind === "task" && card.native.status === "needs_approval" && (
+				<Button size="sm" variant="primary" className="self-start" onClick={() => onApprove(card)} title="Approve this task to run" data-testid="approve">
+					Approve
+				</Button>
+			)}
 			{href && (
 				<Link to={href} className="inline-flex items-center min-h-6 text-xs underline self-start">
 					Open
@@ -35,7 +44,7 @@ export function ExecutionCardView({ instanceId, card }: { instanceId: string; ca
 }
 
 /** The four lanes, in order, each with its count and cards. Presentational, so the same render serves a test and the page. */
-export function ExecutionLanesBoard({ instanceId, cards }: { instanceId: string; cards: readonly ExecutionCard[] }) {
+export function ExecutionLanesBoard({ instanceId, cards, onApprove }: { instanceId: string; cards: readonly ExecutionCard[]; onApprove?: (card: ExecutionCard) => void }) {
 	const byLane = groupExecutionCards(cards);
 	return (
 		<div className="grid grid-cols-[repeat(auto-fit,minmax(210px,1fr))] gap-3 items-start mb-4" data-testid="execution-lanes">
@@ -49,7 +58,7 @@ export function ExecutionLanesBoard({ instanceId, cards }: { instanceId: string;
 						<span className="text-2xs text-muted border border-line rounded-full px-1.5 py-0.5 font-bold">{byLane[lane.id].length}</span>
 					</div>
 					<div className="flex flex-col gap-2 p-2.5">
-						{byLane[lane.id].length === 0 ? <div className="text-center text-muted-soft text-sm py-4">None</div> : byLane[lane.id].map((c) => <ExecutionCardView key={c.cardId} instanceId={instanceId} card={c} />)}
+						{byLane[lane.id].length === 0 ? <div className="text-center text-muted-soft text-sm py-4">None</div> : byLane[lane.id].map((c) => <ExecutionCardView key={c.cardId} instanceId={instanceId} card={c} onApprove={onApprove} />)}
 					</div>
 				</div>
 			))}
@@ -61,9 +70,13 @@ export function ExecutionLanesBoard({ instanceId, cards }: { instanceId: string;
 export function ExecutionLanesView({ instanceId }: { instanceId: string }) {
 	const [data, setData] = useState<ExecutionProjection | null>(null);
 	const [error, setError] = useState("");
+	const [note, setNote] = useState("");
 	const load = useCallback(async () => {
 		try {
-			setData(await api<ExecutionProjection>(`/v1/instances/${instanceId}/board/projection`));
+			const projection = await api<ExecutionProjection>(`/v1/instances/${instanceId}/board/projection`);
+			// An answer without cards (an older server, a proxy's empty body) is a load failure, never a crash of the whole board.
+			if (!Array.isArray(projection?.cards)) throw new Error("The lanes answer was not understood.");
+			setData(projection);
 			setError("");
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
@@ -76,7 +89,23 @@ export function ExecutionLanesView({ instanceId }: { instanceId: string }) {
 	}, [load]);
 	if (error && !data) return <LoadFailed what="the lanes" detail={error} onRetry={load} />;
 	if (!data) return null;
-	return <ExecutionLanesBoard instanceId={instanceId} cards={data.cards} />;
+	// The one inline action the default board must keep: approving a task held for approval, through the endpoint the Board already uses.
+	const approve = async (card: ExecutionCard) => {
+		if (!card.native.taskId) return;
+		try {
+			await api(`/v1/instances/${instanceId}/tasks/${encodeURIComponent(card.native.taskId)}/approve`, { method: "POST" });
+			setNote("");
+			await load();
+		} catch (e) {
+			setNote(e instanceof Error ? e.message : String(e));
+		}
+	};
+	return (
+		<>
+			{note && <p role="status" className="mb-2 text-xs text-warning">{note}</p>}
+			<ExecutionLanesBoard instanceId={instanceId} cards={data.cards} onApprove={(c) => void approve(c)} />
+		</>
+	);
 }
 
 /** The view toggle's button for the four lanes. */

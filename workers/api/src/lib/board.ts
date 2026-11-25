@@ -25,7 +25,7 @@ import type { BoardLane } from "./board-lanes.js";
 
 /** How the board can be viewed in the console. Persisted per-instance so the choice
  *  follows the user across devices and is settable via UI, MCP, and the agent itself. */
-export type BoardView = "kanban" | "list";
+export type BoardView = "lanes" | "kanban" | "list";
 
 /** The resolved board configuration for one instance: which columns it shows, the
  *  preferred view, where the columns came from, and the agent's own default columns
@@ -61,7 +61,7 @@ export async function boardConfigForInstance(env: Env, instanceId: string, userI
 	const agentColumns = agentCapabilities({ slug: row?.slug, category: row?.category, config: row?.agent_config }).boardColumns;
 	const instCfg = parseJson(row?.instance_config);
 	const override = sanitizeBoardColumns(instCfg.boardColumns);
-	const view: BoardView = instCfg.boardView === "list" ? "list" : "kanban";
+	const view: BoardView = instCfg.boardView === "list" ? "list" : instCfg.boardView === "kanban" ? "kanban" : "lanes"; // #1698: lanes by default; stored only when chosen, so Board/List choices and boardColumns are kept
 	return {
 		columns: override ?? agentColumns,
 		view,
@@ -644,7 +644,7 @@ export async function setInstanceBoardConfig(
 		if (clean?.length) cfg.boardColumns = clean.slice(0, MAX_BOARD_COLUMNS);
 		else delete cfg.boardColumns; // null / empty / invalid → reset to the agent's columns
 	}
-	if (patch.view === "list" || patch.view === "kanban") cfg.boardView = patch.view;
+	if (patch.view === "list" || patch.view === "kanban" || patch.view === "lanes") cfg.boardView = patch.view;
 	// Patch the two board keys individually rather than rewriting the whole blob (#231): the
 	// agent's own `configure_board` tool can fire while the owner is saving Settings in the
 	// console, and a whole-blob write would silently discard whichever landed first.
@@ -680,7 +680,7 @@ export async function configureBoardForAgent(
 	} else if (Array.isArray(input.columns)) {
 		patch.columns = input.columns as BoardColumn[];
 	}
-	if (input.view === "list" || input.view === "kanban") patch.view = input.view;
+	if (input.view === "list" || input.view === "kanban" || input.view === "lanes") patch.view = input.view;
 	if (patch.columns === undefined && patch.view === undefined) {
 		return { content: "Nothing to change — provide `columns` (JSON array), `view` (kanban|list), or reset:true.", success: false };
 	}

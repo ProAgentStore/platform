@@ -26,7 +26,10 @@
  */
 import type { Env } from "../types.js";
 import { type BoardCardIdentity, type BoardIdentityRecord, cardIdentityForRecord } from "./board-identity.js";
+import { boardOrderSql } from "./board-order.js";
 import { ANSWER_PENDING_SQL } from "./coder-question-store.js";
+import { DEFAULT_TRIAGE, readTriage, type Triage } from "./inbox-triage.js";
+import { instanceListName } from "./instance-config.js";
 
 export const BOARD_LANE_IDS = ["queued", "in_progress", "blocked", "done"] as const;
 export type BoardLaneId = (typeof BOARD_LANE_IDS)[number];
@@ -136,6 +139,11 @@ export function classifyCard(f: CardFacts): CardClassification {
 			if (f.status === "error") return done("failed");
 			return progress();
 		}
+		case "queued-ticket":
+			// Accepted work nothing has started: Queued. A ticket whose own budget is used up is parked until a person raises it.
+			return f.status === "budget_closed" ? blockedOnOwner("Its budget is used up; raise it to continue") : queued();
+		case "task":
+			return taskClassification(f.status);
 		case "application-attempt":
 		case "scan":
 			switch (f.status) {
@@ -162,6 +170,38 @@ export function classifyCard(f: CardFacts): CardClassification {
 	}
 }
 
+/** A generic runtime task by its own status: the same words the board's columns and the old lanes already used. */
+function taskClassification(status: string): CardClassification {
+	switch (status) {
+		case "queued":
+		case "pending":
+			return queued();
+		case "running":
+			return progress();
+		case "needs_approval":
+			// A task held until the owner approves it is an owner action (the issue: pre-session approvals are Needs you), not a wait for a turn.
+			return blockedOnOwner("Waiting for your approval");
+		case "needs_human":
+		case "needs-human":
+			return blockedOnOwner("Waiting for you");
+		case "blocked":
+			return blockedOn("It could not continue", "owner");
+		case "completed":
+		case "done":
+		case "succeeded":
+		case "submitted":
+			return done("succeeded");
+		case "failed":
+		case "expired":
+		case "rejected":
+			return done("failed");
+		case "cancelled":
+			return done("stopped");
+		default:
+			return progress();
+	}
+}
+
 export interface ProjectedCard extends BoardCardIdentity, CardClassification {
 	/** Native detail a deep link and a detail view need; every field is the record's own. */
 	native: {
@@ -172,10 +212,24 @@ export interface ProjectedCard extends BoardCardIdentity, CardClassification {
 		runKind?: "fill" | "tailor";
 		applicationId?: string;
 		queueEntryId?: string | null;
+		ticketId?: string;
+		taskId?: string;
+		taskType?: string;
+		/** A ticket only: who releases it to a run. `human` waits for the owner to release it, `agent` is taken by the auto-pickup. */
+		pickup?: "human" | "agent";
 	};
 	title: string;
 	/** ms epoch of the newest change, for ordering. */
 	updatedAt: number;
+	/**
+	 * The board key this card had before cards were keyed by execution (read-only: nothing is renamed or deleted, so a stored
+	 * `board_items` or `tickets` row still finds it). Present where the old key is known without the old builder.
+	 */
+	legacyJobKey?: string;
+	/** 0 = next: where an unstarted ticket the auto-pickup would take stands, in the picker's own order (`boardOrderSql`). */
+	queueRank?: number;
+	/** The inbox item this card is waiting on and the owner's triage of it (#1697): bookkeeping only, it never hides the card or adds an action. */
+	ownerAction?: { itemId: string; triage: Triage };
 }
 
 const LIMIT = 500;
@@ -189,21 +243,36 @@ type Row = Record<string, unknown>;
  * Every card of this owner's instance. Owner- AND instance-scoped in every query (`instance_id = ?1 AND user_id = ?2`); a caller
  * that does not own the instance gets nothing, never another tenant's cards. Newest first.
  */
-export async function readBoardProjection(env: Env, instanceId: string, userId: string): Promise<ProjectedCard[]> {
+export async function readBoardProjection(env: Env, instanceId: string, userId: string, now: number = Date.now()): Promise<ProjectedCard[]> {
 	const q = async (sql: string): Promise<Row[]> => {
 		const r = await env.DB.prepare(sql).bind(instanceId, userId).all<Row>().catch(() => ({ results: [] as Row[] }));
 		return r.results ?? [];
 	};
-	const [sessions, runs, questions, applyRuns, tailorRuns, scans, queue] = await Promise.all([
+	const [sessions, runs, questions, applyRuns, tailorRuns, scans, queue, tickets, tasks] = await Promise.all([
 		q(`SELECT id, status, started_at, updated_at, issue_title FROM coding_sessions WHERE instance_id = ?1 AND user_id = ?2 ORDER BY started_at DESC LIMIT ${LIMIT}`),
 		q(`SELECT run_id, session_id, queue_entry_id, objective, status, waiting_reason, started_at, finished_at FROM agent_loop_runs WHERE instance_id = ?1 AND user_id = ?2 AND (session_id IS NOT NULL OR queue_entry_id IS NOT NULL) ORDER BY started_at DESC LIMIT ${LIMIT}`),
-		q(`SELECT q.run_id, q.session_id, q.question, q.state, (${ANSWER_PENDING_SQL}) AS answer_pending FROM coder_questions q WHERE q.instance_id = ?1 AND q.user_id = ?2 AND (q.state IN ('waiting_human', 'escalated') OR (${ANSWER_PENDING_SQL})) ORDER BY q.asked_at DESC LIMIT ${LIMIT}`),
+		q(`SELECT q.id, q.run_id, q.session_id, q.question, q.state, (${ANSWER_PENDING_SQL}) AS answer_pending FROM coder_questions q WHERE q.instance_id = ?1 AND q.user_id = ?2 AND (q.state IN ('waiting_human', 'escalated') OR (${ANSWER_PENDING_SQL})) ORDER BY q.asked_at DESC LIMIT ${LIMIT}`),
 		q(`SELECT id, application_id, status, created_at, started_at, ended_at, updated_at FROM local_apply_runs WHERE instance_id = ?1 AND user_id = ?2 ORDER BY created_at DESC LIMIT ${LIMIT}`),
 		q(`SELECT id, application_id, status, created_at, started_at, ended_at, updated_at FROM local_artifact_runs WHERE instance_id = ?1 AND user_id = ?2 ORDER BY created_at DESC LIMIT ${LIMIT}`),
 		q(`SELECT id, objective, status, created_at, updated_at FROM local_browser_runs WHERE instance_id = ?1 AND user_id = ?2 ORDER BY created_at DESC LIMIT ${LIMIT}`),
 		q(`SELECT id, objective, status, run_id, created_at, started_at, finished_at FROM instance_objective_queue WHERE instance_id = ?1 AND user_id = ?2 AND status IN ('pending', 'running', 'started', 'failed') ORDER BY created_at DESC LIMIT ${LIMIT}`),
+		// Unstarted tickets, in the auto-pickup's OWN order (`boardOrderSql`, the join and predicates `ticket-queue.ts` uses), so the
+		// board shows what the picker would take next without the picker changing. A ticket with a run (or attached task runs) is
+		// started: that run's card owns it.
+		q(`SELECT t.id, t.job_key, t.title, t.pickup_authority, t.created_at, b.status AS budget_status
+		     FROM tickets t
+		     LEFT JOIN delegation_budgets b ON b.id = t.budget_id AND b.user_id = t.user_id
+		     LEFT JOIN board_items bi ON bi.instance_id = t.instance_id AND bi.user_id = t.user_id AND bi.job_key = t.job_key
+		    WHERE t.instance_id = ?1 AND t.user_id = ?2 AND t.queue_picked_at IS NULL
+		      AND NOT EXISTS (SELECT 1 FROM agent_loop_runs r WHERE r.ticket_id = t.id)
+		      AND NOT EXISTS (SELECT 1 FROM ticket_runs tr WHERE tr.ticket_id = t.id)
+		    ORDER BY ${boardOrderSql("bi", "t.created_at", "t.id")} LIMIT ${LIMIT}`),
+		// Generic runtime tasks that are not already a session, scan or application card: one run, one card.
+		q(`SELECT id, type, status, payload, updated_at FROM instance_runtime_tasks WHERE instance_id = ?1 AND user_id = ?2 AND hidden = 0 AND type NOT IN ('coding.session', 'local_browser.scan', 'application.run') ORDER BY updated_at DESC LIMIT ${LIMIT}`),
 	]);
 	const scope = { instanceId, userId };
+	/** The inbox item each card is waiting on (#1697), by card id, filled while the cards are built. */
+	const ownerItemOf = new Map<string, string>();
 	const cards: ProjectedCard[] = [];
 
 	// The newest run behind each session (rows arrive newest first), and each run's session.
@@ -228,9 +297,19 @@ export async function readBoardProjection(env: Env, instanceId: string, userId: 
 		else if (!openByRun.has(run)) openByRun.set(run, r);
 	}
 
-	const push = (record: BoardIdentityRecord, f: CardFacts, native: ProjectedCard["native"], title: string, at: number) => {
+	const push = (record: BoardIdentityRecord, f: CardFacts, native: ProjectedCard["native"], title: string, at: number, extra: { legacyJobKey?: string; queueRank?: number; ownerItemId?: string } = {}) => {
 		const identity = cardIdentityForRecord(record, scope);
-		cards.push({ ...identity, ...classifyCard(f), native, title, updatedAt: at });
+		const { ownerItemId, ...rest } = extra;
+		const classification = classifyCard(f);
+		cards.push({ ...identity, ...classification, native, title, updatedAt: at, ...rest });
+		// The inbox item behind an owner action: the open question's row, else the parked run (the inbox's own two sources, #1678).
+		if (ownerItemId && classification.needsYou) ownerItemOf.set(identity.cardId, ownerItemId);
+	};
+	/** Which inbox item a coding card's Needs you badge stands for, or "" when the inbox has none (a finished run that needs a person). */
+	const inboxItemFor = (runId: string, facts: CardFacts): string => {
+		if (!runId) return "";
+		if (facts.openQuestion) return `coder_question:${str(openByRun.get(runId)?.id)}`;
+		return facts.runStatus === "running" && ["human", "engine_auth", "decision"].includes(facts.waitingReason ?? "") ? `run_parked:${runId}` : "";
 	};
 
 	for (const s of sessions) {
@@ -252,6 +331,7 @@ export async function readBoardProjection(env: Env, instanceId: string, userId: 
 			{ status: str(s.status), waitingReason: facts.waitingReason, runId: runId || null, sessionId: sid },
 			clip(str(run?.objective) || str(s.issue_title) || "Coding session"),
 			num(run?.finished_at) || num(run?.started_at) || Date.parse(`${str(s.updated_at)}Z`) || 0,
+			{ ownerItemId: inboxItemFor(runId, facts) },
 		);
 	}
 
@@ -293,7 +373,86 @@ export async function readBoardProjection(env: Env, instanceId: string, userId: 
 		);
 	}
 
+	// Unstarted tickets: Queued, in the picker's order. `queueRank` counts only what the auto-pickup would take (agent authority,
+	// budget open); a ticket waiting for the owner to release it is still shown, with no rank.
+	let rank = 0;
+	for (const t of tickets) {
+		const pickup = str(t.pickup_authority) === "agent" ? "agent" : "human";
+		const closed = t.budget_status != null && str(t.budget_status) !== "open";
+		const status = closed ? "budget_closed" : "unstarted";
+		const ticketId = str(t.id);
+		push(
+			{ kind: "queued-ticket", instanceId, userId, ticketId, status },
+			{ kind: "queued-ticket", status },
+			{ status, ticketId, pickup },
+			clip(str(t.title) || "Ticket"),
+			Date.parse(`${str(t.created_at).replace(" ", "T")}Z`) || 0,
+			{ legacyJobKey: str(t.job_key), ...(pickup === "agent" && !closed ? { queueRank: rank++ } : {}) },
+		);
+	}
+
+	for (const t of tasks) {
+		let title = "";
+		try {
+			title = str((JSON.parse(str(t.payload)) as { title?: unknown }).title);
+		} catch {
+			/* a payload that is not JSON has no title */
+		}
+		const status = str(t.status);
+		push({ kind: "task", instanceId, userId, taskId: str(t.id), status }, { kind: "task", status }, { status, taskId: str(t.id), taskType: str(t.type) }, clip(title || "Task"), Date.parse(str(t.updated_at)) || 0);
+	}
+
+	// The owner's own triage of each action (#1697), read once. Bookkeeping only: a failed read leaves every action New.
+	const itemIds = [...new Set(ownerItemOf.values())];
+	const triage = itemIds.length ? await readTriage(env, userId, itemIds, now).catch(() => new Map<string, Triage>()) : new Map<string, Triage>();
+	for (const c of cards) {
+		const itemId = ownerItemOf.get(c.cardId);
+		if (itemId) c.ownerAction = { itemId, triage: triage.get(itemId) ?? DEFAULT_TRIAGE };
+	}
+
 	return cards.sort((a, b) => b.updatedAt - a.updatedAt || a.cardId.localeCompare(b.cardId));
+}
+
+/** One of the owner's agents, with its cards. */
+export interface AgentCards {
+	instanceId: string;
+	name: string | null;
+	agentSlug: string | null;
+	cards: ProjectedCard[];
+}
+
+/** Most instances one owner-wide read covers; past it the answer says so rather than quietly dropping agents. */
+export const ALL_AGENTS_LIMIT = 50;
+
+/**
+ * Every card of every instance the owner has (the All Agents board). It is the per-instance read, once per instance, so the two views
+ * cannot classify differently: the same `readBoardProjection`, the same `classifyCard`. Scoped by the owner at both steps (the instance
+ * list and each instance's own reads); `truncated` says when the owner has more instances than `ALL_AGENTS_LIMIT`.
+ */
+export async function readAllAgentsProjection(env: Env, userId: string, now: number = Date.now()): Promise<{ agents: AgentCards[]; truncated: boolean }> {
+	const { results } = await env.DB.prepare(
+		`SELECT i.id AS id, i.config AS icfg, a.name AS aname, a.slug AS slug FROM agent_instances i JOIN agents a ON a.id = i.agent_id
+		  WHERE i.user_id = ?1 AND i.status != 'canceled' ORDER BY i.id LIMIT ${ALL_AGENTS_LIMIT + 1}`,
+	)
+		.bind(userId)
+		.all<{ id: string; icfg: string | null; aname: string | null; slug: string | null }>();
+	const rows = results ?? [];
+	const shown = rows.slice(0, ALL_AGENTS_LIMIT);
+	const agents: AgentCards[] = [];
+	// A few at a time: each instance is a handful of indexed reads, and the owner is waiting on the whole set.
+	for (let i = 0; i < shown.length; i += 5) {
+		agents.push(
+			...(await Promise.all(
+				shown.slice(i, i + 5).map(async (r) => ({
+					instanceId: r.id,
+					name: instanceListName(r.icfg, r.aname),
+					agentSlug: r.slug,
+					cards: await readBoardProjection(env, r.id, userId, now),
+				})),
+			)),
+		);
+	}
+	return { agents, truncated: rows.length > ALL_AGENTS_LIMIT };
 }
 
 /** Cards grouped into the four lanes, in lane order. The same grouping serves every board. */

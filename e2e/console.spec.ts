@@ -1231,6 +1231,8 @@ test.describe("ProAgentStore Console smoke", () => {
 
 		// Apply agents get their own Apply tab (the single agent-configurable work board).
 		await page.getByRole("button", { name: "Apply", exact: true }).click();
+		// The four lanes are the default board (#1698); this test is about the Board view's cards, so it chooses that view.
+		await page.getByTitle("Board view").click();
 
 		// The board shows one card per job (2 jobs from the mock /board).
 		await expect(page.getByText(/2 jobs/)).toBeVisible();

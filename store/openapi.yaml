@@ -6008,6 +6008,46 @@ paths:
 
   # ── Instances: board ──────────────────────────────────────────────────────
 
+  /v1/board/projection:
+    get:
+      summary: Read every one of your agents' cards, in four lanes
+      description: |
+        The All Agents board (#1698): the same projection as `GET /v1/instances/{instanceId}/board/projection`, once per agent you own,
+        so a card is classified identically here and on its own agent's board (queued, in_progress, blocked, done; `needsYou` is a
+        badge). Owner-scoped and read-only. `truncated` is true when you have more agents than one read covers (50).
+      operationId: getAllAgentsBoardProjection
+      tags: [Board]
+      responses:
+        "200":
+          description: The lanes and each agent with its cards
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [lanes, agents, truncated]
+                properties:
+                  lanes:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, title]
+                      properties:
+                        id: { type: string, enum: [queued, in_progress, blocked, done] }
+                        title: { type: string }
+                  agents:
+                    type: array
+                    items:
+                      type: object
+                      required: [instanceId, cards]
+                      properties:
+                        instanceId: { type: string }
+                        name: { type: string, nullable: true }
+                        agentSlug: { type: string, nullable: true }
+                        cards:
+                          type: array
+                          items: { type: object, additionalProperties: true, description: A card, as in the per-instance projection }
+                  truncated: { type: boolean }
+
   /v1/instances/{instanceId}/board/projection:
     get:
       summary: Read the instance's cards of actual execution, in four lanes
@@ -6050,7 +6090,7 @@ paths:
                       required: [cardId, kind, lane, needsYou, waitingToResume, nativeStatus, instanceId, title, updatedAt, native]
                       properties:
                         cardId: { type: string }
-                        kind: { type: string, enum: [coding-session, scan, application-attempt, queued-objective] }
+                        kind: { type: string, enum: [coding-session, scan, application-attempt, queued-objective, queued-ticket, task] }
                         lane: { type: string, enum: [queued, in_progress, blocked, done] }
                         needsYou: { type: boolean }
                         waitingToResume: { type: boolean }
@@ -6066,6 +6106,18 @@ paths:
                         linkedSessionCardId: { type: string }
                         title: { type: string }
                         updatedAt: { type: integer, description: ms epoch }
+                        legacyJobKey:
+                          type: string
+                          description: The board key this card had before cards were keyed by execution. Read-only metadata; nothing is renamed or deleted.
+                        queueRank:
+                          type: integer
+                          description: 0 = next. Where an unstarted ticket the auto-pickup would take stands, in the picker's own order.
+                        ownerAction:
+                          type: object
+                          description: The inbox item (#1640) this card is waiting on and the owner's triage of it (#1697). Bookkeeping only.
+                          properties:
+                            itemId: { type: string }
+                            triage: { type: object, additionalProperties: true }
                         native: { type: object, additionalProperties: true }
         "404": { description: The instance is not yours }
 
@@ -6203,7 +6255,7 @@ paths:
                   columns:
                     type: array
                     items: { $ref: "#/components/schemas/BoardColumn" }
-                  view: { type: string, enum: [kanban, list] }
+                  view: { type: string, enum: [lanes, kanban, list], description: "lanes (the four lanes) is the default when nothing was chosen" }
                   isOverride: { type: boolean }
                   agentColumns:
                     type: array
@@ -6227,7 +6279,7 @@ paths:
                   type: array
                   nullable: true
                   items: { $ref: "#/components/schemas/BoardColumn" }
-                view: { type: string, enum: [kanban, list] }
+                view: { type: string, enum: [lanes, kanban, list], description: "lanes (the four lanes) is the default when nothing was chosen" }
       responses:
         "200":
           description: The stored configuration
