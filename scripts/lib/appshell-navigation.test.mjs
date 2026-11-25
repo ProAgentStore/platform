@@ -222,14 +222,14 @@ describe("the documented opt-out", () => {
 
 describe("the diagnostics' guide links point at real headings", () => {
 	it("every rule anchor equals the slug of the heading in the guide", () => {
-		const guide = readFileSync(join(root, "docs/appshell-navigation-contract.md"), "utf8");
+		const guide = readFileSync(join(root, "docs/appshell-navigation-contract.md"), "utf8").replaceAll("\r\n", "\n"); // a Windows checkout may have CRLF
 		const headings = guide.split("\n").filter((l) => /^### \d+\./.test(l)).map((l) => anchorFor(l.replace(/^### /, "")));
 		const out = [...run(HIRING).diagnostics, ...run(shellWith("<Home />", "nav={[{label:'H',href:'/'},{label:'C',href:'/c'}]} renderTopbar={(c) => <header />}")).diagnostics];
 		expect(out.length).toBeGreaterThan(2);
 		for (const d of out) expect(headings, d.code).toContain(d.docs.slice(GUIDE_URL.length + 1));
 	});
 	it("the contract's own examples pass the check", () => {
-		const guide = readFileSync(join(root, "docs/appshell-navigation-contract.md"), "utf8");
+		const guide = readFileSync(join(root, "docs/appshell-navigation-contract.md"), "utf8").replaceAll("\r\n", "\n"); // a Windows checkout may have CRLF
 		const blocks = [...guide.matchAll(/```tsx\n([\s\S]*?)```/g)].map((m) => m[1]);
 		expect(blocks.length).toBe(2);
 		const out = analyzeSources(blocks.map((text, i) => ({ file: `example-${i}.tsx`, text })));
