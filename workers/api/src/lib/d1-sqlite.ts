@@ -83,9 +83,17 @@ export function migrationSchemaDb(): DatabaseSync {
 	return buildMigratedDb(":memory:");
 }
 
+/**
+ * A test database lives for one test and is thrown away, so it never needs to survive a crash. With SQLite's default (FULL) every autocommit
+ * statement fsyncs, which a Windows CI disk is slow at: history-retrieval.test.ts (1,200 rows inserted one by one) timed out at 120s there
+ * (#1723; fsync is the suspected cause, not measured). The statements, their results and the schema are unchanged.
+ */
+const NO_FSYNC = "PRAGMA synchronous = OFF";
+
 /** Shared by `migrationSchemaDb` (`:memory:`) and the template builder (a real path). */
 function buildMigratedDb(location: string): DatabaseSync {
 	const db = new DatabaseSync(location);
+	db.exec(NO_FSYNC);
 	for (const [name, sql] of migrationSources()) {
 		try {
 			db.exec(sql);
@@ -239,6 +247,7 @@ export function realSchemaD1(): RealSchemaD1 {
 	const clonePath = join(SCHEMA_CACHE_DIR, `clone-${process.pid}-${randomBytes(8).toString("hex")}.db`);
 	copyFileSync(template, clonePath);
 	const sqlite = new DatabaseSync(clonePath);
+	sqlite.exec(NO_FSYNC);
 	const issued: IssuedStatement[] = [];
 	pendingClones.add(clonePath);
 	return {
