@@ -149,6 +149,9 @@ export function constrainBrainDirective(run: ApplyRun, checkpoint: SupervisorChe
 	return decideCheckpoint(run, checkpoint, proposed).directive;
 }
 
+/** How many times the checkpoint model is asked before the decision fails closed (#1620). */
+const CHECKPOINT_BRAIN_ATTEMPTS = 2;
+
 /** A fresh snapshot, and at most one look at it: what the Runner does between a `continue` and its submit click. */
 const SAME_PAGE_ACTIONS = 2;
 
@@ -182,49 +185,58 @@ export async function decideApplicationCheckpoint(env: Env, uid: string, run: Ap
 	// straight to `request_review`, which is how a safe initial checkpoint became a terminal review
 	// state with nothing filled — the model being absent is not a reason to stop safe work.
 	if (!brain) return decideCheckpoint(run, checkpoint, null, "not_configured");
-	try {
-		const res = (await runUserWorkersAi(
-			env,
-			uid,
-			brain.model,
-			{
-				messages: [
-					{
-						role: "system",
-						content:
-							"You are the cloud brain attached to one Job Application Runner. Decide only the supplied typed checkpoint. " +
-							"Never infer facts that are absent. Continue only when the observed facts show no blocker and the next local action can stay within the recorded policy. " +
-							"For a before_submit checkpoint, continue only when auto_submit is explicitly gated. When submitGateAllowed is true the owner's auto-submit rules have already approved this application: return continue unless the facts state a concrete problem, meaning a false or unverified claim in the application, an unanswered required question, the wrong identity or documents, or a validation error. " +
-								"Pay, work type, seniority or fit differences are not problems, and neither are zero tracked fills or an unverified submission state. Return exactly one decision tool call.",
-					},
-					{
-						role: "user",
-						content: JSON.stringify({
-							policy: { toolAccess: run.policy.toolAccess ?? "guarded", escalationLevel: run.policy.escalationLevel ?? "conservative", mode: run.policy.mode, submitGateAllowed: run.policy.gate.allowed, hasSubmitGate: !!run.policy.gate.gateId },
-							...(run.policy.toolAccess === "full" ? { evidenceLimits: "Full native browser tools may have effects outside supervised action counters. Zero tracked fills is not proof of an empty form, and no tracked submit is not proof that nothing was submitted. Acceptance does not authorize intentional submission; respect the separate submit gate." } : {}),
-							checkpoint: { schemaVersion: checkpoint.schemaVersion, checkpointId: checkpoint.checkpointId, facts: checkpoint.facts },
-						}),
-					},
-				],
-				tools: [DECISION_TOOL],
-				// #1620: at 96 tokens with an optional tool, every reply was cut off before a directive existed.
-				toolChoice: "required",
-				maxTokens: 256,
-				timeoutMs: 20_000,
-			},
-			{ kind: "run", instanceId: run.instanceId },
-			{ honorModel: brain.modelChosen },
-		)) as BrainResponse;
-		const call = res.tool_calls?.find((c) => c.name === "decide_application_checkpoint");
-		const args = call?.arguments && typeof call.arguments === "object" && !Array.isArray(call.arguments) ? call.arguments as Record<string, unknown> : null;
-		const proposed = parsedDirective(args?.directive);
-		if (!proposed) await logError(env, { source: "job-apply", level: "warn", userId: uid, message: "Application checkpoint brain returned no valid directive", context: { instanceId: run.instanceId, runId: run.id, checkpointId: checkpoint.checkpointId, phase: checkpoint.facts.phase, stopReason: typeof res.stopReason === "string" ? res.stopReason : null, toolCalls: res.tool_calls?.length ?? 0 } }).catch(() => undefined);
-		return decideCheckpoint(run, checkpoint, proposed, "no_valid_directive");
-	} catch (error) {
-		// A model that errored is a model that did not answer — recorded, so the next one is diagnosable (#1575).
-		await logError(env, { source: "job-apply", level: "warn", userId: uid, message: `Application checkpoint brain did not answer: ${error instanceof Error ? error.message : String(error)}`, context: { instanceId: run.instanceId, runId: run.id, checkpointId: checkpoint.checkpointId, phase: checkpoint.facts.phase } }).catch(() => undefined);
-		return decideCheckpoint(run, checkpoint, null, "call_failed");
+	// #1620: the directive is stored once and never revisited, so one stalled or empty model reply
+	// became a permanent final-page stop. A second attempt is cheap next to a dead-end application;
+	// only when neither answers does the standing auto-submit fail closed.
+	let cause: BrainCause = "no_valid_directive";
+	for (let attempt = 1; attempt <= CHECKPOINT_BRAIN_ATTEMPTS; attempt++) {
+		const last = attempt === CHECKPOINT_BRAIN_ATTEMPTS;
+		try {
+			const res = (await runUserWorkersAi(
+				env,
+				uid,
+				brain.model,
+				{
+					messages: [
+						{
+							role: "system",
+							content:
+								"You are the cloud brain attached to one Job Application Runner. Decide only the supplied typed checkpoint. " +
+								"Never infer facts that are absent. Continue only when the observed facts show no blocker and the next local action can stay within the recorded policy. " +
+								"For a before_submit checkpoint, continue only when auto_submit is explicitly gated. When submitGateAllowed is true the owner's auto-submit rules have already approved this application: return continue unless the facts state a concrete problem, meaning a false or unverified claim in the application, an unanswered required question, the wrong identity or documents, or a validation error. " +
+									"Pay, work type, seniority or fit differences are not problems, and neither are zero tracked fills or an unverified submission state. Return exactly one decision tool call.",
+						},
+						{
+							role: "user",
+							content: JSON.stringify({
+								policy: { toolAccess: run.policy.toolAccess ?? "guarded", escalationLevel: run.policy.escalationLevel ?? "conservative", mode: run.policy.mode, submitGateAllowed: run.policy.gate.allowed, hasSubmitGate: !!run.policy.gate.gateId },
+								...(run.policy.toolAccess === "full" ? { evidenceLimits: "Full native browser tools may have effects outside supervised action counters. Zero tracked fills is not proof of an empty form, and no tracked submit is not proof that nothing was submitted. Acceptance does not authorize intentional submission; respect the separate submit gate." } : {}),
+								checkpoint: { schemaVersion: checkpoint.schemaVersion, checkpointId: checkpoint.checkpointId, facts: checkpoint.facts },
+							}),
+						},
+					],
+					tools: [DECISION_TOOL],
+					// #1620: at 96 tokens with an optional tool, every reply was cut off before a directive existed.
+					toolChoice: "required",
+					maxTokens: 256,
+					timeoutMs: 20_000,
+				},
+				{ kind: "run", instanceId: run.instanceId },
+				{ honorModel: brain.modelChosen },
+			)) as BrainResponse;
+			const call = res.tool_calls?.find((c) => c.name === "decide_application_checkpoint");
+			const args = call?.arguments && typeof call.arguments === "object" && !Array.isArray(call.arguments) ? call.arguments as Record<string, unknown> : null;
+			const proposed = parsedDirective(args?.directive);
+			if (proposed) return decideCheckpoint(run, checkpoint, proposed);
+			cause = "no_valid_directive";
+			if (last) await logError(env, { source: "job-apply", level: "warn", userId: uid, message: "Application checkpoint brain returned no valid directive", context: { instanceId: run.instanceId, runId: run.id, checkpointId: checkpoint.checkpointId, phase: checkpoint.facts.phase, attempts: attempt, stopReason: typeof res.stopReason === "string" ? res.stopReason : null, toolCalls: res.tool_calls?.length ?? 0 } }).catch(() => undefined);
+		} catch (error) {
+			// A model that errored is a model that did not answer — recorded, so the next one is diagnosable (#1575).
+			cause = "call_failed";
+			if (last) await logError(env, { source: "job-apply", level: "warn", userId: uid, message: `Application checkpoint brain did not answer: ${error instanceof Error ? error.message : String(error)}`, context: { instanceId: run.instanceId, runId: run.id, checkpointId: checkpoint.checkpointId, phase: checkpoint.facts.phase, attempts: attempt } }).catch(() => undefined);
+		}
 	}
+	return decideCheckpoint(run, checkpoint, null, cause);
 }
 
 /**

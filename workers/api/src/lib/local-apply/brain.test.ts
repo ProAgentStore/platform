@@ -112,7 +112,7 @@ describe("Application Runner cloud brain", () => {
 	});
 
 	it("…and still fails closed at the final submit checkpoint, where the only actions reach the employer", async () => {
-		runUserWorkersAi.mockRejectedValueOnce(new Error("no BYOK key"));
+		runUserWorkersAi.mockRejectedValue(new Error("no BYOK key"));
 		const base = run("auto_submit");
 		const gated = { ...base, policy: { ...base.policy, gate: { allowed: true, gateId: "gate-1", checks: [] } } };
 		await expect(decideApplicationCheckpoint(env(), "u1", gated, checkpoint("before_submit"))).resolves.toMatchObject({
@@ -121,17 +121,19 @@ describe("Application Runner cloud brain", () => {
 			reason: "brain_unavailable",
 			brainCause: "call_failed",
 		});
+		runUserWorkersAi.mockReset();
 	});
 
 	it("names each way the model gave no answer on the policy.decision event (#1620)", async () => {
 		const base = run("auto_submit");
 		const gated = { ...base, policy: { ...base.policy, gate: { allowed: true, gateId: "gate-1", checks: [] } } };
-		runUserWorkersAi.mockResolvedValueOnce({ response: "cut off" });
+		runUserWorkersAi.mockResolvedValue({ response: "cut off" });
 		const noDirective = await decideApplicationCheckpoint(env(), "u1", gated, checkpoint("before_submit"));
 		expect(noDirective.brainCause).toBe("no_valid_directive");
 		expect(checkpointDecisionEvent(checkpoint("before_submit"), noDirective, "t").detail).toMatchObject({ reason: "brain_unavailable", brainCause: "no_valid_directive" });
 		// A decision the model made carries no cause.
 		expect(checkpointDecisionEvent(checkpoint("before_submit"), { directive: "continue", escalationLevel: "autonomous", source: "brain", reason: "brain_decision", overrodeBrain: false }, "t").detail).not.toHaveProperty("brainCause");
+		runUserWorkersAi.mockReset();
 	});
 
 	it("tells the model that a passed submit gate decides pay and fit, leaving only concrete problems (#1620)", async () => {
@@ -176,11 +178,25 @@ describe("Application Runner cloud brain", () => {
 	});
 
 	it("records a model reply that holds no directive, then fails closed at the final checkpoint (#1620)", async () => {
-		runUserWorkersAi.mockResolvedValueOnce({ response: "The facts show", stopReason: "max_tokens" });
+		runUserWorkersAi.mockClear();
+		runUserWorkersAi.mockResolvedValue({ response: "The facts show", stopReason: "max_tokens" });
 		const db = { DB: { prepare: vi.fn(() => { throw new Error("unavailable"); }) } };
 		const logged = { ...(env() as object), ...db } as never;
 		await expect(decideApplicationCheckpoint(logged, "u1", run("auto_submit"), checkpoint("before_submit"))).resolves.toMatchObject({ directive: "request_review", reason: "brain_unavailable", brainCause: "no_valid_directive" });
 		expect(db.DB.prepare).toHaveBeenCalled();
+		expect(runUserWorkersAi).toHaveBeenCalledTimes(2);
+		runUserWorkersAi.mockReset();
+	});
+
+	it("asks the model a second time when the first reply is empty or throws, and honours the second answer (#1620)", async () => {
+		for (const first of [{ response: "cut off", stopReason: "max_tokens" }, new Error("timeout")]) {
+			runUserWorkersAi.mockReset();
+			if (first instanceof Error) runUserWorkersAi.mockRejectedValueOnce(first); else runUserWorkersAi.mockResolvedValueOnce(first);
+			runUserWorkersAi.mockResolvedValueOnce({ tool_calls: [{ name: "decide_application_checkpoint", arguments: { directive: "continue" } }] });
+			await expect(decideApplicationCheckpoint(env(), "u1", run("auto_submit"), checkpoint("before_submit"))).resolves.toMatchObject({ directive: "continue", source: "brain", reason: "brain_decision" });
+			expect(runUserWorkersAi).toHaveBeenCalledTimes(2);
+		}
+		runUserWorkersAi.mockReset();
 	});
 
 	it("…but a brain that cannot answer does not cancel the owner's approval of THIS application (#1575)", async () => {
