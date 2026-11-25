@@ -61,7 +61,8 @@ function gitMessage(e: unknown): string {
 export const norm = (p: string, platform: NodeJS.Platform = process.platform) => (platform === "win32" ? p.toLowerCase() : p).replace(/\\/g, "/").replace(/\/+$/, "");
 function realish(p: string): string {
 	try {
-		return realpathSync(p);
+		// `.native` asks the OS: on Windows it expands 8.3 short names (C:\Users\RUNNER~1) and fixes the drive-letter case, which is how git prints a worktree path; the JS implementation does neither (#1715).
+		return realpathSync.native(p);
 	} catch {
 		return resolve(p);
 	}

@@ -22,6 +22,7 @@ const write = (dir: string, p: string, body: string) => {
 	writeFileSync(join(dir, p), body);
 };
 const identity = (dir: string) => {
+	git(dir, "config", "core.autocrlf", "false"); // a Windows runner's global autocrlf=true would turn fixture "\n" into "\r\n" on checkout (#1715)
 	git(dir, "config", "user.email", "t@example.com");
 	git(dir, "config", "user.name", "T");
 };

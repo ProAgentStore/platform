@@ -18,7 +18,7 @@ env:
 
 jobs:
   macos:
-    runs-on: macos-14  # pinned, never -latest (#1266; scripts/check-workflow-runner.mjs reads this line, so no matrix)
+    runs-on: macos-15  # pinned, never -latest (#1266; scripts/check-workflow-runner.mjs reads this line, so no matrix)
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
