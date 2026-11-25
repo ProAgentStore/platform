@@ -12,10 +12,12 @@ import { CREATOR_SELECTABLE_TOOLS } from "../agent-do-tools.js";
  * about the catalog and is the thing a PR can be wrong about.
  */
 
-const SQL = readFileSync(join(import.meta.dirname, "..", "..", "migrations", "0134_seed_email_assistant.sql"), "utf8");
-const INBOX_SQL = readFileSync(join(import.meta.dirname, "..", "..", "migrations", "0136_seed_inbox_chat.sql"), "utf8");
-const INBOX_WIDEN_SQL = readFileSync(join(import.meta.dirname, "..", "..", "migrations", "0137_inbox_chat_handles_attachments.sql"), "utf8");
-const INBOX_HONEST_SQL = readFileSync(join(import.meta.dirname, "..", "..", "migrations", "0138_inbox_chat_honest_safety_copy.sql"), "utf8");
+// CRLF-normalized: a Windows checkout may hold CRLF, and the regexes below expect "\n".
+const migration = (name: string) => readFileSync(join(import.meta.dirname, "..", "..", "migrations", name), "utf8").replace(/\r\n/g, "\n");
+const SQL = migration("0134_seed_email_assistant.sql");
+const INBOX_SQL = migration("0136_seed_inbox_chat.sql");
+const INBOX_WIDEN_SQL = migration("0137_inbox_chat_handles_attachments.sql");
+const INBOX_HONEST_SQL = migration("0138_inbox_chat_honest_safety_copy.sql");
 
 /** The single json('…') literal the seed inserts as `config`. */
 function seededConfig(): Record<string, unknown> {

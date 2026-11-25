@@ -36,7 +36,8 @@ import { toolNamesFor } from "../agent-do-tools.js";
 const SQL = readFileSync(fileURLToPath(new URL("../../migrations/0099_tmux_operator_backend_exclusive_tools.sql", import.meta.url).href), "utf8");
 const SQL_0117 = readFileSync(fileURLToPath(new URL("../../migrations/0117_tmux_operator_send_message_tool.sql", import.meta.url).href), "utf8");
 const SQL_0172 = readFileSync(fileURLToPath(new URL("../../migrations/0172_tmux_operator_secure_handoff_tools.sql", import.meta.url).href), "utf8");
-const SEED_0072 = readFileSync(fileURLToPath(new URL("../../migrations/0072_seed_tmux_operator_agent.sql", import.meta.url).href), "utf8");
+// CRLF-normalized: a Windows checkout may hold CRLF, and the regexes below expect "\n".
+const SEED_0072 = readFileSync(fileURLToPath(new URL("../../migrations/0072_seed_tmux_operator_agent.sql", import.meta.url).href), "utf8").replace(/\r\n/g, "\n");
 
 /** The tool list 0099 writes into `$.capabilities.tools`. */
 const DECLARED_0099: string[] = JSON.parse(/json\('(\[[\s\S]*?\])'\)/.exec(SQL)?.[1] ?? "[]");
