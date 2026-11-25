@@ -3,7 +3,9 @@ import { join } from "node:path";
 
 // Set and read back the DACL before secret bytes are written. Only the path reaches
 // PowerShell: the secret is never an argument, environment value or subprocess input.
-// https://learn.microsoft.com/powershell/module/microsoft.powershell.security/set-acl
+// The .NET FileInfo calls are used rather than Set-Acl/Get-Acl: those live in a module that Windows PowerShell 5.1 cannot autoload when
+// the process was started from PowerShell 7 (observed on windows-2022: "Set-Acl ... module could not be loaded").
+// https://learn.microsoft.com/dotnet/api/system.io.fileinfo.setaccesscontrol
 const PROTECT = `
 $ErrorActionPreference = 'Stop'
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
@@ -12,8 +14,9 @@ $acl.SetOwner($sid)
 $acl.SetAccessRuleProtection($true, $false)
 $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, 'Read, Write, Delete, ChangePermissions', 'Allow')
 $acl.AddAccessRule($rule)
-Set-Acl -LiteralPath $env:PAGS_SECRET_ACL_PATH -AclObject $acl
-$actual = Get-Acl -LiteralPath $env:PAGS_SECRET_ACL_PATH
+$file = New-Object System.IO.FileInfo($env:PAGS_SECRET_ACL_PATH)
+$file.SetAccessControl($acl)
+$actual = $file.GetAccessControl()
 $rules = @($actual.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
 if (!$actual.AreAccessRulesProtected -or $actual.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $sid.Value -or $rules.Count -ne 1 -or $rules[0].IdentityReference.Value -ne $sid.Value -or $rules[0].AccessControlType -ne 'Allow' -or $rules[0].FileSystemRights -ne $rule.FileSystemRights) { throw 'ACL verification failed' }
 [Console]::Write('protected')
@@ -24,9 +27,9 @@ export function protectWindowsSecretFile(path: string): void {
 	let result: string;
 	try {
 		result = execFileSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", PROTECT], {
-			// PSModulePath is dropped: a runner started from PowerShell 7 carries that edition's module path, and Windows PowerShell 5.1
-			// then cannot autoload Microsoft.PowerShell.Security ("Set-Acl is not recognized"). Unset, 5.1 computes its own.
-			env: { ...process.env, PSModulePath: undefined, PAGS_SECRET_ACL_PATH: path },
+			// PSModulePath is dropped (whatever its case): a runner started from PowerShell 7 carries that edition's module path,
+			// which Windows PowerShell 5.1 cannot use. Unset, 5.1 computes its own.
+			env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toLowerCase() !== "psmodulepath")), PAGS_SECRET_ACL_PATH: path },
 			encoding: "utf8", timeout: 10_000, windowsHide: true,
 			stdio: ["ignore", "pipe", "pipe"],
 		});
