@@ -12,7 +12,9 @@ import { docFiles, servedHtmlFiles } from "./doc-files.mjs";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 const p = (...s) => resolve(ROOT, ...s);
-const names = () => docFiles(p).map((f) => f.replace(`${ROOT}/`, ""));
+// Repo-relative with "/" whatever the OS: the collector joins with the OS separator.
+const rel = (f) => f.replaceAll("\\", "/").replace(`${ROOT.replaceAll("\\", "/")}/`, "");
+const names = () => docFiles(p).map(rel);
 
 describe("docFiles", () => {
 	it("collects docs/, the directory that was in no input set", () => {
@@ -55,7 +57,7 @@ describe("docFiles", () => {
 
 describe("servedHtmlFiles", () => {
 	it("reads the served marketing pages and still skips generated store/docs", () => {
-		const html = servedHtmlFiles(p).map((f) => f.replace(`${ROOT}/`, ""));
+		const html = servedHtmlFiles(p).map(rel);
 		expect(html.length).toBeGreaterThanOrEqual(8);
 		expect(html).toContain("store/about/index.html");
 		// store/docs is BUILD OUTPUT of platform-docs (already swept) and is absent in a fresh

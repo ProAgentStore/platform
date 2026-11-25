@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -24,7 +24,8 @@ function run(tracker: ShellEditTracker, id: string, command: string, work: () =>
 }
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "pags-shell-"));
+	// The long path: Windows temp dirs come back as 8.3 names (RUNNER~1), and `~` is a glob character namedInCommand skips.
+	dir = realpathSync.native(mkdtempSync(join(tmpdir(), "pags-shell-")));
 	git("init", "-q", "-b", "main");
 	git("config", "user.email", "t@example.com");
 	git("config", "user.name", "T");

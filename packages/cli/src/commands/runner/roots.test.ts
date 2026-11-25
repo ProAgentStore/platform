@@ -1,7 +1,7 @@
 /** #1193 — `pags runner roots`: the owner, at the machine, registers the folders the runner may read; the runner reads the same file. */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, parse } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readRoots } from "../../../../browser-runner/src/coding/runner-roots.js";
 import { confineWorkDir } from "../../../../browser-runner/src/coding/workdir-guard.js";
@@ -34,7 +34,7 @@ describe("add / list / remove", () => {
 		expect(resolveRoot(join(home, "nope"), home)).toMatchObject({ ok: false, reason: expect.stringContaining("does not exist") });
 		expect(resolveRoot(join(home, "a-file"), home)).toMatchObject({ ok: false, reason: expect.stringContaining("not a folder") });
 		expect(resolveRoot("  ", home)).toMatchObject({ ok: false });
-		for (const raw of ["~", home, join(home, ".."), "/"]) expect(resolveRoot(raw, home), raw).toMatchObject({ ok: false, reason: expect.stringContaining("home folder") });
+		for (const raw of ["~", home, join(home, ".."), parse(home).root]) expect(resolveRoot(raw, home), raw).toMatchObject({ ok: false, reason: expect.stringContaining("home folder") });
 		expect(readRootsFile(home)).toEqual([]);
 	});
 	it("removes by what was typed or by the real path, and says when it was not there", () => {

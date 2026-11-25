@@ -74,7 +74,9 @@ describe("evaluateRelease (#1321)", () => {
 	});
 });
 
-describe("the script, against a real git history with a fake npm", () => {
+// A CI guard, run on ubuntu (ci.yml). It calls `npm` by bare name, which Windows cannot resolve to npm.cmd without a shell, and the fake npm
+// here is a `#!/bin/sh` script, which Windows cannot execute: not a Windows scenario (#1723).
+describe.skipIf(process.platform === "win32")("the script, against a real git history with a fake npm", () => {
 	const dir = mkdtempSync(join(tmpdir(), "release-gate-"));
 	const bin = join(dir, "bin");
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));

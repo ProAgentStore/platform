@@ -77,6 +77,8 @@ describe("latestPublishedVersion on win32 — the production call (#1020)", () =
 		expect(await latestPublishedVersion()).toBe("0.4.116");
 		expect(calls).toHaveLength(1);
 		expect(calls[0].file).not.toBe("npm");
+		// A real Windows host has npm-cli.js, which takes the direct-Node route instead; the cmd.exe route is the one asserted elsewhere.
+		if (real === "win32") return;
 		// This host has no npm-cli.js at Windows paths, so it is the quoted cmd.exe route, verbatim.
 		expect(calls[0].opts.windowsVerbatimArguments).toBe(true);
 		expect(calls[0].args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);

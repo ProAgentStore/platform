@@ -102,7 +102,9 @@ describe("readState", () => {
 	});
 });
 
-describe("the script, with a fake gh on PATH", () => {
+// A CI guard, run on ubuntu (ci.yml). It calls `gh` by bare name, which Windows cannot resolve to gh.cmd without a shell, and the fake gh
+// here is a `#!/bin/sh` script, which Windows cannot execute: not a Windows scenario (#1723).
+describe.skipIf(process.platform === "win32")("the script, with a fake gh on PATH", () => {
 	const dir = mkdtempSync(join(tmpdir(), "fake-gh-"));
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 	const run = (app, installs) => {

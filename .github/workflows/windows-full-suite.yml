@@ -22,6 +22,8 @@ jobs:
     timeout-minutes: 300  # the whole suite is ~2.5h on a windows-2022 runner (1632 files); dispatch with `args` to split it
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # migration-hygiene.test.ts runs check-migrations.mjs --require-history, which reads each migration's git history
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -31,6 +33,8 @@ jobs:
       # core.autocrlf=true, which rewrites those files with CRLF; the suite assumes the POSIX default.
       - run: git config --global core.autocrlf false
       - run: pnpm install --frozen-lockfile
+      - name: Runner size
+        run: node -e "const os=require('node:os');console.log(os.cpus().length+' cpus, '+Math.round(os.totalmem()/2**30)+' GiB')"
       # The builds ci.yml runs before the suite that tests read. Host pages are not built: vitest aliases a committed stub for them.
       - name: Build SDK, console and admin
         shell: bash

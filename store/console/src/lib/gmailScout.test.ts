@@ -34,6 +34,7 @@ describe("a logged email's verdict, in plain words (#1247)", () => {
 describe("scanTime (#1597)", () => {
 	it("shows one string for the same instant under a non-UTC TZ", () => {
 		const prev = process.env.TZ;
+		const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 		process.env.TZ = "Australia/Sydney";
 		try {
 			const lastScanAt = "2026-11-07T05:42:00.000Z";
@@ -42,7 +43,8 @@ describe("scanTime (#1597)", () => {
 			// The old bug: zone-less text parsed as local shows the UTC digits unchanged.
 			expect(scanTime(lastScanAt)).not.toBe(new Date("2026-11-07T05:42:00").toLocaleString());
 		} finally {
-			if (prev === undefined) delete process.env.TZ; else process.env.TZ = prev;
+			// Windows keeps the zone it was last given when TZ is deleted, so put the original zone back by name.
+			process.env.TZ = prev ?? zone;
 		}
 	});
 });

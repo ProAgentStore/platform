@@ -117,7 +117,8 @@ describe("delivery (#1087)", () => {
 });
 
 describe("a supervised child's death (#1087)", () => {
-	it("a child killed by a signal is recorded WITH the signal and its last lines — code null used to say nothing", async () => {
+	// Windows has no signals: a killed child exits with code 1, never signal SIGKILL.
+	it.skipIf(process.platform === "win32")("a child killed by a signal is recorded WITH the signal and its last lines — code null used to say nothing", async () => {
 		const tail = new OutputTail(20);
 		const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((done) => {
 			const child = spawn(process.execPath, ["-e", "console.error('about to die with Bearer abcdefghijklmnopqrst'); setTimeout(() => process.kill(process.pid, 'SIGKILL'), 50)"], { stdio: ["ignore", "ignore", "pipe"] });

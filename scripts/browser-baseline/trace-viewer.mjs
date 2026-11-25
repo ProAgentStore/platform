@@ -22,7 +22,9 @@ const server = createServer((req, res) => {
 	if (req.url !== `${prefix}/events`) { res.writeHead(404); res.end(); return; }
 	let fd;
 	try {
-		fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+		// O_NOFOLLOW does not exist on Windows (the constant is undefined, so the open followed a symlink to a raw capture); check the link explicitly there.
+		if (lstatSync(path).isSymbolicLink()) throw new Error("Recording is a symbolic link");
+		fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
 		if (!fstatSync(fd).isFile()) throw new Error("Not a regular recording");
 		const lines = readFileSync(fd, "utf8").split("\n"); lines.pop();
 		const events = lines.slice(-200).map((line) => JSON.parse(line));

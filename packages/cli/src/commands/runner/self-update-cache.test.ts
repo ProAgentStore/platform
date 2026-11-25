@@ -39,7 +39,9 @@ afterEach(() => {
 	delete process.env[BOOTSTRAP_ENV];
 });
 
-describe("installVersion", () => {
+// npm is spawned through cmd.exe or npm-cli.js on Windows (bootstrap/npm-invocation.ts, tested there), so the argv recorded by this
+// POSIX-shaped execFile mock is not what a Windows host passes.
+describe.skipIf(process.platform === "win32")("installVersion", () => {
 	it("bootstrapped: installs the release into the stub's cache", async () => {
 		process.env[BOOTSTRAP_ENV] = "/x/dist/bootstrap.js";
 		await installVersion("0.4.70");
@@ -56,7 +58,7 @@ describe("installVersion", () => {
 	});
 });
 
-describe("installVersion probes the new payload before it is swapped in (#1148)", () => {
+describe.skipIf(process.platform === "win32")("installVersion probes the new payload before it is swapped in (#1148)", () => {
 	beforeEach(() => { process.env[BOOTSTRAP_ENV] = "/x/dist/bootstrap.js"; });
 
 	it("runs the candidate's own entry point, expecting exactly the installed version, and only then puts it on trial", async () => {

@@ -44,7 +44,8 @@ describe("native MCP recording proxy", () => {
 			expect(readFileSync(join(dir, "received.hash"), "utf8")).toBe(hash(request));
 			for (const [name, bytes] of [["client-to-server.raw", request], ["server-to-client.raw", response], ["native-stderr.raw", stderr]]) {
 				expect(readFileSync(join(log, name)).equals(bytes)).toBe(true);
-				expect(statSync(join(log, name)).mode & 0o777).toBe(0o600);
+				// POSIX permission bits do not exist on Windows (it reports 0o666).
+				if (process.platform !== "win32") expect(statSync(join(log, name)).mode & 0o777).toBe(0o600);
 			}
 			expect(statSync(log).mode & 0o777).toBe(0o700);
 			const recorded = readFileSync(join(log, "events.jsonl"), "utf8");

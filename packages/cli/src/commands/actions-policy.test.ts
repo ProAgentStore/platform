@@ -22,6 +22,7 @@ it("shows policy and atomically disables AC recovery through the CLI", async () 
   await actionsCommand.parseAsync(["policy", "--dir", dir, "--ac-recovery", "off"], { from: "user" });
   expect(JSON.parse(output.join(""))).toEqual({ runnerDir: dir, version: 1, acRecoveryEnabled: false });
   expect(JSON.parse(readFileSync(supervisorPaths(dir).config, "utf8"))).toEqual({ version: 1, acRecoveryEnabled: false });
-  expect(statSync(supervisorPaths(dir).config).mode & 0o777).toBe(0o600);
+  // POSIX permission bits do not exist on Windows (it reports 0o666).
+  if (process.platform !== "win32") expect(statSync(supervisorPaths(dir).config).mode & 0o777).toBe(0o600);
   expect(existsSync(`${supervisorPaths(dir).config}.tmp`)).toBe(false);
 });

@@ -6,7 +6,8 @@ const dir = "/Users/former/.proagentstore/actions-runner/proappstore-online";
 const ctx: ServiceContext = { platform: "darwin", home: "/Users/former", user: "owner", uid: 501, nodePath: "/old/nvm/node", script: "/opt/homebrew/lib/node_modules/@proagentstore/cli/dist/bootstrap.js", configDir: "/Users/former/.config/proagentstore", pathEnv: "/opt/homebrew/bin:/usr/bin" };
 
 describe("macOS Actions system service (#1209)", () => {
-	it("proves launchd's captured PATH can run the durable CLI before adoption", () => {
+	// darwin-only code, and its PATH check splits on the host's delimiter (";" on Windows), so the ":" fixtures below are not Windows input.
+	it.skipIf(process.platform === "win32")("proves launchd's captured PATH can run the durable CLI before adoption", () => {
 		const probe = { exists: () => true, run: (_file: string, _args: string[], _env: NodeJS.ProcessEnv) => 0 };
 		preflightActionsServiceLaunch(ctx, probe);
 		expect(() => preflightActionsServiceLaunch({ ...ctx, pathEnv: ":/usr/bin" }, probe)).toThrow(/PATH/);

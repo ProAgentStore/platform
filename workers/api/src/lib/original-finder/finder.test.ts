@@ -47,7 +47,9 @@ const { acceptFinderCandidate, locationCompatible, normaliseTitle, withinWindow 
 const SEEK = "https://www.seek.com.au/job/12345678";
 const ATS = "https://careers.smartrecruiters.com/endeavour/743999";
 const EVENT = "job.lead.original_missing";
-const T0 = Date.now() + 10_000;
+// Evaluated once at module load, and every test must find it still ahead of the real clock. A slow runner (a Windows CI machine takes
+// minutes to collect a big suite) outran a 10s margin, which made every lead look not yet due (#1723).
+const T0 = Date.now() + 10 * 60_000;
 let d1: RealSchemaD1;
 let leads: Map<string, CollectionRecord>;
 let env: Env;

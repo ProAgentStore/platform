@@ -10,6 +10,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { isRepoLocationVar, scrubRepoLocation, withoutRepoLocation } from "./git-repo-env.mjs";
 
@@ -61,7 +62,7 @@ g("checkout", "-q", "-B", "wip/recovery");
 
 function runFixture(repo, { scrubbed }) {
 	const env = { ...CLEAN, GIT_DIR: join(repo, ".git"), GIT_INDEX_FILE: join(repo, ".git", "index"), GIT_WORK_TREE: repo };
-	const args = scrubbed ? ["--import", SETUP, "-e", FIXTURE] : ["-e", FIXTURE];
+	const args = scrubbed ? ["--import", pathToFileURL(SETUP).href, "-e", FIXTURE] : ["-e", FIXTURE];
 	const r = spawnSync(process.execPath, args, { env, encoding: "utf8" });
 	expect(r.status, r.stderr).toBe(0);
 }

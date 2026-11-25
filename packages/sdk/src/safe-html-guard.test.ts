@@ -59,7 +59,7 @@ function sources(): Source[] {
 				continue;
 			}
 			if (!/\.tsx?$/.test(p) || /\.test\.tsx?$/.test(p) || p.endsWith(".d.ts")) continue;
-			out.push({ rel: relative(REPO, p), code: stripCommentsAndLiterals(readFileSync(p, "utf-8")) });
+			out.push({ rel: relative(REPO, p).replaceAll("\\", "/"), code: stripCommentsAndLiterals(readFileSync(p, "utf-8")) });
 		}
 	};
 	for (const t of TREES) walk(join(REPO, t));

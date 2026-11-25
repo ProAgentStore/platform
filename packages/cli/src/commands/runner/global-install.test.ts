@@ -32,7 +32,7 @@ describe("installGlobalWithRollback", () => {
 		const { deps, calls } = setup();
 		await installGlobalWithRollback("0.4.150", "0.4.148", deps);
 		expect(calls).toEqual(["i -g @proagentstore/cli@0.4.150", "root -g"]);
-		expect(deps.payloadAt).toHaveBeenCalledWith("/g/lib/node_modules/@proagentstore/cli");
+		expect(deps.payloadAt).toHaveBeenCalledWith(join("/g/lib/node_modules", "@proagentstore", "cli"));
 		expect(deps.probe).toHaveBeenCalledWith("/g/lib/node_modules/@proagentstore/cli/dist/index.js", "0.4.150");
 	});
 	it("a release that fails its start-up check is replaced by the one that was running, marked bad, and reported", async () => {

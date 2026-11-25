@@ -53,7 +53,7 @@ describe("the policy-gated bootstrap", () => {
 		await installPayload("1.7.0", root, async (prefix, ver) => void writeInstalled(prefix, ver, "lib/cli/main.js"));
 		const ran = await runStub(stub("0.4.63", ["up"]));
 		expect(ran.version).toBe("1.7.0");
-		expect(ran.entry).toContain("lib/cli/main.js");
+		expect(ran.entry.replaceAll("\\", "/")).toContain("lib/cli/main.js");
 		expect(globalThis.__pagsRan).toEqual(["1.7.0"]);
 		expect(process.env[BOOTSTRAP_ENV]).toBe("/usr/local/lib/node_modules/@proagentstore/cli/dist/bootstrap.js");
 	});
