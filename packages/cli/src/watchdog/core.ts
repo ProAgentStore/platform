@@ -277,14 +277,18 @@ export async function runWatchdogLoop(d: WatchdogDeps, link: WatchdogLink, repor
 			}
 		}
 		try {
-			const answer = await link.beat({ status: collectStatus(d), results: pending, ...reporter.payload() });
+			// One reporter per machine: while a runner is alive and beating, it reports the capability record (#1721).
+			// The service sees the machine through its own environment, so its record can differ from the runner's
+			// (a tool on the user's PATH); two writers disagreeing flipped the stored hash every minute.
+			const runnerReports = d.runner().alive && !isWedged(d.runner(), d.now());
+			const answer = await link.beat({ status: collectStatus(d), results: pending, ...(runnerReports ? {} : reporter.payload()) });
 			pending = [];
 			backoff = WATCHDOG_BACKOFF_MIN_MS;
 			if (failing) {
 				failing = false;
 				d.log("the platform is reachable again");
 			}
-			reporter.accept(answer as Record<string, unknown>);
+			if (!runnerReports) reporter.accept(answer as Record<string, unknown>);
 			for (const c of (answer.commands ?? []).filter((_, i) => i < 3)) {
 				pending.push(await executeCommand(c, d));
 				wait = WATCHDOG_AFTER_COMMAND_MS;

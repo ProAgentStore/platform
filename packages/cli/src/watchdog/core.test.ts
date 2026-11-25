@@ -187,6 +187,19 @@ describe("the loop (#1320)", () => {
 		expect(reporter.accept).toHaveBeenCalled();
 	});
 
+	it("leaves the capability report to a live runner and reports it itself only when no runner is alive (#1721)", async () => {
+		const accept = vi.fn();
+		const r = { payload: () => ({ capabilityHash: "h" }), accept };
+		const alive = link([async () => ({ capabilitiesWanted: true })]);
+		await runWatchdogLoop(deps({ runnerAlive: true }), alive.l, r);
+		expect(alive.beats[0].capabilityHash).toBeUndefined();
+		expect(accept).not.toHaveBeenCalled();
+		const dead = link([async () => ({ capabilitiesStored: true })]);
+		await runWatchdogLoop(deps({ runnerAlive: false }), dead.l, r);
+		expect(dead.beats[0].capabilityHash).toBe("h");
+		expect(accept).toHaveBeenCalledTimes(1);
+	});
+
 	it("runs at most three commands per beat and in order, and a failing command does not stop the next", async () => {
 		const many = ["status", "restart", "rollback", "update"].map((k, i) => ({ ...cmd(k as WatchdogCommand["kind"]), id: `id-${i}` }));
 		const d = deps({ restartRunner: async () => { throw new Error("nope"); } });
