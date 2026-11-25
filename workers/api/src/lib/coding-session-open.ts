@@ -15,6 +15,7 @@ import { preflightEngine } from "./engine-preflight.js";
 import { ApiCodingRefused } from "./coding-api-policy.js";
 import { logError } from "./error-log.js";
 import { recordWorkdirResolution } from "./coding-workdir-resolution.js";
+import { strategyForRunner } from "./checkout-strategy.js";
 import { createSession, endSession, getActiveSessionForRepo, getLastFinishedSessionForRepo, getRepo, reassignSessionNode, updateRepoClone } from "./coding-store.js";
 import { effectiveWorkdir, getCheckout, machineIdForNode, upsertCheckout } from "./coding-repo-checkouts.js";
 import { seedBriefForRepo } from "./coding-seed-brief.js";
@@ -363,6 +364,7 @@ export async function startSessionOnRunner(
 			// than what was sent.
 			ghScope: repo.githubRepo ? [repo.githubRepo] : undefined,
 			env: engineEnv,
+			strategy: strategyForRunner(repo.strategy), // #1708: isolated repos only; nothing new is sent for shared/direct
 		});
 		// #1379: how this machine expanded the stored folder, kept beside it. Best-effort — a debugging line, never a reason to fail a start.
 		const res = started?.workDirResolution;

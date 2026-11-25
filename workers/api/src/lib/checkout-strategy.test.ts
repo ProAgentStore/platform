@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseStrategy, resolveRepoStrategy, sanitizeStrategy, STRATEGY_PRESETS } from "./checkout-strategy.js";
+import { parseStrategy, resolveRepoStrategy, sanitizeStrategy, STRATEGY_PRESETS, strategyForRunner } from "./checkout-strategy.js";
 import { toRepo, type RepoRow } from "./coding-store.js";
 
 describe("checkout strategy vocabulary (#1670)", () => {
@@ -26,5 +26,14 @@ describe("checkout strategy vocabulary (#1670)", () => {
 		const row = { id: "r", instance_id: "i", user_id: "u", name: "n", branch: "", clone_status: "ready", workdir: "/x", created_at: "", updated_at: "" } as unknown as RepoRow;
 		expect(toRepo(row).strategy).toBeUndefined();
 		expect(toRepo({ ...row, strategy: "isolated-pr" }).strategy).toBe("isolated-pr");
+	});
+});
+
+describe("what the runner is told at start (#1708)", () => {
+	it("only an isolated preset is sent; unset and shared/direct send nothing, so an older runner and every existing repo see today's request", () => {
+		expect(strategyForRunner(undefined)).toBeUndefined();
+		expect(strategyForRunner("shared-direct")).toBeUndefined();
+		expect(strategyForRunner("isolated-direct")).toBe("isolated-direct");
+		expect(strategyForRunner("isolated-pr")).toBe("isolated-pr");
 	});
 });

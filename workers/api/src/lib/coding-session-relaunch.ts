@@ -13,6 +13,7 @@ import { callRunner, type RunnerConn } from "./runner-client.js";
 import { getRepo, getSession } from "./coding-store.js";
 import { effectiveWorkdir, getCheckout, machineIdForNode } from "./coding-repo-checkouts.js";
 import { resolveEngineEnv } from "./coding-engines.js";
+import { strategyForRunner } from "./checkout-strategy.js";
 import type { Env } from "../types.js";
 
 export interface RelaunchInput {
@@ -53,7 +54,7 @@ export async function startSessionOnRunnerConn(env: Env, conn: RunnerConn, input
 		repoId,
 		workDir: effectiveWorkdir(checkout, repo?.workdir) || undefined,
 		cloneUrl: input.cloneUrl,
-		branch: input.branch,
+		branch: input.branch ?? (strategyForRunner(repo?.strategy) ? repo?.branch || undefined : undefined),
 		token: input.token,
 		tokenUsername: input.tokenUsername,
 		clientType: input.clientType,
@@ -65,5 +66,7 @@ export async function startSessionOnRunnerConn(env: Env, conn: RunnerConn, input
 		env: engineEnv,
 		fresh: input.fresh || undefined,
 		seed: input.seed || undefined,
+		// #1708: an isolated repository's engine runs in a worktree cut from its configured branch; any other sends nothing new.
+		strategy: strategyForRunner(repo?.strategy),
 	});
 }

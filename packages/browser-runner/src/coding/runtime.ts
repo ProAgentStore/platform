@@ -26,6 +26,7 @@ import { defaultReceiptStorePath } from "./clone-receipt-store.js";
 import { asTurnAuthor, type TurnAuthor } from "./turn-author.js";
 import type { GhGuardReport } from "./gh-guard.js";
 import { CleanupManager } from "./cleanup.js";
+import { type IsolatedCheckout, startIsolatedCheckout, worktreeRootFor } from "./isolated-start.js";
 
 /**
  * The coding runtime: the local "hands" that hold live coding-engine sessions — CLI child
@@ -93,6 +94,11 @@ export interface StartCodingInput {
 	 * "allow nothing", and refusing every write on an absent field would break those sessions.
 	 */
 	ghScope?: string[];
+	/**
+	 * The repository's checkout/publishing preset (#1708): `isolated-direct` or `isolated-pr` start the engine in a runner-managed worktree
+	 * at the latest `branch` commit. Absent (an older cloud, or a repository that chose nothing) means the repository's own folder, as always.
+	 */
+	strategy?: string;
 }
 
 /**
@@ -119,6 +125,8 @@ export interface StartCodingResult extends CodingSnapshot {
 	 * rule produced it. Absent when the session already existed (nothing was resolved) or no folder was named (a managed clone).
 	 */
 	workDirResolution?: ResolvedWorkdir;
+	/** Present only for an isolated session (#1708): the worktree the engine runs in. A runner older than this never reports it. */
+	checkout?: IsolatedCheckout;
 }
 
 export type CodingAction =
@@ -337,6 +345,8 @@ export class CodingRuntime {
 	 * platform says otherwise.
 	 */
 	private cleanupManager: CleanupManager | null = null;
+	/** Sessions running in a managed worktree (#1708), by session id. */
+	private isolated = new Map<string, IsolatedCheckout>();
 	get cleanup(): CleanupManager {
 		this.cleanupManager ??= new CleanupManager({ baseDir: join(this.reposBaseDir, ".."), reposBaseDir: this.reposBaseDir });
 		return this.cleanupManager;
@@ -389,7 +399,7 @@ export class CodingRuntime {
 		if (input.sessionId) {
 			const s = this.sessions.get(input.sessionId);
 			// The session's own folder answers to the same rule: a session started in `~` must not reopen it.
-			if (s) return confineWorkDir(s.config.workDir, { allow: [this.reposBaseDir] });
+			if (s) return confineWorkDir(s.config.workDir, { allow: [this.reposBaseDir, worktreeRootFor(this.reposBaseDir)] });
 		}
 		if (input.workDir) return confineWorkDir(input.workDir, { allow: [this.reposBaseDir] });
 		throw new InspectError("no session or workDir to inspect");
@@ -554,9 +564,11 @@ export class CodingRuntime {
 			resolution = input.workDir ? resolveHomePath(input.workDir) : null;
 			const workDir = resolution ? resolution.path : join(this.reposBaseDir, sanitizeSessionName(input.repoId));
 			ensureRepo(workDir, { cloneUrl: input.cloneUrl ?? input.emptyCheckoutCloneUrl, branch: input.branch, token: input.token, tokenUsername: input.tokenUsername, ownFolder: Boolean(input.workDir) });
+			const isolated = startIsolatedCheckout(workDir, worktreeRootFor(this.reposBaseDir), input); // #1708
+			if (isolated) this.isolated.set(input.sessionId, isolated);
 			session = new HeadlessSession({
 				id: input.sessionId,
-				workDir,
+				workDir: isolated?.path ?? workDir,
 				clientType: input.clientType,
 				command: input.command,
 				env: input.env,
@@ -579,7 +591,7 @@ export class CodingRuntime {
 		// describe a different launch from the one the caller asked about.
 		const seeded = session.seededConversation;
 		session.start();
-		return { ...this.snapshot(input.sessionId), resumed, seeded, ...(resolution ? { workDirResolution: resolution } : {}) };
+		return { ...this.snapshot(input.sessionId), resumed, seeded, ...(resolution ? { workDirResolution: resolution } : {}), ...(this.isolated.has(input.sessionId) ? { checkout: this.isolated.get(input.sessionId) } : {}) };
 	}
 
 	/**
@@ -717,6 +729,7 @@ export class CodingRuntime {
 			session.stop();
 			this.sessions.delete(sessionId);
 			this.runLeases.delete(sessionId);
+			this.isolated.delete(sessionId); // the worktree itself is kept: ending a session never deletes work (#1708)
 			// What the run left behind: its leftovers, browsers, temp folder and worktrees (#1265).
 			// After the delete, so this session is no longer "live" to its own sweep. Never blocks the answer.
 			const live = this.liveSessions();

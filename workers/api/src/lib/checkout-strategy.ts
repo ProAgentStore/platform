@@ -45,3 +45,11 @@ export function sanitizeStrategy(raw: unknown): { ok: true; value: StrategyPrese
 	if (isPreset(raw)) return { ok: true, value: raw };
 	return { ok: false, error: `strategy must be one of: ${Object.keys(STRATEGY_PRESETS).join(", ")} (or null to return to shared-direct)` };
 }
+
+/**
+ * What a runner is TOLD at `/coding/start` (#1708): the preset only when it asks for an isolated checkout, otherwise nothing. A repository
+ * that chose nothing, or chose shared/direct, sends the exact request it always has, so an older runner and every existing repository are untouched.
+ */
+export function strategyForRunner(stored: StrategyPreset | undefined): StrategyPreset | undefined {
+	return resolveRepoStrategy(stored).checkout === "worktree" ? stored : undefined;
+}
