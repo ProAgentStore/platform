@@ -137,3 +137,30 @@ describe("choosing a model", () => {
 		expect(await storedConfig()).toEqual({});
 	});
 });
+
+describe("choosing a fallback engine (#1712)", () => {
+	const codex = async () => (await readEngines(env, "inst-1", "u1")).engines.find((e) => e.id === "codex");
+
+	it("sets it on the preset, reads it back, and keeps it when a model is pinned afterwards", async () => {
+		await writeEngineChoice(env, "inst-1", "u1", { engineId: "codex", fallbackId: "claude" });
+		const byId = Object.fromEntries((await readEngineChoice(env, "inst-1", "u1")).engines.map((e) => [e.id, e]));
+		expect(byId.codex.fallbackId).toBe("claude");
+		expect(byId.claude.fallbackId).toBeNull();
+		await writeEngineChoice(env, "inst-1", "u1", { engineId: "codex", model: "gpt-5.5" });
+		expect((await codex())?.fallbackId).toBe("claude");
+	});
+
+	it("absent leaves it, empty clears it", async () => {
+		await writeEngineChoice(env, "inst-1", "u1", { engineId: "codex", fallbackId: "claude" });
+		await writeEngineChoice(env, "inst-1", "u1", { engineId: "codex" });
+		expect((await codex())?.fallbackId).toBe("claude");
+		await writeEngineChoice(env, "inst-1", "u1", { engineId: "codex", fallbackId: "" });
+		expect(await codex()).not.toHaveProperty("fallbackId");
+	});
+
+	it("refuses itself and an unknown preset, writing nothing", async () => {
+		await expect(writeEngineChoice(env, "inst-1", "u1", { engineId: "codex", fallbackId: "codex" })).rejects.toThrow(/not another engine/);
+		await expect(writeEngineChoice(env, "inst-1", "u1", { engineId: "codex", fallbackId: "nope" })).rejects.toThrow(/not another engine/);
+		expect(await storedConfig()).toEqual({});
+	});
+});

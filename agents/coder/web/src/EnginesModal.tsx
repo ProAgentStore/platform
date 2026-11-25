@@ -196,6 +196,20 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 										Default
 									</label>
 								</div>
+								<div className="flex gap-3 items-center mt-1.5 flex-wrap">
+									<label htmlFor={`engine-${e.id}-fallback`} className="text-xs text-muted font-bold shrink-0">If spent, switch to</label>
+									<select
+										id={`engine-${e.id}-fallback`}
+										value={e.fallbackId && engines.some((x) => x.id === e.fallbackId && x.id !== e.id) ? e.fallbackId : ""}
+										onChange={(ev) => update(i, { fallbackId: ev.target.value || undefined })}
+										className="bg-panel border border-line rounded-lg px-2 py-1 text-xs"
+									>
+										<option value="">None — stop or wait</option>
+										{engines.filter((x) => x.id !== e.id).map((x) => (
+											<option key={x.id} value={x.id}>{x.label || x.id}</option>
+										))}
+									</select>
+								</div>
 								{isCodex && e.auth === "subscription" && (
 									<div className="text-xs text-muted mt-1.5 flex items-start gap-1.5">
 										<span aria-hidden>ⓘ</span>

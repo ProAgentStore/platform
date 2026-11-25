@@ -39,6 +39,8 @@ export interface EngineChoiceOption {
 	suggestionsFrom: "machine" | "documented" | null;
 	/** How it bills (#1042): the machine's subscription/local CLI login, or a provider API key per token. */
 	billing: "subscription" | "api-key";
+	/** The preset a run switches to when this one's subscription is spent (#1621, #1712), or null when none. */
+	fallbackId: string | null;
 }
 
 export interface EngineChoiceView {
@@ -78,6 +80,7 @@ const toOption = (e: CodingEngine): EngineChoiceOption => {
 		suggestions: flagEngine ? MODEL_SUGGESTIONS[flagEngine] : [],
 		suggestionsFrom: flagEngine && MODEL_SUGGESTIONS[flagEngine].length ? "documented" : null,
 		billing: e.auth === "api-key" ? "api-key" : "subscription",
+		fallbackId: e.fallbackId ?? null,
 	};
 };
 
@@ -119,6 +122,11 @@ async function withLiveSuggestions(env: Env, instanceId: string, userId: string,
  * not quietly strip a `--model` the owner wrote by hand), `null` hands the choice back to the CLI,
  * a string pins it.
  *
+ * `fallbackId` (#1712) is tri-state the same way: ABSENT leaves it, `null`/"" clears it, a string names ANOTHER preset
+ * on this instance — the one a run switches to when this engine's subscription is spent. An unknown or self-referencing
+ * id is refused; so is an API-key preset the owner has not confirmed, because a fallback would bill it per token
+ * without anyone choosing that (#1042) — MCP can never confirm it.
+ *
  * An unknown engine id is refused rather than falling back to the default the way `resolveEngine`
  * does at launch. There, falling back keeps a session opening; here it would answer "saved" to a
  * choice that was not made, which is the exact failure 0126 was written about.
@@ -127,7 +135,7 @@ export async function writeEngineChoice(
 	env: Env,
 	instanceId: string,
 	userId: string,
-	input: { engineId?: unknown; model?: unknown; acknowledgeApiCoding?: unknown },
+	input: { engineId?: unknown; model?: unknown; fallbackId?: unknown; acknowledgeApiCoding?: unknown },
 	opts: { fromMcp?: boolean } = {},
 ): Promise<EngineChoiceView> {
 	const { engines, apiCodingOptIns } = await readEngines(env, instanceId, userId);
@@ -151,6 +159,21 @@ export async function writeEngineChoice(
 		}
 	}
 
+	let fallbackId: string | null | undefined;
+	if (input.fallbackId !== undefined) {
+		fallbackId = input.fallbackId === null || input.fallbackId === "" ? null : typeof input.fallbackId === "string" ? input.fallbackId : undefined;
+		if (fallbackId === undefined) throw new HttpError(400, "fallbackId must be a preset id, or null to clear it.");
+		if (fallbackId !== null) {
+			const target = engines.find((e) => e.id === fallbackId);
+			if (!target || target.id === engine.id) {
+				throw new HttpError(400, `"${fallbackId}" is not another engine on this agent — choose one of: ${engines.filter((e) => e.id !== engine.id).map((e) => e.id).join(", ")}.`);
+			}
+			if (target.auth === "api-key" && !apiCodingConfirmed(apiCodingOptIns, { id: target.id, command: target.command })) {
+				throw new HttpError(opts.fromMcp ? 403 : 409, `"${target.label}" codes on a provider API key that has not been confirmed. Confirm it in the console before naming it as a fallback.`);
+			}
+		}
+	}
+
 	let modelCheck: ModelCheck | undefined;
 	if (input.model !== undefined) {
 		const model = input.model === null || input.model === "" ? null : input.model;
@@ -167,6 +190,15 @@ export async function writeEngineChoice(
 			// nothing is running on `DEFAULT_ENGINES`, which exist only in code until this writes them.
 			await patchInstanceConfig(env, instanceId, userId, "codingEngines", engines.map((e) => (e.id === engine.id ? { ...e, command } : e)));
 		}
+	}
+	if (fallbackId !== undefined) {
+		// Re-read: the model write above may have just rewritten this list.
+		const current = (await readEngines(env, instanceId, userId)).engines;
+		await patchInstanceConfig(env, instanceId, userId, "codingEngines", current.map((e) => {
+			if (e.id !== engine.id) return e;
+			const { fallbackId: _dropped, ...rest } = e;
+			return fallbackId === null ? rest : { ...rest, fallbackId };
+		}));
 	}
 	await patchInstanceConfig(env, instanceId, userId, "defaultEngineId", engine.id);
 	const view = await readEngineChoice(env, instanceId, userId);

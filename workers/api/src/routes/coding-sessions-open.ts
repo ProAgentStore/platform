@@ -115,7 +115,7 @@ export function registerSessionOpenRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 
 	codingRoutes.put("/:instanceId/coding/engine-choice", async (c) => {
 		const { uid, instanceId } = await requireOwned(c);
-		const body = (await c.req.json().catch(() => ({}))) as { engineId?: unknown; model?: unknown; acknowledgeApiCoding?: unknown };
+		const body = (await c.req.json().catch(() => ({}))) as { engineId?: unknown; model?: unknown; fallbackId?: unknown; acknowledgeApiCoding?: unknown };
 		return c.json(await writeEngineChoice(c.env, instanceId, uid, body, { fromMcp: isMcpRequest(c.req.header("X-PAGS-Client")) }));
 	});
 

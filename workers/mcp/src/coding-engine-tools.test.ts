@@ -29,3 +29,21 @@ describe("coding_engine_set (#1042)", () => {
 		expect(out?.content[0].text).toMatch(/only be turned on in the console/);
 	});
 });
+
+describe("coding_engine_set fallback (#1712)", () => {
+	it("sends fallbackId, null for an empty string, and nothing when omitted", async () => {
+		const bodies: Array<Record<string, unknown>> = [];
+		vi.stubGlobal("fetch", async (_input: string | URL | Request, init?: RequestInit) => {
+			bodies.push(init?.body ? JSON.parse(String(init.body)) : {});
+			return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+		});
+		const tools = new Map<string, Handler>();
+		// biome-ignore lint/suspicious/noExplicitAny: minimal fake MCP server
+		registerCodingEngineTools({ tool: (n: string, _d: string, _s: unknown, h: Handler) => tools.set(n, h) } as any, env, (t?: string) => t || "tok", (): SafetyContext => ({ env, subject: "u1", scopes: ["read", "write"] }));
+		const set = tools.get("coding_engine_set");
+		await set?.({ instance_id: "i1", engine_id: "codex", fallback_id: "claude" });
+		await set?.({ instance_id: "i1", engine_id: "codex", fallback_id: "" });
+		await set?.({ instance_id: "i1", engine_id: "codex" });
+		expect(bodies).toEqual([{ engineId: "codex", fallbackId: "claude" }, { engineId: "codex", fallbackId: null }, { engineId: "codex" }]);
+	});
+});

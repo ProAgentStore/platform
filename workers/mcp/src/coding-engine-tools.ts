@@ -24,7 +24,7 @@ export function registerCodingEngineTools(
 ): void {
 	server.tool(
 		"coding_engine_get",
-		"Which coding CLI this instance opens sessions with, and which model it runs. Answers `{defaultEngineId, engines, lastObserved, appliesTo}`: each engine has its `id`, launch `command`, the `model` that command pins (null = the CLI's own default), `modelSelectable`, and `suggestions` with `suggestionsFrom` — `machine`: the models the instance's machine's CLI lists right now (Grok's `grok models`, the same list coding_engine_set checks a pin against); `documented`: the aliases the CLI documents (Claude); null: the CLI lists none (Codex, Gemini) — any id the CLI accepts also works. `lastObserved` is the model the most recent MEASURED engine turn actually ran — observed from the CLI's usage report, not read from the setting — or null when none is recorded. `machine` is what the instance's own machine has for each engine id, asked live: `installed`, `path`, `version`, `login` (whether the engine's own sign-in is stored there), for Grok `vendor` (whether it is xAI's Grok CLI or an npm package of the same name that cannot run the preset), and `problem` — the fix, when a session on that engine would not start there; `machine.unavailable` says why it could not be asked (no runner, old CLI). Read this before coding_engine_set.",
+		"Which coding CLI this instance opens sessions with, and which model it runs. Answers `{defaultEngineId, engines, lastObserved, appliesTo}`: each engine has its `id`, launch `command`, its `fallbackId` (the preset a run switches to when this one's subscription is spent or at its limit; null = none), the `model` that command pins (null = the CLI's own default), `modelSelectable`, and `suggestions` with `suggestionsFrom` — `machine`: the models the instance's machine's CLI lists right now (Grok's `grok models`, the same list coding_engine_set checks a pin against); `documented`: the aliases the CLI documents (Claude); null: the CLI lists none (Codex, Gemini) — any id the CLI accepts also works. `lastObserved` is the model the most recent MEASURED engine turn actually ran — observed from the CLI's usage report, not read from the setting — or null when none is recorded. `machine` is what the instance's own machine has for each engine id, asked live: `installed`, `path`, `version`, `login` (whether the engine's own sign-in is stored there), for Grok `vendor` (whether it is xAI's Grok CLI or an npm package of the same name that cannot run the preset), and `problem` — the fix, when a session on that engine would not start there; `machine.unavailable` says why it could not be asked (no runner, old CLI). Read this before coding_engine_set.",
 		{
 			instance_id: z.string().describe("Instance ID"),
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
@@ -40,28 +40,33 @@ export function registerCodingEngineTools(
 
 	server.tool(
 		"coding_engine_set",
-		"Choose which coding CLI this instance opens sessions with, and optionally the model it runs — e.g. switch to another engine, or off a model whose usage limit is spent. A model id is checked against the machine's own live list and refused, with that list, when it is not on it: Grok's from `grok models`; Claude Code's, Codex's and Gemini's from the provider's own list, read with an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY) the machine holds — Claude Code's supported aliases (opus, sonnet…) pass; Haiku aliases and model ids are always refused for coding. With no such key (a subscription login) or no runner connected, other model ids are saved unchecked and `modelCheck` says why; the no-Haiku coding rule still applies. `engine_id` must be an `id` that coding_engine_get returned. `model`: omit to leave the engine's command as it is, pass an id or alias to pin it (written as `--model` into that engine's launch command), or an empty string to hand the choice back to the CLI. Takes effect on the NEXT session: one already running keeps the engine it was started with until coding_session_restart or coding_session_fresh. An unknown engine, an invalid model id, or a model on an engine with no known model flag is refused, and nothing is written. Coding defaults to a subscription CLI: an API-key engine (billed per token) can be chosen here only if the owner already confirmed it in the console, and MCP can never confirm one or change its model — those requests are refused (#1042).",
+		"Choose which coding CLI this instance opens sessions with, and optionally the model it runs — e.g. switch to another engine, or off a model whose usage limit is spent. A model id is checked against the machine's own live list and refused, with that list, when it is not on it: Grok's from `grok models`; Claude Code's, Codex's and Gemini's from the provider's own list, read with an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY) the machine holds — Claude Code's supported aliases (opus, sonnet…) pass; Haiku aliases and model ids are always refused for coding. With no such key (a subscription login) or no runner connected, other model ids are saved unchecked and `modelCheck` says why; the no-Haiku coding rule still applies. `engine_id` must be an `id` that coding_engine_get returned. `model`: omit to leave the engine's command as it is, pass an id or alias to pin it (written as `--model` into that engine's launch command), or an empty string to hand the choice back to the CLI. `fallback_id`: omit to leave it, pass another preset's id to make runs on `engine_id` switch to that preset when its subscription runs out (e.g. Codex, then Claude), or an empty string to clear it; an API-key preset the owner has not confirmed in the console is refused. Like any choice here this also makes `engine_id` the default engine. Takes effect on the NEXT session: one already running keeps the engine it was started with until coding_session_restart or coding_session_fresh. An unknown engine, an invalid model id, or a model on an engine with no known model flag is refused, and nothing is written. Coding defaults to a subscription CLI: an API-key engine (billed per token) can be chosen here only if the owner already confirmed it in the console, and MCP can never confirm one or change its model — those requests are refused (#1042).",
 		{
 			instance_id: z.string().describe("Instance ID"),
 			engine_id: z.string().describe("Engine preset id, from coding_engine_get."),
 			model: z.string().optional().describe("Model id or alias to pin. Empty string = the CLI's own default. Omit to leave the command unchanged."),
+			fallback_id: z.string().optional().describe("Preset id to switch to when this engine's subscription is spent. Empty string = clear. Omit to leave unchanged."),
 			dry_run: z.boolean().optional().describe("Report what would be written, without writing it."),
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 		},
-		async ({ instance_id, engine_id, model, dry_run, token }) => {
+		async ({ instance_id, engine_id, model, fallback_id, dry_run, token }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const input = { instance_id, engine_id, model };
+			const input = { instance_id, engine_id, model, fallback_id };
 			const denied = await requirePermission(safetyFor(token), "write", "coding_engine_set", input);
 			if (denied) return denied;
 			if (dry_run) {
 				return dryRun(safetyFor(token), "coding_engine_set", "choose the instance's coding engine and model", input, {
 					endpoint: `/v1/instances/${instance_id}/coding/engine-choice`,
 					method: "PUT",
-					effect: `${instance_id} would open its next coding session with engine "${engine_id}"${model === undefined ? ", its command unchanged" : model === "" ? ", on the CLI's own default model" : `, pinned to model "${model}"`}. A session already running is not touched.`,
+					effect: `${instance_id} would open its next coding session with engine "${engine_id}"${model === undefined ? ", its command unchanged" : model === "" ? ", on the CLI's own default model" : `, pinned to model "${model}"`}. ${fallback_id === undefined ? "" : fallback_id === "" ? " Its fallback engine would be cleared." : ` Runs on it would switch to "${fallback_id}" when its subscription is spent.`} A session already running is not touched.`,
 				});
 			}
-			const body = model === undefined ? { engineId: engine_id } : { engineId: engine_id, model: model === "" ? null : model };
+			const body = {
+				engineId: engine_id,
+				...(model === undefined ? {} : { model: model === "" ? null : model }),
+				...(fallback_id === undefined ? {} : { fallbackId: fallback_id === "" ? null : fallback_id }),
+			};
 			const r = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/coding/engine-choice`, sessionToken, { method: "PUT", body: JSON.stringify(body) }, env)) as { error?: string };
 			if (!r.error) await audit(safetyFor(token), { tool: "coding_engine_set", action: "completed", input, result: { ok: true } });
 			return jsonText(r);

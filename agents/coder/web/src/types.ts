@@ -62,6 +62,8 @@ export interface CodingEngine {
 	label: string;
 	command: string;
 	auth?: EngineAuth;
+	/** Another preset's id to switch a run to when this one's subscription is spent (#1621). Absent = none. */
+	fallbackId?: string;
 }
 
 /**
