@@ -174,6 +174,7 @@ export default function ReposList({
 							{repoProviderBadge(r) && (
 								<span className="text-2xs px-1 py-0.5 bg-line/60 text-muted rounded font-bold shrink-0">{repoProviderBadge(r)}</span>
 							)}
+							<span data-testid={`repo-strategy-${r.id}`} title="Checkout and publishing preset" className="text-2xs px-1 py-0.5 bg-line/60 text-muted rounded font-bold shrink-0">{strategyOption(repoStrategy(r)).short}</span>
 						</div>
 						<div className="text-xs text-muted mt-0.5 flex items-center gap-1.5">
 							{isEngineBusy(status) ? (
@@ -183,7 +184,6 @@ export default function ReposList({
 							)}
 							{repoLabel(r)}
 							{r.instructions && <span className="text-2xs px-1 py-0.5 bg-accent-soft text-accent rounded font-bold">Rules</span>}
-							<span data-testid={`repo-strategy-${r.id}`} title="Checkout and publishing preset" className="text-2xs px-1 py-0.5 bg-line/60 text-muted rounded font-bold">{strategyOption(repoStrategy(r)).short}</span>
 						</div>
 					</div>
 					<div className="flex gap-1.5 shrink-0 items-center">
