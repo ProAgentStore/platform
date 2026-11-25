@@ -35,6 +35,13 @@ const BASE_ENV: NodeJS.ProcessEnv = {
 	GIT_EDITOR: "true",
 };
 
+/**
+ * On Windows the `bash` first on PATH can be MSYS2's, whose startup rewrites PATH (`/ucrt64/bin` and its own profile go in front), which is
+ * the documented "rewritten PATH" gap and not what an Engine runs in. Claude Code on Windows runs in Git for Windows' bash, which keeps PATH as given.
+ */
+const GIT_FOR_WINDOWS_BASH = join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "bin", "bash.exe");
+const GIT_BASH = process.platform === "win32" && existsSync(GIT_FOR_WINDOWS_BASH) ? GIT_FOR_WINDOWS_BASH : "bash";
+
 /** The incident: a space-joined path list makes the save fail, and the chained pop runs anyway. */
 const INCIDENT_BASH = `SRC="a.txt b.txt"; git stash push -- "$SRC"; git stash pop`;
 const INCIDENT_ZSH = `SRC="a.txt b.txt"; git stash push -- $SRC; git stash pop`;
@@ -90,7 +97,7 @@ beforeEach(() => {
 describe("the #1021 incident, fail-before / pass-after", () => {
 	it("FAIL-BEFORE: without the guard the failed save is followed by a pop that consumes the foreign stash", () => {
 		const before = snapshot();
-		const r = sh("bash", INCIDENT_BASH, BASE_ENV);
+		const r = sh(GIT_BASH, INCIDENT_BASH, BASE_ENV);
 		expect(r.stderr).toMatch(/did not match any file|pathspec/i);
 		const after = snapshot();
 		expect(after.stashList).toBe(""); // the foreign entry was popped off the stack
@@ -100,9 +107,8 @@ describe("the #1021 incident, fail-before / pass-after", () => {
 	it("PASS-AFTER: through the Engine's spawn env the pop is refused and nothing foreign or owned moves", () => {
 		const env = { ...engineSpawnEnv(undefined, undefined, undefined, root), ...pick(BASE_ENV) };
 		const before = snapshot();
-		const r = sh("bash", INCIDENT_BASH, env);
-		const probe = sh("bash", "command -v git; command -v bash; echo \"$PATH\" | tr ':' '\\n' | head -5; ls -la \"$(dirname \"$(command -v git)\")\"", env);
-		expect(r.status, `stderr=${r.stderr}\nprobe=${probe.stdout}${probe.stderr}\nPathKeys=${Object.keys(env).filter((k) => k.toUpperCase() === "PATH")}`).toBe(GIT_REFUSED_EXIT); // the last command's real status, not relabelled
+		const r = sh(GIT_BASH, INCIDENT_BASH, env);
+		expect(r.status).toBe(GIT_REFUSED_EXIT); // the last command's real status, not relabelled
 		expect(r.stderr).toContain(GIT_REFUSED_MARKER);
 		expect(snapshot()).toEqual(before);
 	});
