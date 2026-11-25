@@ -24,7 +24,9 @@ export function protectWindowsSecretFile(path: string): void {
 	let result: string;
 	try {
 		result = execFileSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", PROTECT], {
-			env: { ...process.env, PAGS_SECRET_ACL_PATH: path },
+			// PSModulePath is dropped: a runner started from PowerShell 7 carries that edition's module path, and Windows PowerShell 5.1
+			// then cannot autoload Microsoft.PowerShell.Security ("Set-Acl is not recognized"). Unset, 5.1 computes its own.
+			env: { ...process.env, PSModulePath: undefined, PAGS_SECRET_ACL_PATH: path },
 			encoding: "utf8", timeout: 10_000, windowsHide: true,
 			stdio: ["ignore", "pipe", "pipe"],
 		});
