@@ -1318,7 +1318,7 @@ test.describe("ProAgentStore Console smoke", () => {
 	// selects on the `mobile — ` prefix and nothing counted what that matched (#740).
 	test("mobile — the command rows fit a phone at 320px and at 390px (#443)", async ({ page }) => {
 		await mockSignedInConsole(page);
-		await page.goto("/console/preferences");
+		await page.goto("/console/preferences?group=voice");
 		await expect(page.getByRole("heading", { name: "Voice" })).toBeVisible();
 		for (const width of [320, 390]) {
 			await page.setViewportSize({ width, height: 800 });
@@ -3682,7 +3682,7 @@ test.describe("mobile — no horizontal overflow (regression guard for the missi
 		"/console/instances/inst-1/settings?subtab=instructions",
 		"/console/instances/inst-1/settings?subtab=general",
 		"/console/profile",
-		"/console/preferences",
+		"/console/preferences?group=all",
 		"/console/notifications",
 		// Added at #543, when the breakdown row grew a second money figure. The route had never
 		// been swept because `/v1/usage` was not mocked at all — so the densest row in the console
@@ -4342,7 +4342,7 @@ test.describe("mobile — Profile with real-shaped account data", () => {
 	 * It passes today. It is here so that stays a measured fact.
 	 */
 	for (const scale of [1.3, 1.5]) for (const width of [320, 390]) {
-		for (const route of ["/console/profile", "/console/preferences"]) {
+		for (const route of ["/console/profile", "/console/preferences?group=all"]) {
 			test(`no horizontal scroll at ${width}px and ${scale}x text — ${route}`, async ({ page }) => {
 				await page.setViewportSize({ width, height: 812 });
 				await mockSignedInConsole(page, realistic);
@@ -4400,7 +4400,7 @@ test.describe("mobile — Preferences with a connected account (#333)", () => {
 		test(`no horizontal scroll at ${width}px — /console/preferences`, async ({ page }) => {
 			await page.setViewportSize({ width, height: 812 });
 			await mockSignedInConsole(page, connected);
-			await page.goto("/console/preferences");
+			await page.goto("/console/preferences?group=all");
 			await page.waitForLoadState("networkidle");
 			await page.locator("main").waitFor();
 			await page.waitForTimeout(300);
@@ -4468,7 +4468,7 @@ test.describe("mobile — Preferences in WebKit (#384)", () => {
 		test(`the timezone select does not pan the page at ${width}px`, async ({ page }) => {
 			await page.setViewportSize({ width, height: 812 });
 			await mockSignedInConsole(page, connected);
-			await page.goto("/console/preferences");
+			await page.goto("/console/preferences?group=all");
 			await page.waitForLoadState("networkidle");
 			await page.locator("main").waitFor();
 			await page.waitForTimeout(300);
@@ -4508,7 +4508,7 @@ test.describe("mobile — Preferences in WebKit (#384)", () => {
 		test(`the Connections rows keep their label readable at ${width}px`, async ({ page }) => {
 			await page.setViewportSize({ width, height: 812 });
 			await mockSignedInConsole(page, connected);
-			await page.goto("/console/preferences");
+			await page.goto("/console/preferences?group=all");
 			await page.waitForLoadState("networkidle");
 			await page.locator("main").waitFor();
 			await page.waitForTimeout(300);
@@ -4576,7 +4576,7 @@ test.describe("mobile — Preferences in WebKit (#384)", () => {
 		test(`no select widens its own row at ${width}px`, async ({ page }) => {
 			await page.setViewportSize({ width, height: 812 });
 			await mockSignedInConsole(page, connected);
-			await page.goto("/console/preferences");
+			await page.goto("/console/preferences?group=all");
 			await page.waitForLoadState("networkidle");
 			await page.locator("main").waitFor();
 			await page.waitForTimeout(300);
@@ -4637,7 +4637,7 @@ test.describe("mobile — Preferences in WebKit (#384)", () => {
 	test("a focused select is visibly focused", async ({ page }) => {
 		await page.setViewportSize({ width: 390, height: 812 });
 		await mockSignedInConsole(page, connected);
-		await page.goto("/console/preferences");
+		await page.goto("/console/preferences?group=all");
 		await page.waitForLoadState("networkidle");
 		await page.locator("main").waitFor();
 		await page.waitForTimeout(300);
@@ -4683,6 +4683,150 @@ test.describe("mobile — Preferences in WebKit (#384)", () => {
 });
 
 /**
+ * Account Preferences, organised into named groups (#1705).
+ *
+ * Below `sm` one group is on screen at a time, chosen from a wrapping row of links; from `sm` up
+ * every group is on the page as before. Every group stays MOUNTED, so these tests do more than
+ * count what is visible: they type into a control, leave the group and come back to it.
+ *
+ * `mobile — ` so WebKit runs it. Playwright WebKit at phone viewports — not a physical iPhone.
+ */
+test.describe("mobile — Preferences groups (#1705)", () => {
+	const connected = {
+		user: { githubLinked: "owner-login-dev" },
+		connectors: DEFAULT_CONNECTORS,
+	};
+	/** Each group, a heading only that group owns. */
+	const GROUPS = [
+		{ id: "connections", label: "Connections", heading: "Connections" },
+		{ id: "notifications", label: "Notifications", heading: "Approval gate" },
+		{ id: "agents", label: "Coding & agents", heading: "Default coding engine" },
+		{ id: "appearance", label: "Appearance & time", heading: "Timezone" },
+		{ id: "voice", label: "Voice & translation", heading: "Translation" },
+	] as const;
+
+	async function open(page: Page, url: string, width = 390, scale = 1) {
+		await page.addInitScript((s) => window.localStorage.setItem("pags:textScale", String(s)), scale);
+		await page.setViewportSize({ width, height: 812 });
+		await mockSignedInConsole(page, connected);
+		await page.goto(url);
+		await page.waitForLoadState("networkidle");
+		await page.locator("main").waitFor();
+		await page.waitForTimeout(300);
+	}
+	const section = (page: Page, id: string) => page.getByTestId(`preference-group-${id}`);
+	const categories = (page: Page) => page.getByRole("navigation", { name: "Preferences categories" });
+
+	test("a phone opens on Connections, names every category, and shows only that one", async ({ page }) => {
+		await open(page, "/console/preferences");
+		await expect(categories(page)).toBeVisible();
+		for (const g of GROUPS) await expect(categories(page).getByRole("link", { name: g.label, exact: true })).toBeVisible();
+		await expect(categories(page).getByRole("link", { name: "Show all", exact: true })).toBeVisible();
+		await expect(categories(page).getByRole("link", { name: "Connections", exact: true })).toHaveAttribute("aria-current", "true");
+
+		await expect(section(page, "connections")).toBeVisible();
+		for (const g of GROUPS.filter((x) => x.id !== "connections")) await expect(section(page, g.id)).toBeHidden();
+	});
+
+	for (const g of GROUPS) {
+		test(`picking "${g.label}" shows that group, hides the rest, updates the URL and moves focus into it`, async ({ page }) => {
+			await open(page, "/console/preferences");
+			await categories(page).getByRole("link", { name: g.label, exact: true }).click();
+			await expect(page).toHaveURL(new RegExp(`group=${g.id}`));
+			await expect(section(page, g.id)).toBeVisible();
+			await expect(page.getByRole("heading", { name: g.heading }).first()).toBeVisible();
+			for (const other of GROUPS.filter((x) => x.id !== g.id)) await expect(section(page, other.id)).toBeHidden();
+			await expect(section(page, g.id)).toBeFocused();
+			await expect(categories(page).getByRole("link", { name: g.label, exact: true })).toHaveAttribute("aria-current", "true");
+		});
+	}
+
+	test("a direct link opens its group; an unknown group falls back; an approval link opens Notifications; Show all shows everything", async ({ page }) => {
+		await open(page, "/console/preferences?group=voice");
+		await expect(section(page, "voice")).toBeVisible();
+		await expect(section(page, "connections")).toBeHidden();
+
+		await page.goto("/console/preferences?group=nonsense");
+		await expect(section(page, "connections")).toBeVisible();
+		await expect(section(page, "voice")).toBeHidden();
+
+		await page.goto("/console/preferences?approval=ap-1");
+		await expect(section(page, "notifications")).toBeVisible();
+		await expect(section(page, "connections")).toBeHidden();
+
+		await page.goto("/console/preferences?group=all");
+		for (const g of GROUPS) await expect(section(page, g.id)).toBeVisible();
+	});
+
+	test("a group reloads onto itself", async ({ page }) => {
+		await open(page, "/console/preferences?group=appearance");
+		await page.reload();
+		await page.locator("main").waitFor();
+		await expect(section(page, "appearance")).toBeVisible();
+		await expect(section(page, "connections")).toBeHidden();
+	});
+
+	test("a half-typed value is still there after visiting another group", async ({ page }) => {
+		await open(page, "/console/preferences?group=voice");
+		const field = section(page, "voice").locator("input[type='text'], input:not([type]), textarea").first();
+		await field.waitFor();
+		await field.fill("kept while I look elsewhere");
+		await categories(page).getByRole("link", { name: "Appearance & time", exact: true }).click();
+		await expect(section(page, "voice")).toBeHidden();
+		await categories(page).getByRole("link", { name: "Voice & translation", exact: true }).click();
+		await expect(section(page, "voice")).toBeVisible();
+		await expect(field).toHaveValue("kept while I look elsewhere");
+	});
+
+	test("saving still works inside a group: the text size persists and the timezone saves", async ({ page }) => {
+		await page.setViewportSize({ width: 390, height: 812 });
+		const mock = await mockSignedInConsole(page, connected);
+		await page.goto("/console/preferences?group=appearance");
+		await page.locator("main").waitFor();
+		await page.getByRole("button", { name: "A+", exact: true }).click();
+		expect(await page.evaluate(() => localStorage.getItem("pags:textScale"))).toBe("1.15");
+		await page.getByLabel("Your timezone").selectOption("Europe/London");
+		await expect.poll(() => (mock.savedPreferences as { timezone?: string } | null)?.timezone).toBe("Europe/London");
+	});
+
+	for (const scale of [1, 1.5]) {
+		for (const width of [320, 390]) {
+			for (const g of GROUPS) {
+				test(`${g.label} fits at ${width}px, text ${scale}x`, async ({ page }) => {
+					await open(page, `/console/preferences?group=${g.id}`, width, scale);
+					await expect(section(page, g.id)).toBeVisible();
+					const { mainOv, docOv, navOv, wide, escapes, scrollers } = await measureOverflow(page);
+					expect(wide, `content past the right edge: ${wide.join(", ")}`).toEqual([]);
+					expect(escapes, `a box past its own container: ${escapes.join(", ")}`).toEqual([]);
+					expect(scrollers, `unexpected horizontal scrollers: ${scrollers.join(", ")}`).toEqual([]);
+					expect(mainOv, `<main> pans by ${mainOv}px`).toBeLessThanOrEqual(1);
+					expect(docOv, `page overflows by ${docOv}px`).toBeLessThanOrEqual(1);
+					expect(navOv, `primary nav pans by ${navOv}px`).toBeLessThanOrEqual(1);
+					// The category row wraps rather than scrolls, and each link is a real tap target.
+					const small = await page.evaluate(() => {
+						const out: string[] = [];
+						for (const a of Array.from(document.querySelectorAll<HTMLElement>("[data-testid='preference-groups'] a"))) {
+							const r = a.getBoundingClientRect();
+							if (r.height < 43.5 || r.right > document.documentElement.clientWidth + 0.5) out.push(`${a.textContent} ${Math.round(r.height)}h r${Math.round(r.right)}`);
+						}
+						return out;
+					});
+					expect(small, `category links under 44px tall or outside the viewport: ${small.join(", ")}`).toEqual([]);
+				});
+			}
+		}
+	}
+
+	test("on a desktop every group is on the page without choosing, and a category link scrolls to it", async ({ page }) => {
+		await open(page, "/console/preferences", 1280);
+		for (const g of GROUPS) await expect(section(page, g.id)).toBeVisible();
+		await categories(page).getByRole("link", { name: "Voice & translation", exact: true }).click();
+		for (const g of GROUPS) await expect(section(page, g.id)).toBeVisible();
+		await expect(section(page, "voice")).toBeInViewport();
+	});
+});
+
+/**
  * Preferences on a phone at every width the owner named and at the largest text size (#1706).
  *
  * #333 and #384 measured 320–390 at normal text; #723 added one 320 / 1.3x case. The report here is
@@ -4721,7 +4865,7 @@ test.describe("mobile — Preferences at every phone width and the largest text 
 	test("A+++ is offered, survives a reload, and form controls follow the scale but keep a 16px floor", async ({ page }) => {
 		await page.setViewportSize({ width: 390, height: 812 });
 		await mockSignedInConsole(page, connected);
-		await page.goto("/console/preferences");
+		await page.goto("/console/preferences?group=all");
 		await page.locator("main").waitFor();
 		const controlPx = () => page.getByLabel("Your timezone").evaluate((el) => Number.parseFloat(getComputedStyle(el).fontSize));
 
@@ -4767,7 +4911,7 @@ test.describe("mobile — Preferences at every phone width and the largest text 
 						}),
 					});
 				});
-				await page.goto("/console/preferences");
+				await page.goto("/console/preferences?group=all");
 				await page.waitForLoadState("networkidle");
 				await page.locator("main").waitFor();
 				await page.waitForTimeout(300);
@@ -4869,7 +5013,7 @@ test.describe("mobile — every control clears the 24px minimum target (#389)", 
 		"/console/instances/inst-1/settings?subtab=instructions",
 		"/console/instances/inst-1/settings?subtab=general",
 		"/console/profile",
-		"/console/preferences",
+		"/console/preferences?group=all",
 		"/console/notifications",
 	];
 

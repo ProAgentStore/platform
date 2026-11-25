@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import Page from "../components/Page";
 import { api } from "@proagentstore/sdk/client";
 import VoiceFields from "../components/VoiceFields";
@@ -13,6 +14,7 @@ import { machineTimeZone, setAccountTimeZone, timeZoneOptions, useAccountTimeZon
 import Card from "../components/Card";
 import OperatorManualCard from "../components/OperatorManualCard";
 import Button from "../components/Button";
+import { PreferenceGroup, PreferenceGroupNav, resolvePreferenceGroup, useFocusPickedGroup } from "../components/PreferenceGroups";
 import type { AccountCodingDefaultApplyResponse, AccountPreferencesResponse, AccountPreferencesWriteResponse, AttentionEventSpec, CodingEngineOption, NotificationTypeSpec } from "../lib/types";
 
 /** The current wall clock in a zone, or "" when this runtime cannot resolve it — never a throw. */
@@ -86,6 +88,10 @@ export default function Preferences() {
 	const [attentionPushOff, setAttentionPushOff] = useState<string[]>([]);
 	const [hasOpenAiKey, setHasOpenAiKey] = useState<boolean | null>(null);
 	const [loaded, setLoaded] = useState(false);
+	// Which group is on screen below `sm` (#1705). Every group stays mounted either way.
+	const [searchParams] = useSearchParams();
+	const group = resolvePreferenceGroup(searchParams);
+	const onPickGroup = useFocusPickedGroup(group);
 
 	const [textScale, setTextScaleState] = useState(() => {
 		try {
@@ -225,156 +231,172 @@ export default function Preferences() {
 				this browser only.
 			</p>
 
-			<AccountConnections />
+			<PreferenceGroupNav current={group} onPick={onPickGroup} />
 
-			<OperatorManualCard account />
+			<PreferenceGroup id="connections" current={group}>
+				<AccountConnections />
+			</PreferenceGroup>
 
-			<NotificationPreferences
-				types={notificationTypes}
-				muted={notifications.snapshot.state.muted}
-				instances={notifications.snapshot.state.instances}
-				onEdit={notifications.controller.edit.bind(notifications.controller)}
-				ready={notifications.snapshot.loaded}
-				storeError={notifications.snapshot.error}
-				attentionEvents={attentionEvents}
-				pushOff={attentionPushOff}
-				onPushOffSaved={setAttentionPushOff}
-			/>
+			<PreferenceGroup id="notifications" current={group}>
+				<NotificationPreferences
+					types={notificationTypes}
+					muted={notifications.snapshot.state.muted}
+					instances={notifications.snapshot.state.instances}
+					onEdit={notifications.controller.edit.bind(notifications.controller)}
+					ready={notifications.snapshot.loaded}
+					storeError={notifications.snapshot.error}
+					attentionEvents={attentionEvents}
+					pushOff={attentionPushOff}
+					onPushOffSaved={setAttentionPushOff}
+				/>
 
-			{/* #992: the per-event, per-channel rules under the switches above. Same component as an
-			    agent's own editor, so the two levels cannot describe the same choice differently. */}
-			<ApprovalGateSection />
-			<NotificationPolicySection
-				account={{
-					rules: notifications.snapshot.state.rules,
-					effective: notifications.snapshot.state.effective,
-					ready: notifications.snapshot.loaded,
-					error: notifications.snapshot.error,
-					onChange: async (rules) => {
-						const ok = await notifications.controller.edit({ kind: "rules", rules });
-						return { ok, error: notifications.controller.getSnapshot().error };
-					},
-					onRetry: () => void notifications.reload(),
-				}}
-			/>
+				{/* #992: the per-event, per-channel rules under the switches above. Same component as an
+				    agent's own editor, so the two levels cannot describe the same choice differently. */}
+				<ApprovalGateSection />
+				<NotificationPolicySection
+					account={{
+						rules: notifications.snapshot.state.rules,
+						effective: notifications.snapshot.state.effective,
+						ready: notifications.snapshot.loaded,
+						error: notifications.snapshot.error,
+						onChange: async (rules) => {
+							const ok = await notifications.controller.edit({ kind: "rules", rules });
+							return { ok, error: notifications.controller.getSnapshot().error };
+						},
+						onRetry: () => void notifications.reload(),
+					}}
+				/>
 
-			<Card className="mb-3 sm:mb-4">
-				<h3 className="text-base font-bold mb-1">Release notes</h3>
-				<p className="text-xs text-muted mb-3">
-					When a coder run ships to a repository's default branch, it posts one status note to the Discord and Slack channels granted to that agent. A status note does not verify a deploy: a coder with a release gate holds its note until the required workflows and the deploy step succeed for that commit. This is the on/off default for your coder agents only (other agents have no release notes); a coder can override it, and set its channels and gate, on its Permissions tab.
-				</p>
-				<label htmlFor="account-release-notes" className="text-xs text-muted block mb-1">Default</label>
-				<select
-					id="account-release-notes"
-					value={releaseNotes === undefined ? "" : releaseNotes ? "on" : "off"}
-					onChange={(e) => void saveReleaseNotesDefault(e.target.value as "" | "on" | "off")}
-					className="text-sm bg-paper border border-line rounded-lg px-3 py-2 block w-full max-w-full sm:w-56"
-				>
-					<option value="">Platform default (on)</option>
-					<option value="on">On</option>
-					<option value="off">Off</option>
-				</select>
-				{releaseNotesMsg && <p className="text-xs text-muted mt-2">{releaseNotesMsg}</p>}
-			</Card>
+			</PreferenceGroup>
 
-			<Card className="mb-3 sm:mb-4">
-				<h3 className="text-base font-bold mb-1">Default coding engine</h3>
-				<p className="text-xs text-muted mb-3">
-					Used when a coder opens a new session and that agent has not selected its own engine. Running work keeps the CLI it started with.
-				</p>
-				<div className="flex flex-col sm:flex-row sm:items-end gap-2 sm:gap-3">
-					<div className="min-w-0">
-						<label htmlFor="account-coding-engine" className="text-xs text-muted block mb-1">Engine</label>
+			<PreferenceGroup id="agents" current={group}>
+				<OperatorManualCard account />
+
+
+				<Card className="mb-3 sm:mb-4">
+					<h3 className="text-base font-bold mb-1">Release notes</h3>
+					<p className="text-xs text-muted mb-3">
+						When a coder run ships to a repository's default branch, it posts one status note to the Discord and Slack channels granted to that agent. A status note does not verify a deploy: a coder with a release gate holds its note until the required workflows and the deploy step succeed for that commit. This is the on/off default for your coder agents only (other agents have no release notes); a coder can override it, and set its channels and gate, on its Permissions tab.
+					</p>
+					<label htmlFor="account-release-notes" className="text-xs text-muted block mb-1">Default</label>
+					<select
+						id="account-release-notes"
+						value={releaseNotes === undefined ? "" : releaseNotes ? "on" : "off"}
+						onChange={(e) => void saveReleaseNotesDefault(e.target.value as "" | "on" | "off")}
+						className="text-sm bg-paper border border-line rounded-lg px-3 py-2 block w-full max-w-full sm:w-56"
+					>
+						<option value="">Platform default (on)</option>
+						<option value="on">On</option>
+						<option value="off">Off</option>
+					</select>
+					{releaseNotesMsg && <p className="text-xs text-muted mt-2">{releaseNotesMsg}</p>}
+				</Card>
+
+				<Card className="mb-3 sm:mb-4">
+					<h3 className="text-base font-bold mb-1">Default coding engine</h3>
+					<p className="text-xs text-muted mb-3">
+						Used when a coder opens a new session and that agent has not selected its own engine. Running work keeps the CLI it started with.
+					</p>
+					<div className="flex flex-col sm:flex-row sm:items-end gap-2 sm:gap-3">
+						<div className="min-w-0">
+							<label htmlFor="account-coding-engine" className="text-xs text-muted block mb-1">Engine</label>
+							<select
+								id="account-coding-engine"
+								value={pendingEngine ?? (coding.defaultEngineId || "")}
+								disabled={pendingEngine !== null}
+								onChange={(e) => void saveCodingDefault(e.target.value)}
+								className="text-sm bg-paper border border-line rounded-lg px-3 py-2 block w-full max-w-full sm:w-56"
+							>
+								<option value="">Platform default</option>
+								{codingEngineOptions.map((e) => (
+									<option key={e.id} value={e.id}>{e.label}</option>
+								))}
+							</select>
+						</div>
+						<Button onClick={() => void applyCodingDefault()} disabled={applyingCoding}>
+							{applyingCoding ? "Applying…" : "Apply to idle coders"}
+						</Button>
+					</div>
+					{(pendingEngine !== null || codingMsg) && (
+						<p className="text-xs text-muted mt-2" role={codingMsg.startsWith("Not saved") ? "alert" : undefined}>
+							{pendingEngine !== null ? "Saving…" : codingMsg}
+						</p>
+					)}
+				</Card>
+
+			</PreferenceGroup>
+
+			<PreferenceGroup id="appearance" current={group}>
+				<Card className="mb-3 sm:mb-4">
+					<h3 className="text-base font-bold mb-2">Appearance</h3>
+					<div className="flex flex-wrap justify-between items-center gap-x-3 gap-y-2 py-2.5 text-sm">
+						<span className="text-muted font-medium min-w-0">Text size</span>
+						<div className="inline-flex border border-line rounded-lg overflow-hidden">
+							{[{ s: 0.9, l: "A-" }, { s: 1, l: "A" }, { s: 1.15, l: "A+" }, { s: 1.3, l: "A++" }, { s: 1.5, l: "A+++" }].map(({ s, l }) => (
+								<button
+									key={s}
+									type="button"
+									onClick={() => setTextScale(s)}
+									className={`px-2.5 py-1 text-xs font-bold ${textScale === s ? "bg-panel-hover text-ink" : "text-muted"}`}
+								>
+									{l}
+								</button>
+							))}
+						</div>
+					</div>
+				</Card>
+
+				<Card className="mb-3 sm:mb-4">
+					<h3 className="text-base font-bold mb-1">Timezone</h3>
+					<p className="text-xs text-muted mb-2">
+						What "today", "this morning" and "overnight" mean when an agent talks to you, and the
+						clock every timestamp is shown in. Leave it unset and agents say UTC and say so.
+					</p>
+					{/* Stacked on a phone, side by side from sm up. Zone names are long — the widest is
+					    30 characters — and `max-w-[60%]` left 162px for one at 320px, so the control now
+					    clips its label (see the `select` rule in index.css) instead of panning the page.
+					    Clipping the answer to "which zone am I in" is not an answer, and the row is the
+					    only thing standing between it and the full width (#384). */}
+					<div className="flex flex-col sm:flex-row sm:justify-between sm:items-center py-2.5 text-sm gap-2 sm:gap-3">
+						<span className="text-muted font-medium">Your timezone</span>
 						<select
-							id="account-coding-engine"
-							value={pendingEngine ?? (coding.defaultEngineId || "")}
-							disabled={pendingEngine !== null}
-							onChange={(e) => void saveCodingDefault(e.target.value)}
-							className="text-sm bg-paper border border-line rounded-lg px-3 py-2 block w-full max-w-full sm:w-56"
+							aria-label="Your timezone"
+							value={timezone || ""}
+							onChange={(e) => void saveTimezone(e.target.value)}
+							className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full min-w-0 sm:w-auto sm:max-w-[60%]"
 						>
-							<option value="">Platform default</option>
-							{codingEngineOptions.map((e) => (
-								<option key={e.id} value={e.id}>{e.label}</option>
+							<option value="">Not set — agents will say UTC</option>
+							{timeZoneOptions(timezone).map((tz) => (
+								<option key={tz} value={tz}>
+									{tz}
+									{tz === machineTimeZone() ? " (this machine)" : ""}
+								</option>
 							))}
 						</select>
 					</div>
-					<Button onClick={() => void applyCodingDefault()} disabled={applyingCoding}>
-						{applyingCoding ? "Applying…" : "Apply to idle coders"}
-					</Button>
-				</div>
-				{(pendingEngine !== null || codingMsg) && (
-					<p className="text-xs text-muted mt-2" role={codingMsg.startsWith("Not saved") ? "alert" : undefined}>
-						{pendingEngine !== null ? "Saving…" : codingMsg}
-					</p>
-				)}
-			</Card>
+					{/* The confirmation that a zone name is the RIGHT zone name: nobody knows what
+					    "America/Kentucky/Monticello" is, everybody knows whether it is 8am there. */}
+					{timezone && nowIn(timezone) && (
+						<p className="text-xs text-muted">
+							It is <b>{nowIn(timezone)}</b> there.
+						</p>
+					)}
+					{tzMsg && <p className="text-xs text-muted mt-1">{tzMsg}</p>}
+				</Card>
 
-			<Card className="mb-3 sm:mb-4">
-				<h3 className="text-base font-bold mb-2">Appearance</h3>
-				<div className="flex flex-wrap justify-between items-center gap-x-3 gap-y-2 py-2.5 text-sm">
-					<span className="text-muted font-medium min-w-0">Text size</span>
-					<div className="inline-flex border border-line rounded-lg overflow-hidden">
-						{[{ s: 0.9, l: "A-" }, { s: 1, l: "A" }, { s: 1.15, l: "A+" }, { s: 1.3, l: "A++" }, { s: 1.5, l: "A+++" }].map(({ s, l }) => (
-							<button
-								key={s}
-								type="button"
-								onClick={() => setTextScale(s)}
-								className={`px-2.5 py-1 text-xs font-bold ${textScale === s ? "bg-panel-hover text-ink" : "text-muted"}`}
-							>
-								{l}
-							</button>
-						))}
-					</div>
-				</div>
-			</Card>
+			</PreferenceGroup>
 
-			<Card className="mb-3 sm:mb-4">
-				<h3 className="text-base font-bold mb-1">Timezone</h3>
-				<p className="text-xs text-muted mb-2">
-					What "today", "this morning" and "overnight" mean when an agent talks to you, and the
-					clock every timestamp is shown in. Leave it unset and agents say UTC and say so.
-				</p>
-				{/* Stacked on a phone, side by side from sm up. Zone names are long — the widest is
-				    30 characters — and `max-w-[60%]` left 162px for one at 320px, so the control now
-				    clips its label (see the `select` rule in index.css) instead of panning the page.
-				    Clipping the answer to "which zone am I in" is not an answer, and the row is the
-				    only thing standing between it and the full width (#384). */}
-				<div className="flex flex-col sm:flex-row sm:justify-between sm:items-center py-2.5 text-sm gap-2 sm:gap-3">
-					<span className="text-muted font-medium">Your timezone</span>
-					<select
-						aria-label="Your timezone"
-						value={timezone || ""}
-						onChange={(e) => void saveTimezone(e.target.value)}
-						className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full min-w-0 sm:w-auto sm:max-w-[60%]"
-					>
-						<option value="">Not set — agents will say UTC</option>
-						{timeZoneOptions(timezone).map((tz) => (
-							<option key={tz} value={tz}>
-								{tz}
-								{tz === machineTimeZone() ? " (this machine)" : ""}
-							</option>
-						))}
-					</select>
-				</div>
-				{/* The confirmation that a zone name is the RIGHT zone name: nobody knows what
-				    "America/Kentucky/Monticello" is, everybody knows whether it is 8am there. */}
-				{timezone && nowIn(timezone) && (
-					<p className="text-xs text-muted">
-						It is <b>{nowIn(timezone)}</b> there.
-					</p>
-				)}
-				{tzMsg && <p className="text-xs text-muted mt-1">{tzMsg}</p>}
-			</Card>
+			<PreferenceGroup id="voice" current={group}>
+				<Card className="mb-3 sm:mb-4">
+					<h3 className="text-base font-bold mb-2">Voice</h3>
+					{loaded && <VoiceFields value={voice} onPatch={saveVoice} hasOpenAiKey={hasOpenAiKey} savedNote="Saved — applies to every agent" />}
+				</Card>
 
-			<Card className="mb-3 sm:mb-4">
-				<h3 className="text-base font-bold mb-2">Voice</h3>
-				{loaded && <VoiceFields value={voice} onPatch={saveVoice} hasOpenAiKey={hasOpenAiKey} savedNote="Saved — applies to every agent" />}
-			</Card>
-
-			<Card className="mb-3 sm:mb-4">
-				<h3 className="text-base font-bold mb-1">Translation</h3>
-				{loaded && <TranslationFields value={translation} onSave={saveTranslation} languages={languages} />}
-			</Card>
+				<Card className="mb-3 sm:mb-4">
+					<h3 className="text-base font-bold mb-1">Translation</h3>
+					{loaded && <TranslationFields value={translation} onSave={saveTranslation} languages={languages} />}
+				</Card>
+			</PreferenceGroup>
 		</Page>
 	);
 }

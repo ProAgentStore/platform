@@ -107,7 +107,7 @@ function OverrideRow({
 			{lineState === "line" && (
 				<>
 					<span className="text-muted" aria-hidden="true">·</span>
-					<Link to="/preferences" className="underline min-h-6 inline-flex items-center">{PREFERENCES_LINK}</Link>
+					<Link to="/preferences?group=voice" className="underline min-h-6 inline-flex items-center">{PREFERENCES_LINK}</Link>
 					<span className="text-muted" aria-hidden="true">·</span>
 					<button type="button" onClick={onReveal} className={BTN}>{OVERRIDE_ACTION}</button>
 				</>

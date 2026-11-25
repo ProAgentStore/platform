@@ -49,7 +49,7 @@ function ConnectGithub({ owners, onDone }: { owners: string[]; onDone: () => voi
 				<Button size="sm" variant="primary" onClick={() => void connect()} disabled={busy}>
 					{busy ? "Connecting…" : "Connect GitHub"}
 				</Button>
-				<button type="button" onClick={() => navigate("/preferences")} className="text-xs underline text-muted">Preferences → Connections</button>
+				<button type="button" onClick={() => navigate("/preferences?group=connections")} className="text-xs underline text-muted">Preferences → Connections</button>
 			</div>
 			{lines.map((l) => <p key={l} role="status" className="text-xs text-muted break-words">{l}</p>)}
 		</div>

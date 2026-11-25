@@ -176,7 +176,7 @@ function AlertsCard() {
 				{perm === "granted" && !failed && (
 					<div className="text-xs text-muted-soft mt-1">
 						Too noisy?{" "}
-						<Link to="/preferences" className="text-accent font-semibold hover:underline">
+						<Link to="/preferences?group=notifications" className="text-accent font-semibold hover:underline">
 							Choose which ones reach you
 						</Link>{" "}
 						— an agent waiting on you always gets through.

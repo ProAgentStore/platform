@@ -337,7 +337,7 @@ export default function Profile() {
 						{/* Voice commands used to live here too, writing a global setting through a
 						    different endpoint than Preferences — and losing. One home now. */}
 						<p className="text-2xs text-muted-soft mt-3">
-							Looking for hands-free voice commands? They live in <a href="/preferences" className="text-accent">Preferences → Voice</a>.
+							Looking for hands-free voice commands? They live in <a href="/preferences?group=voice" className="text-accent">Preferences → Voice</a>.
 						</p>
 					</div>
 				)}

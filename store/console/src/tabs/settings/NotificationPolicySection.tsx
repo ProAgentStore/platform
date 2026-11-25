@@ -176,7 +176,7 @@ export default function NotificationPolicySection({ instanceId, account }: { ins
 			{followCount > 0 && (
 				<p className="text-xs text-muted pt-2.5 border-t border-line" data-testid="notification-rows-follow-account">
 					{followCount} more follow your account ·{" "}
-					<Link to="/preferences" className="text-accent font-semibold hover:underline">
+					<Link to="/preferences?group=notifications" className="text-accent font-semibold hover:underline">
 						Open Preferences
 					</Link>
 				</p>

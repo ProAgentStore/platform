@@ -146,7 +146,7 @@ export default function ConnectorsSection({
 			<h3 className="text-base font-bold mb-1">Permissions &amp; Connections</h3>
 			<p className="text-sm text-muted mb-3">
 				What <b>this agent</b> may do, and which of your connected folders it may read. Connecting or disconnecting an account is account-wide and lives
-				in <Link to="/preferences" className="underline text-accent font-bold">Preferences → Connections</Link>.
+				in <Link to="/preferences?group=connections" className="underline text-accent font-bold">Preferences → Connections</Link>.
 			</p>
 			{request && (
 				<div className="mb-3 rounded border p-3 text-sm" style={{ borderColor: "var(--color-warning-line)", background: "var(--color-warning-soft)" }} data-testid="permission-request">
