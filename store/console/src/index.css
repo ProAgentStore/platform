@@ -419,7 +419,6 @@
 		input:not([type="checkbox"]):not([type="radio"]),
 		textarea,
 		select {
-			font-size: 16px;
 			min-height: 44px;
 		}
 		/* 24px = WCAG 2.5.8's minimum target, on the pointer type where it is a finger (#389). */
@@ -428,6 +427,28 @@
 			width: 1.5rem;
 			height: 1.5rem;
 		}
+	}
+}
+
+/*
+ * The readable floor for text a user TYPES into, on a phone (#1707).
+ *
+ * UNLAYERED on purpose. The rule used to be `font-size: 16px` inside `@layer base` above, and a
+ * utility layer beats a base-layer rule — so every control carrying `text-sm` (the timezone select,
+ * the voice phrase inputs, most of them) computed 14px, not 16px, and iOS Safari zoomed the page on
+ * focus. Measured: the Preferences timezone select read 14px at 1x and 21px at A+++ (0.875rem, so
+ * it did scale, but it never reached the floor). An unlayered rule beats utilities.
+ *
+ * `max(1rem, 16px)`: 16px at 1x and at A-, where the root is smaller than 16px and iOS must still
+ * not zoom; 1rem above that, so the control grows with Text size instead of staying pinned while
+ * the labels around it grow. It sets only `font-size` — not `min-height` — because an unlayered
+ * `min-height` would also beat every `min-h-*` utility.
+ */
+@media (max-width: 640px) {
+	input:not([type="checkbox"]):not([type="radio"]),
+	textarea,
+	select {
+		font-size: max(1rem, 16px);
 	}
 }
 

@@ -314,7 +314,7 @@ export default function Preferences() {
 				<div className="flex flex-wrap justify-between items-center gap-x-3 gap-y-2 py-2.5 text-sm">
 					<span className="text-muted font-medium min-w-0">Text size</span>
 					<div className="inline-flex border border-line rounded-lg overflow-hidden">
-						{[{ s: 0.9, l: "A-" }, { s: 1, l: "A" }, { s: 1.15, l: "A+" }, { s: 1.3, l: "A++" }].map(({ s, l }) => (
+						{[{ s: 0.9, l: "A-" }, { s: 1, l: "A" }, { s: 1.15, l: "A+" }, { s: 1.3, l: "A++" }, { s: 1.5, l: "A+++" }].map(({ s, l }) => (
 							<button
 								key={s}
 								type="button"

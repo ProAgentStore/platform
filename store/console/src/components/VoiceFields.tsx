@@ -48,7 +48,7 @@ function CommandField({ command, label, placeholder, hint, lang, value, onValue,
 		<div className="block">
 			<div className="flex items-center justify-between gap-2 mb-0.5">
 				<label htmlFor={id} className="text-xs font-semibold">{label}</label>
-				<div className="flex items-center gap-2 shrink-0">
+				<div className="flex items-center gap-2 flex-wrap justify-end min-w-0">
 					{!off && !value.trim() && suggested && (
 						<button type="button" aria-label={`Use suggested ${label}`} onClick={() => onValue(suggested, true)} className="text-2xs text-accent font-semibold">
 							Use suggested

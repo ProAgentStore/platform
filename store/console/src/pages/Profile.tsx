@@ -394,7 +394,7 @@ export default function Profile() {
 									    name keeps a 10rem floor and the row wraps (#1326): with Verify and
 									    Replace beside Remove, the buttons drop to their own line at 320px
 									    rather than squeezing the name to nothing. */}
-									<div className="flex-1 min-w-[10rem]">
+									<div className="flex-1 min-w-[min(10rem,100%)]">
 										<span className="text-sm font-medium block truncate">{p.name}</span>
 										{usage ? (
 											<span className="text-xs flex items-center gap-1.5 min-w-0">

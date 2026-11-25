@@ -212,7 +212,7 @@ export default function AccountConnections() {
 						Links your GitHub username so the Coder can show build status and reach your repos.
 					</p>
 				</div>
-				<Button onClick={connectGithub} className="shrink-0">
+				<Button onClick={connectGithub} className="sm:shrink-0">
 					{githubLinked ? "Reconnect" : "Connect GitHub"}
 				</Button>
 			</div>
@@ -395,7 +395,7 @@ export default function AccountConnections() {
 									)}
 								</div>
 							) : (
-								<Button onClick={() => connect(entry, chosen[entry.id] ?? [])} className="shrink-0">
+								<Button onClick={() => connect(entry, chosen[entry.id] ?? [])} className="sm:shrink-0">
 									Connect {entry.label}
 								</Button>
 							)}

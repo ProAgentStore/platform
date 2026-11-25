@@ -3914,23 +3914,28 @@ test.describe("mobile — the terminal pane is readable (#370)", () => {
 		});
 	}
 
-	test("the pane survives the largest text size", async ({ page }) => {
-		await page.setViewportSize({ width: 390, height: 812 });
-		await mockTmux(page);
-		await page.addInitScript(() => window.localStorage.setItem("pags:textScale", "1.3"));
-		await page.goto("/console/instances/inst-1/tmux");
-		await page.waitForLoadState("networkidle");
-		await page.waitForTimeout(400);
+	for (const scale of [1.3, 1.5]) {
+		test(`the pane survives text size ${scale}x${scale === 1.5 ? " (the largest, A+++)" : ""}`, async ({ page }) => {
+			await page.setViewportSize({ width: 390, height: 812 });
+			await mockTmux(page);
+			await page.addInitScript((s) => window.localStorage.setItem("pags:textScale", String(s)), scale);
+			await page.goto("/console/instances/inst-1/tmux");
+			await page.waitForLoadState("networkidle");
+			await page.waitForTimeout(400);
 
-		const rootPx = await page.evaluate(() => Number.parseFloat(getComputedStyle(document.documentElement).fontSize));
-		expect(rootPx, "text scale did not reach the document").toBeGreaterThan(19);
-		expect(await paneLines(page), "terminal pane shows too few lines at 1.3x").toBeGreaterThanOrEqual(MIN_LINES);
+			const rootPx = await page.evaluate(() => Number.parseFloat(getComputedStyle(document.documentElement).fontSize));
+			expect(rootPx, "text scale did not reach the document").toBeGreaterThan(scale === 1.5 ? 22 : 19);
+			// At A+++ the header, tabs and controls all grow 1.5x and take the height from the pane:
+			// measured 7 lines on a 390×812 phone. A lower floor there is the honest number, not a
+			// regression to hide — the pane is still usable, and not 0 (the original bug).
+			expect(await paneLines(page), `terminal pane shows too few lines at ${scale}x`).toBeGreaterThanOrEqual(scale === 1.5 ? 6 : MIN_LINES);
 
-		const { wide, mainOv, escapes } = await measureOverflow(page);
-		expect(wide, `content past the right edge at 390w / 1.3x: ${wide.join(", ")}`).toEqual([]);
-		expect(escapes, `a box past its own container at 390w / 1.3x: ${escapes.join(", ")}`).toEqual([]);
-		expect(mainOv).toBeLessThanOrEqual(1);
-	});
+			const { wide, mainOv, escapes } = await measureOverflow(page);
+			expect(wide, `content past the right edge at 390w / ${scale}x: ${wide.join(", ")}`).toEqual([]);
+			expect(escapes, `a box past its own container at 390w / ${scale}x: ${escapes.join(", ")}`).toEqual([]);
+			expect(mainOv).toBeLessThanOrEqual(1);
+		});
+	}
 
 	test("the switch reaches the target list and the controls the pane no longer shares a column with", async ({ page }) => {
 		await page.setViewportSize({ width: 390, height: 812 });
@@ -4326,7 +4331,7 @@ test.describe("mobile — Profile with real-shaped account data", () => {
 	/**
 	 * The largest text size, which every other guard here runs without (#333).
 	 *
-	 * Preferences → Appearance offers 0.9x / 1x / 1.15x / 1.3x, persisted to `pags:textScale` and
+	 * Preferences → Appearance offers 0.9x / 1x / 1.15x / 1.3x / 1.5x, persisted to `pags:textScale` and
 	 * applied to `document.documentElement.style.fontSize` on boot (`main.tsx`). At 1.3x every
 	 * rem-sized padding, gap and font grows 30% while the px-pinned parts do not move — the 72px
 	 * avatar, `max-w-[220px]` on the token, `max-w-[200px]` on the user id, the mobile input's
@@ -4336,12 +4341,12 @@ test.describe("mobile — Profile with real-shaped account data", () => {
 	 *
 	 * It passes today. It is here so that stays a measured fact.
 	 */
-	for (const width of [320, 390]) {
+	for (const scale of [1.3, 1.5]) for (const width of [320, 390]) {
 		for (const route of ["/console/profile", "/console/preferences"]) {
-			test(`no horizontal scroll at ${width}px and 1.3x text — ${route}`, async ({ page }) => {
+			test(`no horizontal scroll at ${width}px and ${scale}x text — ${route}`, async ({ page }) => {
 				await page.setViewportSize({ width, height: 812 });
 				await mockSignedInConsole(page, realistic);
-				await page.addInitScript(() => window.localStorage.setItem("pags:textScale", "1.3"));
+				await page.addInitScript((scale) => window.localStorage.setItem("pags:textScale", String(scale)), scale);
 				await page.goto(route);
 				await page.waitForLoadState("networkidle");
 				await page.locator("main").waitFor();
@@ -4350,12 +4355,12 @@ test.describe("mobile — Profile with real-shaped account data", () => {
 				// The scale actually reached the document — otherwise this is a 1x run wearing a
 				// 1.3x name, which is the hollow-fixture failure #235 was closed on.
 				const rootPx = await page.evaluate(() => Number.parseFloat(getComputedStyle(document.documentElement).fontSize));
-				expect(rootPx, "text scale did not reach the document").toBeGreaterThan(19);
+				expect(rootPx, "text scale did not reach the document").toBeGreaterThan(scale === 1.5 ? 22 : 19);
 
 				const { mainOv, wide, escapes } = await measureOverflow(page);
-				expect(wide, `content past the right edge at ${width}w / 1.3x on ${route}: ${wide.join(", ")}`).toEqual([]);
-				expect(escapes, `a box past its own container at ${width}w / 1.3x on ${route}: ${escapes.join(", ")}`).toEqual([]);
-				expect(mainOv, `<main> overflows by ${mainOv}px at ${width}w / 1.3x on ${route}`).toBeLessThanOrEqual(1);
+				expect(wide, `content past the right edge at ${width}w / ${scale}x on ${route}: ${wide.join(", ")}`).toEqual([]);
+				expect(escapes, `a box past its own container at ${width}w / ${scale}x on ${route}: ${escapes.join(", ")}`).toEqual([]);
+				expect(mainOv, `<main> overflows by ${mainOv}px at ${width}w / ${scale}x on ${route}`).toBeLessThanOrEqual(1);
 			});
 		}
 	}
@@ -4711,7 +4716,31 @@ test.describe("mobile — Preferences at every phone width and the largest text 
 		connectors: DEFAULT_CONNECTORS.map((c) => (c.account ? { ...c, account: longAccount } : c)),
 	};
 
-	for (const scale of [1, 1.3]) {
+	// The A+++ step (#1707): selectable, persisted across a reload, and form controls follow it —
+	// but never fall under the 16px that stops iOS Safari zooming the page on focus.
+	test("A+++ is offered, survives a reload, and form controls follow the scale but keep a 16px floor", async ({ page }) => {
+		await page.setViewportSize({ width: 390, height: 812 });
+		await mockSignedInConsole(page, connected);
+		await page.goto("/console/preferences");
+		await page.locator("main").waitFor();
+		const controlPx = () => page.getByLabel("Your timezone").evaluate((el) => Number.parseFloat(getComputedStyle(el).fontSize));
+
+		await page.getByRole("button", { name: "A+++", exact: true }).click();
+		expect(await page.evaluate(() => localStorage.getItem("pags:textScale"))).toBe("1.5");
+		expect(await controlPx(), "form control did not grow with A+++").toBeGreaterThanOrEqual(24 - 0.5);
+
+		await page.reload();
+		await page.locator("main").waitFor();
+		expect(await page.evaluate(() => Number.parseFloat(getComputedStyle(document.documentElement).fontSize))).toBeGreaterThan(22);
+		expect(await controlPx(), "scale did not survive reload").toBeGreaterThanOrEqual(24 - 0.5);
+
+		await page.getByRole("button", { name: "A-", exact: true }).click();
+		expect(await controlPx(), "control fell under the iOS zoom floor at A-").toBeGreaterThanOrEqual(16 - 0.01);
+		await page.getByRole("button", { name: "A", exact: true }).click();
+		expect(await controlPx()).toBeCloseTo(16, 1);
+	});
+
+	for (const scale of [1, 1.3, 1.5]) {
 		for (const width of [320, 375, 390, 430]) {
 			test(`no overflow at ${width}px, text ${scale}x — /console/preferences`, async ({ page }) => {
 				await page.addInitScript((s) => window.localStorage.setItem("pags:textScale", String(s)), scale);

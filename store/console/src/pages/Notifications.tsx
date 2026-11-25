@@ -159,7 +159,7 @@ function AlertsCard() {
 
 	return (
 		<div className="mb-4 p-4 bg-panel border border-line rounded-xl flex flex-wrap items-center gap-3">
-			<div className="flex-1 min-w-[10rem]">
+			<div className="flex-1 min-w-[min(10rem,100%)]">
 				<div className="text-sm font-bold text-ink">🔔 Browser alerts</div>
 				{/* The failure REPLACES the status line rather than sitting under it: "On — you'll get
 				    a notification" beside "couldn't finish turning alerts on" is the same claim the

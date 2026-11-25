@@ -50,7 +50,7 @@ export default function LoadFailed({
 			}
 		>
 			<span className="font-semibold">Couldn't load {what}.</span>
-			{detail ? <span className="text-xs text-muted break-words">{detail}</span> : null}
+			{detail ? <span className="text-xs text-muted max-w-full [overflow-wrap:anywhere]">{detail}</span> : null}
 			<button
 				type="button"
 				onClick={onRetry}
