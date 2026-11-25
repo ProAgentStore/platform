@@ -52,6 +52,12 @@
  * runner put in `PAGS_SESSION_ID`, pid, parent pid, working directory and argv. It is best-effort evidence — a log that
  * cannot be written never blocks git — and names the session whose shim ran the command, not that it intended it.
  *
+ * ── Native Windows (#1719)
+ *
+ * The script is the same text. Beside the extensionless `git` (which Git Bash finds) the installer also writes `git.cmd`, one
+ * line that runs that script under Git for Windows' `sh`, because process spawn and cmd.exe/PowerShell resolve `.exe`/PATHEXT and
+ * never a `#!` line. PATH handling (`;`, `Path`, `.exe`) lives in `guard-install.ts`, shared with the gh guard (#1653).
+ *
  * ── What it does not stop, stated rather than hidden
  *
  * {@link GIT_GUARD_GAPS}: a PATH shim is bypassed by an absolute `/usr/bin/git` or a rewritten PATH,
@@ -59,10 +65,11 @@
  */
 
 import { createHash } from "node:crypto";
-import { accessSync, constants, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { AUDIT_AND_CLASSIFY, destructiveChecks } from "./git-guard-shell.js";
+import { findOnPath, findPosixShell, shellPath, withPathFront, writeShim } from "./guard-install.js";
 
 /** Distinct from git's own 1/128/129, so a refusal is recognisable from its status alone. */
 export const GIT_REFUSED_EXIT = 3;
@@ -84,17 +91,7 @@ export function gitGuardRoot(): string {
 
 /** The first executable `git` on `path` that is not one of our own shims. */
 export function findRealGit(path: string | undefined, guardRoot: string): string | null {
-	for (const dir of (path ?? "").split(":")) {
-		if (!dir || dir.startsWith(guardRoot)) continue;
-		const candidate = join(dir, "git");
-		try {
-			accessSync(candidate, constants.X_OK);
-			return candidate;
-		} catch {
-			/* not here — keep looking */
-		}
-	}
-	return null;
+	return findOnPath("git", path, guardRoot);
 }
 
 const sq = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
@@ -162,15 +159,16 @@ const installed = new Map<string, string>();
 export function installGitGuard(env: NodeJS.ProcessEnv, root = gitGuardRoot()): string | null {
 	const realGit = findRealGit(env.PATH, root);
 	if (!realGit) return null;
-	const script = renderGitShim(realGit, join(root, GIT_AUDIT_FILE));
-	const key = createHash("sha256").update(`${root} ${script}`).digest("hex").slice(0, 16);
+	const sh = findPosixShell(realGit, env.PATH);
+	if (process.platform === "win32" && !sh) return null; // no sh to run the script: fail open, like an unwritable root
+	const script = renderGitShim(shellPath(realGit), shellPath(join(root, GIT_AUDIT_FILE)));
+	const key = createHash("sha256").update(sh ? `${root} ${script} ${sh}` : `${root} ${script}`).digest("hex").slice(0, 16);
 	const cached = installed.get(key);
 	if (cached) return cached;
 	const dir = join(root, key);
 	try {
 		mkdirSync(dir, { recursive: true });
-		const shim = join(dir, "git");
-		if (!existsSync(shim)) writeFileSync(shim, script, { mode: 0o755 });
+		writeShim(dir, "git", script, sh);
 		installed.set(key, dir);
 		return dir;
 	} catch {
@@ -183,5 +181,5 @@ export function installGitGuard(env: NodeJS.ProcessEnv, root = gitGuardRoot()): 
 /** `env` with the guard first on PATH; untouched when it could not be installed. */
 export function gitGuardEnv(env: NodeJS.ProcessEnv, root?: string): NodeJS.ProcessEnv {
 	const dir = installGitGuard(env, root);
-	return dir ? { ...env, PATH: `${dir}:${env.PATH ?? ""}` } : env;
+	return dir ? withPathFront(env, dir) : env;
 }

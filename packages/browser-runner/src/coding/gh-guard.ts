@@ -65,9 +65,10 @@
  */
 
 import { createHash } from "node:crypto";
-import { accessSync, constants, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { findOnPath, findPosixShell, shellPath, withPathFront, writeShim } from "./guard-install.js";
 
 /**
  * The closed WRITE vocabulary — `<command> <subcommand>` pairs that change something on GitHub.
@@ -124,17 +125,7 @@ export function normalizeRepo(raw: string): string {
  * "real" one and the second generation would exec the first, forever.
  */
 export function findRealGh(path: string | undefined, guardRoot: string): string | null {
-	for (const dir of (path ?? "").split(":")) {
-		if (!dir || (guardRoot && dir.startsWith(guardRoot))) continue;
-		const candidate = join(dir, "gh");
-		try {
-			accessSync(candidate, constants.X_OK);
-			return candidate;
-		} catch {
-			/* not here, or not executable — keep looking */
-		}
-	}
-	return null;
+	return findOnPath("gh", path, guardRoot);
 }
 
 /**
@@ -266,15 +257,16 @@ export function installGhGuard(
 	if (repos.length === 0) return { reason: "no-scope" };
 	const realGh = findRealGh(env.PATH, root);
 	if (!realGh) return { reason: "gh-not-found" };
-	const script = renderGhShim({ realGh, scope: repos });
-	const key = createHash("sha256").update(`${root} ${script}`).digest("hex").slice(0, 16);
+	const sh = findPosixShell(realGh, env.PATH);
+	if (process.platform === "win32" && !sh) return { reason: "install-failed" }; // no sh to run the script
+	const script = renderGhShim({ realGh: shellPath(realGh), scope: repos });
+	const key = createHash("sha256").update(sh ? `${root} ${script} ${sh}` : `${root} ${script}`).digest("hex").slice(0, 16);
 	const cached = installed.get(key);
 	if (cached) return { dir: cached };
 	const dir = join(root, key);
 	try {
 		mkdirSync(dir, { recursive: true });
-		const shim = join(dir, "gh");
-		if (!existsSync(shim)) writeFileSync(shim, script, { mode: 0o755 });
+		writeShim(dir, "gh", script, sh);
 		installed.set(key, dir);
 		return { dir };
 	} catch {
@@ -293,7 +285,7 @@ export function installGhGuard(
 export function ghGuardEnv(env: NodeJS.ProcessEnv, scope: readonly string[] | undefined, root?: string): NodeJS.ProcessEnv {
 	const out = installGhGuard(scope ?? [], env, root);
 	if (!("dir" in out)) return env;
-	return { ...env, PATH: `${out.dir}:${env.PATH ?? ""}` };
+	return withPathFront(env, out.dir);
 }
 
 /** What to report for a session started with `scope`, derived from the same call the spawn made. */

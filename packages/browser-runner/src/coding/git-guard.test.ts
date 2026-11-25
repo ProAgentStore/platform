@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { engineSpawnEnv } from "./engine-env.js";
 import { findRealGit, GIT_REFUSED_EXIT, GIT_REFUSED_MARKER, gitGuardEnv, gitGuardRoot, installGitGuard, renderGitShim } from "./git-guard.js";
@@ -21,9 +21,11 @@ afterAll(() => rmSync(tmp, { recursive: true, force: true }));
  * runner's own guard is first on PATH, so "without the guard" was guarded there and the fail-before
  * could not reproduce the incident.
  */
+// On Windows `process.env` spreads out as `Path`; a second `PATH` beside it would be an ambiguous env block.
+const { PATH: _inheritedPath, Path: _inheritedWinPath, ...INHERITED } = process.env;
 const BASE_ENV: NodeJS.ProcessEnv = {
-	...process.env,
-	PATH: (process.env.PATH ?? "").split(":").filter((d) => !d.startsWith(gitGuardRoot())).join(":"),
+	...INHERITED,
+	PATH: (process.env.PATH ?? "").split(delimiter).filter((d) => !d.startsWith(gitGuardRoot())).join(delimiter),
 	GIT_CONFIG_GLOBAL: "/dev/null",
 	GIT_CONFIG_NOSYSTEM: "1",
 	GIT_AUTHOR_NAME: "t",
@@ -39,7 +41,12 @@ const INCIDENT_ZSH = `SRC="a.txt b.txt"; git stash push -- $SRC; git stash pop`;
 
 let repo: string;
 let n = 0;
-const git = (args: string[], env = BASE_ENV) => spawnSync("git", args, { cwd: repo, env, encoding: "utf8" });
+// Native Windows spawn resolves only `.exe`, so a guarded `git` is reached the way a user's cmd.exe reaches it: through
+// PATHEXT, which is what finds the generated git.cmd (#1719). Unguarded calls keep the direct spawn.
+const git = (args: string[], env = BASE_ENV) =>
+	process.platform === "win32" && env !== BASE_ENV
+		? spawnSync("cmd.exe", ["/d", "/c", "git", ...args], { cwd: repo, env, encoding: "utf8" })
+		: spawnSync("git", args, { cwd: repo, env, encoding: "utf8" });
 const sh = (shell: string, script: string, env: NodeJS.ProcessEnv) => spawnSync(shell, ["-c", script], { cwd: repo, env, encoding: "utf8" });
 const installed = (bin: string) => spawnSync("sh", ["-c", `command -v ${bin}`]).status === 0;
 

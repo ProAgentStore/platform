@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { findRealGh, GH_REFUSED_EXIT, GH_REFUSED_MARKER, ghGuardEnv, ghGuardStatus, installGhGuard, normalizeRepo } from "./gh-guard.js";
 
@@ -13,6 +13,9 @@ import { findRealGh, GH_REFUSED_EXIT, GH_REFUSED_MARKER, ghGuardEnv, ghGuardStat
 let dir: string;
 let binDir: string;
 let root: string;
+// Windows needs Git for Windows' sh on PATH to run the script; the fake gh is found first either way.
+const toolPath = () => (process.platform === "win32" ? `${binDir}${delimiter}${process.env.PATH ?? ""}` : binDir);
+const fwd = (p: string) => (process.platform === "win32" ? p.replaceAll("\\", "/") : p);
 
 /** A stand-in `gh`: prints what it was asked to do and succeeds. */
 const FAKE_GH = `#!/bin/sh
@@ -32,9 +35,10 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 /** Install a guard for `scope` and run `gh <args>` through it. */
 function runGh(scope: string[], args: string[]) {
-	const out = installGhGuard(scope, { PATH: binDir }, root);
+	const out = installGhGuard(scope, { PATH: toolPath() }, root);
 	if (!("dir" in out)) throw new Error(`guard not installed: ${out.reason}`);
-	const r = spawnSync(join(out.dir, "gh"), args, { encoding: "utf8" });
+	// A Windows process spawn cannot run an extensionless script, so the script text is run by sh; the .cmd form has its own test.
+	const r = process.platform === "win32" ? spawnSync("sh", [fwd(join(out.dir, "gh")), ...args], { encoding: "utf8" }) : spawnSync(join(out.dir, "gh"), args, { encoding: "utf8" });
 	return { code: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 
@@ -137,6 +141,27 @@ describe("the gh guard lets everything else through untouched", () => {
 	});
 });
 
+// #1653: on Windows the guard is also reachable the way cmd.exe and PowerShell resolve a command, through PATHEXT.
+describe.runIf(process.platform === "win32")("the generated gh.cmd (native Windows)", () => {
+	const viaCmd = (scope: string[], args: string[]) => {
+		const { PATH: _p, Path: _q, ...inherited } = process.env;
+		const env = ghGuardEnv({ ...inherited, PATH: toolPath() }, scope, root);
+		return spawnSync("cmd.exe", ["/d", "/c", "gh", ...args], { env, encoding: "utf8" });
+	};
+
+	it("refuses an out-of-scope write with the same status and marker, and never reaches the real gh", () => {
+		const r = viaCmd(SCOPE, ["pr", "create", "--repo", "proappstore-online/platform", "--title", "x"]);
+		expect(r.status).toBe(GH_REFUSED_EXIT);
+		expect(r.stderr).toContain(GH_REFUSED_MARKER);
+		expect(r.stdout).not.toContain("REAL GH");
+	});
+
+	it("passes reads and in-scope writes through with their arguments intact", () => {
+		expect(viaCmd(SCOPE, ["pr", "list", "--repo", "someone/else"]).stdout).toContain("REAL GH: pr list --repo someone/else");
+		expect(viaCmd(SCOPE, ["issue", "comment", "5", "--repo", "ProAgentStore/platform"]).stdout).toContain("REAL GH: issue comment 5 --repo ProAgentStore/platform");
+	});
+});
+
 describe("the guard fails OPEN, and says which way it failed", () => {
 	it("installs nothing when the platform named no scope", () => {
 		// An older cloud sends none. Refusing every write on that basis would break those sessions,
@@ -154,20 +179,20 @@ describe("the guard fails OPEN, and says which way it failed", () => {
 	it("never resolves ITSELF as the real gh", () => {
 		// Once the guard is on PATH, a second generation resolving `gh` would find the shim and
 		// exec it — a loop that would hang every gh call the engine makes.
-		const out = installGhGuard(SCOPE, { PATH: binDir }, root);
+		const out = installGhGuard(SCOPE, { PATH: toolPath() }, root);
 		if (!("dir" in out)) throw new Error("expected an install");
-		expect(findRealGh(`${out.dir}:${binDir}`, root)).toBe(join(binDir, "gh"));
-		expect(readFileSync(join(out.dir, "gh"), "utf8")).toContain(join(binDir, "gh"));
+		expect(findRealGh(`${out.dir}${delimiter}${binDir}`, root)).toBe(join(binDir, "gh"));
+		expect(readFileSync(join(out.dir, "gh"), "utf8")).toContain(fwd(join(binDir, "gh")));
 	});
 
 	it("puts the guard AHEAD of the real gh on PATH when it is installed", () => {
-		const env = ghGuardEnv({ PATH: binDir }, SCOPE, root);
-		expect(env.PATH?.endsWith(`:${binDir}`)).toBe(true);
+		const env = ghGuardEnv({ PATH: toolPath() }, SCOPE, root);
+		expect(env.PATH?.endsWith(`${delimiter}${toolPath()}`)).toBe(true);
 		expect(env.PATH?.startsWith(binDir)).toBe(false);
 	});
 
 	it("reports the gaps it does NOT close, so no surface can overstate it", () => {
-		const report = ghGuardStatus(SCOPE, { PATH: binDir }, root);
+		const report = ghGuardStatus(SCOPE, { PATH: toolPath() }, root);
 		expect(report).toMatchObject({ installed: true, scope: ["proagentstore/platform"] });
 		// `git push` is no longer one: the push guard gates it in git's transport (#1252).
 		expect(report.gaps.join(" ")).not.toContain("`git push` is not gated");
