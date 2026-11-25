@@ -1,0 +1,46 @@
+name: Cross-OS git tests
+# The unit and integration suites run on ubuntu only (ci.yml). The runner-managed checkout (run-worktree.ts) shells out to real git,
+# and git differs by OS: forward-slash worktree paths on Windows, drive-letter case, /var vs /private/var on macOS (#1715).
+# A separate workflow, deliberately: it is not a deploy dependency, and a red run here must not stop the API/host deploys.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/browser-runner/src/coding/**"
+      - ".github/workflows/cross-os.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  macos:
+    runs-on: macos-14  # pinned, never -latest (#1266; scripts/check-workflow-runner.mjs reads this line, so no matrix)
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Managed checkout and coding git tests (real git, no network)
+        run: pnpm exec vitest run --project integration packages/browser-runner/src/coding/run-worktree.test.ts packages/browser-runner/src/coding/run-worktree-paths.test.ts packages/browser-runner/src/coding/worktree-routes.test.ts packages/browser-runner/src/coding/git-guard.test.ts packages/browser-runner/src/coding/stashes.test.ts packages/browser-runner/src/coding/branches.test.ts
+
+  windows:
+    runs-on: windows-2022  # pinned, never -latest (#1266; scripts/check-workflow-runner.mjs reads this line, so no matrix)
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Managed checkout and coding git tests (real git, no network)
+        run: pnpm exec vitest run --project integration packages/browser-runner/src/coding/run-worktree.test.ts packages/browser-runner/src/coding/run-worktree-paths.test.ts packages/browser-runner/src/coding/worktree-routes.test.ts packages/browser-runner/src/coding/git-guard.test.ts packages/browser-runner/src/coding/stashes.test.ts packages/browser-runner/src/coding/branches.test.ts
