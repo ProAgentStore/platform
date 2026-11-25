@@ -1,8 +1,9 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CleanupManager, GENTLE_BEHAVIOURS, HARSH_BEHAVIOURS, socketSafeTmpDir } from "./cleanup.js";
+import { fakeEngine } from "./fake-engine.fixture.js";
 import { HeadlessSession } from "./headless.js";
 
 /**
@@ -22,11 +23,11 @@ import { HeadlessSession } from "./headless.js";
 const ATOMIC_WRITE = `const path = require("node:path");
 const write = (f, data) => { const t = path.join(path.dirname(f), ".writing-" + process.pid + "-" + path.basename(f)); fs.writeFileSync(t, data); fs.renameSync(t, f); };`;
 
-/** Persistent (stream-json) engine: leaks `sleep 300`, records its pid and its environment, then waits on stdin. */
+/** Persistent (stream-json) engine: leaks a long-lived child process, records its pid and its environment, then waits on stdin. */
 const LEAKY_PERSISTENT = `#!/usr/bin/env node
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
-const child = spawn("sleep", ["300"], { stdio: "ignore" });
+const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
 ${ATOMIC_WRITE}
 write(process.env.LEAK_FILE, String(child.pid));
 write(process.env.ENV_FILE, JSON.stringify({ session: process.env.PAGS_SESSION_ID || null, tmp: process.env.TMPDIR || null }));
@@ -35,11 +36,11 @@ process.stdin.resume();
 setInterval(() => {}, 1000);
 `;
 
-/** One-shot (raw) engine: per turn, leaks `sleep 300`, then never exits. */
+/** One-shot (raw) engine: per turn, leaks a long-lived child process, then never exits. */
 const LEAKY_ONESHOT = `#!/usr/bin/env node
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
-const child = spawn("sleep", ["300"], { stdio: "ignore" });
+const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
 const file = process.env.LEAK_FILE + "." + Date.now() + "-" + process.pid;
 ${ATOMIC_WRITE}
 write(file, String(child.pid));
@@ -81,7 +82,11 @@ const leakedPids = (dir: string, prefix: string): number[] => {
 		.filter((n) => Number.isFinite(n) && n > 1);
 };
 
-describe.skipIf(process.platform === "win32")("post-run cleanup against real processes (#1265)", () => {
+const WIN = process.platform === "win32";
+
+// On Windows the engines are laid out as an npm-installed Node CLI (fakeEngine), the leaked child is a node process rather than `sleep`, and
+// killing is `taskkill /T /F` (cleanup.ts killSession) — so these run the real process-tree cleanup there, not the injected-platform stand-in.
+describe("post-run cleanup against real processes (#1265)", () => {
 	let dir: string;
 	let persistent: string;
 	let oneshot: string;
@@ -91,10 +96,8 @@ describe.skipIf(process.platform === "win32")("post-run cleanup against real pro
 		dir = mkdtempSync(join(tmpdir(), "pags-hc-"));
 		persistent = join(dir, "leaky-claude");
 		oneshot = join(dir, "leaky-codex");
-		writeFileSync(persistent, LEAKY_PERSISTENT);
-		writeFileSync(oneshot, LEAKY_ONESHOT);
-		chmodSync(persistent, 0o755);
-		chmodSync(oneshot, 0o755);
+		persistent = fakeEngine(persistent, LEAKY_PERSISTENT);
+		oneshot = fakeEngine(oneshot, LEAKY_ONESHOT);
 	});
 	afterAll(async () => {
 		// End every session a test started, as the runtime does (runtime.ts endSession): the engine's
@@ -203,7 +206,8 @@ describe.skipIf(process.platform === "win32")("post-run cleanup against real pro
 		expect(seen.session).toBe("env-1");
 		// The engine's own exported TMPDIR is the socket-safe dir (#1565 fix), not the long
 		// content dir `sessionTmpDir` tracks for cleanup bookkeeping — see the comment on `engineEnv`.
-		expect(seen.tmp).toBe(socketSafeTmpDir((cleanup as unknown as { opts: { baseDir: string } }).opts.baseDir, "env-1"));
+		// Windows has no unix-socket path limit to dodge, so there the engine's TMPDIR is the tracked session folder itself (cleanup.ts engineEnv).
+		if (!WIN) expect(seen.tmp).toBe(socketSafeTmpDir((cleanup as unknown as { opts: { baseDir: string } }).opts.baseDir, "env-1"));
 		expect(existsSync(seen.tmp)).toBe(true);
 		s.stop();
 		await cleanup.endSession("env-1", new Set(), []);

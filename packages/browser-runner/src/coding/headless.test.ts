@@ -1,7 +1,9 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { CleanupManager } from "./cleanup.js";
 import { fakeEngine } from "./fake-engine.fixture.js";
 import { buildClaudeArgs, defaultStatePath, HeadlessSession, parseCommand } from "./headless.js";
 import { MAX_OBJECTIVE_CONSTRAINT_CHARS, MAX_OBJECTIVE_CONSTRAINTS, runObjective, runObjectiveBlock } from "./run-objective.js";
@@ -260,11 +262,29 @@ for (const method of ["start", "input"] as const) {
 		return real.apply(this, a);
 	} as never;
 }
+// TEMPORARY (#1727): who holds a directory the removal cannot delete. Removed once the holder is known.
+const diagnoseLock = (dir: string) => {
+	const log = process.env.PAGS_DIAG_LOG;
+	if (!log) return;
+	const out: string[] = [`LOCKED ${dir} (test pid ${process.pid}) at ${new Date().toISOString()}`];
+	const run = (cmd: string, args: string[]) => {
+		try {
+			out.push(execFileSync(cmd, args, { encoding: "utf8", timeout: 90_000 }));
+		} catch (e) {
+			out.push(`${cmd} failed: ${(e as Error).message}`);
+		}
+	};
+	if (process.env.PAGS_HANDLE_EXE) run(process.env.PAGS_HANDLE_EXE, ["-accepteula", "-nobanner", dir]);
+	run("powershell", ["-NoProfile", "-Command", "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'node|cmd|conhost' } | Select-Object ProcessId,ParentProcessId,Name,CommandLine | Format-List | Out-String -Width 400"]);
+	out.push(`active resources in the test process: ${JSON.stringify(process.getActiveResourcesInfo())}`);
+	appendFileSync(log, `${out.join("\n")}\n`);
+};
 const removeDir = (dir: string) => {
 	for (const s of touched) if (s.config.workDir === dir) s.stop();
 	try {
 		rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
 	} catch (e) {
+		diagnoseLock(dir);
 		// Three of these directories (turn-err, stale, tool-ok) stayed locked on a Windows runner even after their engines were stopped and
 		// the removal retried for over a minute; the holder is not identified (#1724). A temp dir left on a CI runner is harmless, a failed file is not.
 		if (process.platform !== "win32" || (e as NodeJS.ErrnoException).code !== "EBUSY") throw e;
@@ -1409,7 +1429,7 @@ rl.on("line", (line) => {
   // Acknowledge the read, so a test signals only once there is a held turn to answer late.
   process.stdout.write(JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "holding " + held } ] } }) + "\\n");
 });
-process.on("SIGTERM", () => {
+const flushLate = () => {
   setTimeout(() => {
     // Proof, outside the protocol, that this process DID speak late: a marker file in its working dir.
     if (held) require("node:fs").writeFileSync("late-" + process.pid, held);
@@ -1417,11 +1437,29 @@ process.on("SIGTERM", () => {
     if (held) process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "late: " + held }) + "\\n", () => process.exit(0));
     else process.exit(0);
   }, 150);
-});
+};
+process.on("SIGTERM", flushLate);
+// Windows delivers no signal to a handler (kill() ends the process outright), so there "told to end, answers late" is a line on stdin.
+rl.on("line", (line) => { if (line === "END") flushLate(); });
 `;
 
-// The fake engine answers late from a SIGTERM handler; Windows has no signal delivery to a handler (kill() ends the process outright), so there is no late answer to test.
-describe.skipIf(process.platform === "win32")("HeadlessSession — a replaced process cannot speak for its replacement (#1019)", () => {
+/**
+ * POSIX tells the engine to end with a real SIGTERM, which the fake answers late. Windows has no signal delivery to a handler (kill() ends
+ * the process outright), so there the end request is the line `END` on stdin, sent by a cleanup stand-in that is HeadlessSession's own
+ * "end this process" seam (`endProcess`). What is under test is the same either way: the session ignoring an old process that speaks
+ * after its replacement started.
+ */
+const endByStdinLine = process.platform === "win32";
+const lateCleanup = endByStdinLine
+	? ({
+			spawnOptions: () => ({}),
+			noteProcess: () => undefined,
+			engineEnv: (env: NodeJS.ProcessEnv) => env,
+			killProcess: (_id: string, proc: { stdin?: { write(s: string): unknown } | null }) => void proc.stdin?.write("END\n"),
+		} as unknown as CleanupManager)
+	: undefined;
+
+describe("HeadlessSession — a replaced process cannot speak for its replacement (#1019)", () => {
 	let dir: string;
 	let bin: string;
 
@@ -1435,7 +1473,7 @@ describe.skipIf(process.platform === "win32")("HeadlessSession — a replaced pr
 	it("old A's late result neither credits new B's input, nor files B's turn report, nor marks B idle", async () => {
 		// Every wait below is an upper bound on a node process starting or answering, not a timing under test — generous so
 		// full-suite load cannot fail it (#1360). They return as soon as the condition holds.
-		const s = new HeadlessSession({ id: "stale-a-b", workDir: dir, clientType: "claude", bin, statePath: defaultStatePath(dir) });
+		const s = new HeadlessSession({ id: "stale-a-b", workDir: dir, clientType: "claude", bin, statePath: defaultStatePath(dir), cleanup: lateCleanup });
 		s.start();
 		await until(() => s.runState() === "idle", 20_000, "A to initialise");
 		s.input("turn A", { inputId: "dir-a" });
@@ -1463,7 +1501,9 @@ describe.skipIf(process.platform === "win32")("HeadlessSession — a replaced pr
 		await until(() => s.snapshot().includes("holding only turn"), 4000, "the engine to read its turn");
 		// Its own SIGTERM flush arrives while it is still the session's process only if not yet replaced:
 		// signal it directly, keep it as the current process, and read its own result.
-		(s as unknown as { proc: { kill: (sig: string) => void } }).proc.kill("SIGTERM");
+		const proc = (s as unknown as { proc: { kill: (sig: string) => void; stdin: { write: (s: string) => void } } }).proc;
+		if (endByStdinLine) proc.stdin.write("END\n");
+		else proc.kill("SIGTERM");
 		await until(() => s.consumedInputs.length === 1, 8000, "its own result");
 		expect(s.consumedInputs).toEqual(["dir-only"]);
 		expect(s.lastTurn).toMatchObject({ verdict: "ok" });

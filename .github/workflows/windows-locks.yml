@@ -1,0 +1,42 @@
+name: Windows locks
+# What holds a test temp directory on a Windows runner after its engine was stopped (#1727). Runs the named test files with
+# PAGS_DIAG_LOG set and prints, for every directory the removal cannot delete, handle.exe's holder list and the process table.
+# Manual dispatch ONLY, like windows-full-suite.yml, so it can never stop a deploy.
+on:
+  workflow_dispatch:
+    inputs:
+      args:
+        description: "vitest arguments (project and test files)"
+        required: false
+        default: "--project integration packages/browser-runner/src/coding/headless.test.ts"
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  locks:
+    runs-on: windows-2022  # pinned, never -latest (#1266; scripts/check-workflow-runner.mjs reads this line, so no matrix)
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: git config --global core.autocrlf false
+      - run: pnpm install --frozen-lockfile
+      - name: Run, and list what holds any directory that stays locked
+        shell: pwsh
+        env:
+          PAGS_DIAG_LOG: ${{ runner.temp }}\diag-locks.log
+          VITEST_ARGS: ${{ inputs.args }}
+        run: |
+          Invoke-WebRequest https://live.sysinternals.com/handle.exe -OutFile "$env:RUNNER_TEMP\handle.exe"
+          $env:PAGS_HANDLE_EXE = "$env:RUNNER_TEMP\handle.exe"
+          pnpm exec vitest run $env:VITEST_ARGS.Split(" ") 2>&1 | Select-Object -Last 60
+          "---- diag-locks.log"
+          if (Test-Path $env:PAGS_DIAG_LOG) { Get-Content $env:PAGS_DIAG_LOG } else { "no directory stayed locked" }

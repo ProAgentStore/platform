@@ -19,6 +19,7 @@ jobs:
         shell: bash
     env:
       FILES: workers/api/src/routes/history-retrieval.test.ts workers/api/src/lib/release-note-queue.test.ts workers/api/src/lib/runner-update-ops.test.ts workers/api/src/workflows/coding-session/workflow-run.test.ts
+      FILES_FULL: workers/api/src/routes/history-retrieval.test.ts workers/api/src/lib/release-note-queue.test.ts
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -51,12 +52,12 @@ jobs:
       - name: Real-schema files, fsync left on (synchronous FULL, journal DELETE)
         run: |
           SECONDS=0
-          PAGS_D1_SYNC=FULL PAGS_D1_JOURNAL=DELETE pnpm exec vitest run --project unit $FILES --reporter=verbose --testTimeout=900000 --hookTimeout=900000 2>&1 | tail -60
+          PAGS_D1_SYNC=FULL PAGS_D1_JOURNAL=DELETE pnpm exec vitest run --project unit $FILES_FULL --reporter=verbose --testTimeout=900000 --hookTimeout=900000 2>&1 | tail -60
           echo "WALL full+delete: ${SECONDS}s"
       - name: Real-schema files, fsync left on + journal WAL
         run: |
           SECONDS=0
-          PAGS_D1_SYNC=FULL PAGS_D1_JOURNAL=WAL pnpm exec vitest run --project unit $FILES --reporter=verbose --testTimeout=900000 --hookTimeout=900000 2>&1 | tail -60
+          PAGS_D1_SYNC=FULL PAGS_D1_JOURNAL=WAL pnpm exec vitest run --project unit $FILES_FULL --reporter=verbose --testTimeout=900000 --hookTimeout=900000 2>&1 | tail -60
           echo "WALL full+wal: ${SECONDS}s"
       - name: Defender exclusion for temp and workspace, then the current setting again
         shell: pwsh

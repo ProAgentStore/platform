@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 const MIGRATIONS = join(import.meta.dirname, "..", "workers", "api", "migrations");
+// Few rows: with fsync on, one autocommit insert took ~0.4s on windows-2022, so 1,200 of them (history-retrieval.test.ts) is minutes.
+const INSERTS = 100;
 const DIR = join(tmpdir(), `pags-bench-${process.pid}`);
 mkdirSync(DIR, { recursive: true });
 const files = readdirSync(MIGRATIONS)
@@ -55,7 +57,7 @@ for (const sync of ["OFF", "NORMAL", "FULL"]) {
 		const insTx = [];
 		const close = [];
 		const rm = [];
-		for (let i = 0; i < 5; i++) {
+		for (let i = 0; i < 3; i++) {
 			const clone = join(DIR, `clone-${randomBytes(4).toString("hex")}.db`);
 			copy.push(time(() => copyFileSync(template, clone))[0]);
 			let db;
@@ -66,18 +68,18 @@ for (const sync of ["OFF", "NORMAL", "FULL"]) {
 				})[0],
 			);
 			db.exec("CREATE TABLE bench (id INTEGER PRIMARY KEY, v TEXT)");
-			// 1,200 autocommit single-row inserts: the shape of history-retrieval.test.ts.
+			// Autocommit single-row inserts: the shape of history-retrieval.test.ts.
 			ins.push(
 				time(() => {
 					const st = db.prepare("INSERT INTO bench (v) VALUES (?)");
-					for (let k = 0; k < 1200; k++) st.run(`row-${k}`);
+					for (let k = 0; k < INSERTS; k++) st.run(`row-${k}`);
 				})[0],
 			);
 			insTx.push(
 				time(() => {
 					db.exec("BEGIN");
 					const st = db.prepare("INSERT INTO bench (v) VALUES (?)");
-					for (let k = 0; k < 1200; k++) st.run(`row-${k}`);
+					for (let k = 0; k < INSERTS; k++) st.run(`row-${k}`);
 					db.exec("COMMIT");
 				})[0],
 			);
@@ -87,7 +89,7 @@ for (const sync of ["OFF", "NORMAL", "FULL"]) {
 			rmSync(`${clone}-shm`, { force: true });
 		}
 		console.log(
-			`synchronous=${sync} journal_mode=${journal}: template build ${buildMs} ms | per clone, median of 5 (ms): copy ${median(copy)}, open+pragma ${median(open)}, 1200 autocommit inserts ${median(ins)}, 1200 inserts in one tx ${median(insTx)}, close ${median(close)}, rm ${median(rm)}`,
+			`synchronous=${sync} journal_mode=${journal}: template build ${buildMs} ms | per clone, median of 3 (ms): copy ${median(copy)}, open+pragma ${median(open)}, ${INSERTS} autocommit inserts ${median(ins)} ms (${(median(ins) / INSERTS).toFixed(2)} ms each), ${INSERTS} inserts in one tx ${median(insTx)}, close ${median(close)}, rm ${median(rm)}`,
 		);
 	}
 }
