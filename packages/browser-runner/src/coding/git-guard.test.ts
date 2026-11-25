@@ -108,7 +108,8 @@ describe("the #1021 incident, fail-before / pass-after", () => {
 		const env = { ...engineSpawnEnv(undefined, undefined, undefined, root), ...pick(BASE_ENV) };
 		const before = snapshot();
 		const r = sh(GIT_BASH, INCIDENT_BASH, env);
-		expect(r.status).toBe(GIT_REFUSED_EXIT); // the last command's real status, not relabelled
+		const probe = sh(GIT_BASH, "echo $BASH; command -v git; echo \"$PATH\" | tr ':' '\\n' | head -4; cat \"$(command -v git)\" | head -3", env);
+		expect(r.status, `bash=${GIT_BASH} stderr=${r.stderr}\nprobe=${probe.stdout}${probe.stderr}`).toBe(GIT_REFUSED_EXIT); // the last command's real status, not relabelled
 		expect(r.stderr).toContain(GIT_REFUSED_MARKER);
 		expect(snapshot()).toEqual(before);
 	});
