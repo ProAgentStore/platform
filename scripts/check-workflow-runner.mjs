@@ -13,6 +13,7 @@
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const WORKFLOWS = join(ROOT, ".github", "workflows");
@@ -82,4 +83,4 @@ function main() {
 	console.log(`✓ Workflow runner pin OK — ${checked} Playwright-touching workflow(s) of ${files.length}, every runs-on pinned to a specific image.`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main();
+if (import.meta.url === pathToFileURL(process.argv[1]).href) main();

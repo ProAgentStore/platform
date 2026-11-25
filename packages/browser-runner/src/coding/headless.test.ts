@@ -247,6 +247,9 @@ async function until(cond: () => boolean, timeoutMs = 8000, description = "condi
 /** A `gh` that reads nothing: a completed merge is then published `unreadable`, with no network and no real `gh` (#1350). */
 const noGh = () => async () => ({ code: 1, stdout: "" });
 
+/** Removing a test directory: Windows keeps a directory locked while a just-killed engine still has it as its cwd, so retry briefly (EBUSY) instead of failing the file. */
+const RM_BUSY = { recursive: true, force: true, maxRetries: 20, retryDelay: 250 } as const;
+
 describe("HeadlessSession (stream-json engine)", () => {
 	let dir: string;
 	let bin: string;
@@ -256,7 +259,7 @@ describe("HeadlessSession (stream-json engine)", () => {
 		bin = join(dir, "fake-claude.js");
 		bin = fakeEngine(bin, FAKE_CLAUDE);
 		});
-	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+	afterAll(() => rmSync(dir, RM_BUSY));
 
 	it("drives a turn via stdin/stdout JSON: thinking → real reply → idle", async () => {
 		const statePath = defaultStatePath(dir);
@@ -686,7 +689,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		refuserBin = fakeEngine(refuserBin, FAKE_REFUSER);
 		whichGhBin = fakeEngine(whichGhBin, FAKE_WHICH_GH);
 		});
-	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+	afterAll(() => rmSync(dir, RM_BUSY));
 
 	describe("per-turn replay from the platform's record (#693 slice 2)", () => {
 		it("a raw engine gets the replay on EVERY turn, before the instruction — memory it never had", async () => {
@@ -1311,7 +1314,7 @@ describe("HeadlessSession — a completed turn reports which inputs it consumed 
 		pauser = fakeEngine(pauser, FAKE_PAUSER);
 		gate = join(dir, "turn-gate");
 	});
-	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+	afterAll(() => rmSync(dir, RM_BUSY));
 
 	it("does not credit an input queued during turn A to turn A's end — only the turn that read it", async () => {
 		const prev = process.env.TURN_GATE;
@@ -1406,7 +1409,7 @@ describe.skipIf(process.platform === "win32")("HeadlessSession — a replaced pr
 		bin = join(dir, "fake-claude-late.js");
 		bin = fakeEngine(bin, FAKE_CLAUDE_LATE_RESULT);
 		});
-	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+	afterAll(() => rmSync(dir, RM_BUSY));
 
 	it("old A's late result neither credits new B's input, nor files B's turn report, nor marks B idle", async () => {
 		// Every wait below is an upper bound on a node process starting or answering, not a timing under test — generous so
@@ -1456,7 +1459,7 @@ describe("HeadlessSession — a stream-json turn reports its own error (#545)", 
 		bin = join(dir, "fake-claude-err.js");
 		bin = fakeEngine(bin, FAKE_CLAUDE_ERR);
 		});
-	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+	afterAll(() => rmSync(dir, RM_BUSY));
 
 	it("takes the verdict from the `result` event's is_error, with no exit code to take it from", async () => {
 		// The two engine mechanisms know different things, and each must report only what it can:
@@ -1500,7 +1503,7 @@ describe("HeadlessSession — how much of a file reaches the pane (#700)", () =>
 		bin = join(dir, "fake-claude-file.js");
 		bin = fakeEngine(bin, FAKE_CLAUDE_FILE);
 		});
-	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+	afterAll(() => rmSync(dir, RM_BUSY));
 
 	it("a Read result arrives as LINES, ~1,500 characters of them, and says how much it lost", async () => {
 		expect(file.length).toBeGreaterThan(4000);
@@ -1650,7 +1653,7 @@ describe("HeadlessSession — a finishing turn must not clobber a newer one", ()
 		slowBin = fakeEngine(slowBin, `#!/usr/bin/env node\nprocess.stdout.write("turn1 start\\n");\nsetTimeout(() => process.stdout.write("turn1 end\\n"), 3000);\n`);
 		fastBin = fakeEngine(fastBin, `#!/usr/bin/env node\nprocess.stdout.write("turn2: " + (process.argv[2]||"") + "\\n");\nsetTimeout(()=>{}, 5000);\n`);
 		});
-	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+	afterAll(() => rmSync(dir, RM_BUSY));
 
 	it("a stale process's close does not force the session idle mid-turn", async () => {
 		// The raw idle heuristic declares idle after a >1.5s output pause, so a long build gets
@@ -1808,7 +1811,7 @@ describe("HeadlessSession — a run that merges to main must leave a record (#29
 	beforeAll(() => {
 		dir = mkdtempSync(join(tmpdir(), "pags-acts-"));
 	});
-	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+	afterAll(() => rmSync(dir, RM_BUSY));
 
 	function merger(id: string, env?: Record<string, string>): HeadlessSession {
 		let bin = join(dir, `fake-merger-${id}.js`);
@@ -1912,7 +1915,7 @@ describe("HeadlessSession — a `--fill` PR names its number in its own result (
 	beforeAll(() => {
 		dir = mkdtempSync(join(tmpdir(), "pags-acts-pr-"));
 	});
-	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+	afterAll(() => rmSync(dir, RM_BUSY));
 
 	function opener(id: string, env?: Record<string, string>): HeadlessSession {
 		let bin = join(dir, `fake-opener-${id}.js`);
@@ -1989,7 +1992,7 @@ describe("HeadlessSession — a tool result records whether the call FAILED (#59
 		bin = join(dir, "fake-claude-tools.js");
 		bin = fakeEngine(bin, FAKE_CLAUDE_TOOLS);
 		});
-	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+	afterAll(() => rmSync(dir, RM_BUSY));
 
 	it("welds the outcome onto the arrow, so the cloud's per-call record can state it", async () => {
 		// The transcript is the ONLY channel an ordinary tool call reaches the cloud through: a read
@@ -2042,7 +2045,7 @@ setTimeout(() => process.exit(1), 30);
 		codex401 = fakeEngine(join(dir, "codex-401"), FAKE_CODEX_401);
 		codexSilent = fakeEngine(join(dir, "codex-silent"), FAKE_CODEX_SILENT);
 	});
-	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+	afterAll(() => rmSync(dir, RM_BUSY));
 
 	it("a Codex 401 reaches the report and the pane: the stderr line, the retries and the turn.failed message", async () => {
 		const s = new HeadlessSession({ id: "tail-401", workDir: dir, clientType: "codex", command: "codex exec --json", bin: codex401 });

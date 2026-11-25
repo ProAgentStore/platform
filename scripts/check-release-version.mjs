@@ -8,6 +8,7 @@
  * cannot resolve) it says so and exits 0: there is no range to judge.
  */
 import { execFileSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { execShimSync } from "./lib/portable-command.mjs";
 import { evaluateRelease, formatProblems, PACKAGES } from "./lib/release-gate.mjs";
 
@@ -52,4 +53,4 @@ function main() {
 	console.log(`✓ Release gate: ${changed.length} changed file(s); no shipped code under an already-published version.`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main();
+if (import.meta.url === pathToFileURL(process.argv[1]).href) main();

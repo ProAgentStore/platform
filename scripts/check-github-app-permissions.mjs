@@ -10,6 +10,7 @@
  * Not part of CI: it needs a GitHub login with org-admin rights, and the state it checks is the owner's to change.
  */
 import { execFileSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { execShimSync } from "./lib/portable-command.mjs";
 import { comparePermissions, formatReport, readState } from "./lib/github-app-permissions.mjs";
 
@@ -30,4 +31,4 @@ async function main() {
 	process.exit(result.ok ? 0 : 1);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) await main();
+if (import.meta.url === pathToFileURL(process.argv[1]).href) await main();
