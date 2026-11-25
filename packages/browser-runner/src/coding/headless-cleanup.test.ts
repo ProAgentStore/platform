@@ -27,7 +27,7 @@ const write = (f, data) => { const t = path.join(path.dirname(f), ".writing-" + 
 const LEAKY_PERSISTENT = `#!/usr/bin/env node
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
-const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore", detached: process.platform === "win32" });
 ${ATOMIC_WRITE}
 write(process.env.LEAK_FILE, String(child.pid));
 write(process.env.ENV_FILE, JSON.stringify({ session: process.env.PAGS_SESSION_ID || null, tmp: process.env.TMPDIR || null }));
@@ -40,7 +40,7 @@ setInterval(() => {}, 1000);
 const LEAKY_ONESHOT = `#!/usr/bin/env node
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
-const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore", detached: process.platform === "win32" });
 const file = process.env.LEAK_FILE + "." + Date.now() + "-" + process.pid;
 ${ATOMIC_WRITE}
 write(file, String(child.pid));
@@ -83,6 +83,8 @@ const leakedPids = (dir: string, prefix: string): number[] => {
 };
 
 const WIN = process.platform === "win32";
+// The leaked child is spawned `detached` on Windows. libuv puts every non-detached child in a job object that dies with its parent, so a
+// plain child would be ended by the engine's death alone and neither the CONTROL (the leak) nor `taskkill /T` would be tested.
 
 // On Windows the engines are laid out as an npm-installed Node CLI (fakeEngine), the leaked child is a node process rather than `sleep`, and
 // killing is `taskkill /T /F` (cleanup.ts killSession) — so these run the real process-tree cleanup there, not the injected-platform stand-in.

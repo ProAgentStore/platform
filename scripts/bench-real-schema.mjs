@@ -42,8 +42,8 @@ const hashOnly = () => {
 };
 console.log(`migrationsContentHash per call (probe + sha256): ${repeat(20, hashWithProbe)} ms; sha256 alone: ${repeat(20, hashOnly)} ms`);
 
-for (const sync of ["OFF", "NORMAL", "FULL"]) {
-	for (const journal of ["DELETE", "WAL"]) {
+for (const sync of ["OFF", "FULL"]) {
+	for (const journal of ["DELETE", "WAL", "MEMORY"]) {
 		const template = join(DIR, `template-${sync}-${journal}.db`);
 		const [buildMs] = time(() => {
 			const db = new DatabaseSync(template);

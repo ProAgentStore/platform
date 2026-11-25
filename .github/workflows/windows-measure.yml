@@ -1,5 +1,5 @@
 name: Windows measure
-# Diagnostics on a real Windows runner (#1726, #1727): where real-schema tests spend their time, and what holds a temp directory.
+# Diagnostics on a real Windows runner (#1726): where real-schema tests spend their time, under each SQLite durability setting.
 # Manual dispatch ONLY, like windows-full-suite.yml, so it can never stop a deploy.
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ env:
 jobs:
   measure:
     runs-on: windows-2022  # pinned, never -latest (#1266; scripts/check-workflow-runner.mjs reads this line, so no matrix)
-    timeout-minutes: 120
+    timeout-minutes: 90
     defaults:
       run:
         shell: bash
@@ -37,29 +37,42 @@ jobs:
           Get-Volume | Format-Table -AutoSize | Out-String
           Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled, AntivirusEnabled, BehaviorMonitorEnabled, IoavProtectionEnabled | Format-List | Out-String
           (Get-MpPreference).ExclusionPath
-      - name: Phase micro-benchmark (no Defender change)
+      - name: Phase micro-benchmark
         run: node scripts/bench-real-schema.mjs
-      - name: Real-schema files, current setting (synchronous OFF, journal DELETE)
+      # One step per setting, each allowed to fail: with fsync on, vitest reports "Timeout calling onTaskUpdate" as an unhandled error and
+      # exits 1 even though every test passed, which must not stop the later settings from being measured.
+      - name: "Real-schema files: synchronous OFF, journal DELETE (what main runs today)"
+        continue-on-error: true
         run: |
           SECONDS=0
-          PAGS_D1_SYNC=OFF PAGS_D1_JOURNAL=DELETE pnpm exec vitest run --project unit $FILES --reporter=verbose 2>&1 | tail -60
-          echo "WALL current: ${SECONDS}s"
-      - name: Real-schema files, synchronous OFF + journal WAL
+          PAGS_D1_SYNC=OFF PAGS_D1_JOURNAL=DELETE pnpm exec vitest run --project unit $FILES 2>&1 | tail -25
+          echo "WALL off+delete: ${SECONDS}s"
+      - name: "Real-schema files: synchronous OFF, journal WAL"
+        continue-on-error: true
         run: |
           SECONDS=0
-          PAGS_D1_SYNC=OFF PAGS_D1_JOURNAL=WAL pnpm exec vitest run --project unit $FILES --reporter=verbose 2>&1 | tail -60
+          PAGS_D1_SYNC=OFF PAGS_D1_JOURNAL=WAL pnpm exec vitest run --project unit $FILES 2>&1 | tail -25
           echo "WALL off+wal: ${SECONDS}s"
-      - name: Real-schema files, fsync left on (synchronous FULL, journal DELETE)
+      - name: "Real-schema files: synchronous OFF, journal MEMORY"
+        continue-on-error: true
         run: |
           SECONDS=0
-          PAGS_D1_SYNC=FULL PAGS_D1_JOURNAL=DELETE pnpm exec vitest run --project unit $FILES_FULL --reporter=verbose --testTimeout=900000 --hookTimeout=900000 2>&1 | tail -60
+          PAGS_D1_SYNC=OFF PAGS_D1_JOURNAL=MEMORY pnpm exec vitest run --project unit $FILES 2>&1 | tail -25
+          echo "WALL off+memory: ${SECONDS}s"
+      - name: "Real-schema files: fsync left on (FULL, journal DELETE), two files"
+        continue-on-error: true
+        run: |
+          SECONDS=0
+          PAGS_D1_SYNC=FULL PAGS_D1_JOURNAL=DELETE pnpm exec vitest run --project unit $FILES_FULL 2>&1 | tail -25
           echo "WALL full+delete: ${SECONDS}s"
-      - name: Real-schema files, fsync left on + journal WAL
+      - name: "Real-schema files: fsync left on (FULL, journal WAL), two files"
+        continue-on-error: true
         run: |
           SECONDS=0
-          PAGS_D1_SYNC=FULL PAGS_D1_JOURNAL=WAL pnpm exec vitest run --project unit $FILES_FULL --reporter=verbose --testTimeout=900000 --hookTimeout=900000 2>&1 | tail -60
+          PAGS_D1_SYNC=FULL PAGS_D1_JOURNAL=WAL pnpm exec vitest run --project unit $FILES_FULL 2>&1 | tail -25
           echo "WALL full+wal: ${SECONDS}s"
-      - name: Defender exclusion for temp and workspace, then the current setting again
+      - name: Defender exclusion for temp and workspace, then the benchmark and OFF + DELETE again
+        continue-on-error: true
         shell: pwsh
         run: |
           Add-MpPreference -ExclusionPath $env:TEMP, $env:GITHUB_WORKSPACE, $env:RUNNER_TEMP
@@ -68,5 +81,5 @@ jobs:
           node scripts/bench-real-schema.mjs
           $env:PAGS_D1_SYNC = "OFF"; $env:PAGS_D1_JOURNAL = "DELETE"
           $sw = [Diagnostics.Stopwatch]::StartNew()
-          pnpm exec vitest run --project unit $env:FILES.Split(" ") --reporter=verbose 2>&1 | Select-Object -Last 60
-          "WALL defender-excluded current: $($sw.Elapsed.TotalSeconds)s"
+          pnpm exec vitest run --project unit $env:FILES.Split(" ") 2>&1 | Select-Object -Last 25
+          "WALL defender-excluded off+delete: $($sw.Elapsed.TotalSeconds)s"

@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { basename, delimiter, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { CleanupManager } from "./cleanup.js";
 import { fakeEngine } from "./fake-engine.fixture.js";
@@ -263,10 +263,15 @@ for (const method of ["start", "input"] as const) {
 	} as never;
 }
 // TEMPORARY (#1727): who holds a directory the removal cannot delete. Removed once the holder is known.
-const diagnoseLock = (dir: string) => {
+const diagnoseLock = (dir: string, error: unknown) => {
 	const log = process.env.PAGS_DIAG_LOG;
 	if (!log) return;
-	const out: string[] = [`LOCKED ${dir} (test pid ${process.pid}) at ${new Date().toISOString()}`];
+	const out: string[] = [`LOCKED ${dir} (test pid ${process.pid}) at ${new Date().toISOString()}`, `error: ${String(error)}`, `test process cwd: ${process.cwd()}`];
+	try {
+		out.push(`left in the directory: ${JSON.stringify(readdirSync(dir, { recursive: true }))}`);
+	} catch (e) {
+		out.push(`cannot list it: ${String(e)}`);
+	}
 	const run = (cmd: string, args: string[]) => {
 		try {
 			out.push(execFileSync(cmd, args, { encoding: "utf8", timeout: 90_000 }));
@@ -274,8 +279,8 @@ const diagnoseLock = (dir: string) => {
 			out.push(`${cmd} failed: ${(e as Error).message}`);
 		}
 	};
-	if (process.env.PAGS_HANDLE_EXE) run(process.env.PAGS_HANDLE_EXE, ["-accepteula", "-nobanner", dir]);
-	run("powershell", ["-NoProfile", "-Command", "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'node|cmd|conhost' } | Select-Object ProcessId,ParentProcessId,Name,CommandLine | Format-List | Out-String -Width 400"]);
+	if (process.env.PAGS_HANDLE_EXE) run(process.env.PAGS_HANDLE_EXE, ["-accepteula", "-nobanner", basename(dir)]);
+	run("powershell", ["-NoProfile", "-Command", "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine | Format-List | Out-String -Width 400"]);
 	out.push(`active resources in the test process: ${JSON.stringify(process.getActiveResourcesInfo())}`);
 	appendFileSync(log, `${out.join("\n")}\n`);
 };
@@ -284,7 +289,7 @@ const removeDir = (dir: string) => {
 	try {
 		rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
 	} catch (e) {
-		diagnoseLock(dir);
+		diagnoseLock(dir, e);
 		// Three of these directories (turn-err, stale, tool-ok) stayed locked on a Windows runner even after their engines were stopped and
 		// the removal retried for over a minute; the holder is not identified (#1724). A temp dir left on a CI runner is harmless, a failed file is not.
 		if (process.platform !== "win32" || (e as NodeJS.ErrnoException).code !== "EBUSY") throw e;
