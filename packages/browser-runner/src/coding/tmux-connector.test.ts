@@ -1,5 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	capturePane,
@@ -55,10 +57,11 @@ async function until(cond: () => boolean, what: string, timeoutMs = 45_000): Pro
 
 describe.runIf(HAS_TMUX)("tmux connector primitives", () => {
 	beforeAll(() => {
-		tmuxTmp = mkdtempSync("/tmp/ptc-");
+		// Native Node has no /tmp on Windows: use the real temp directory there (MSYS tmux gets it as a /c/... path below).
+		tmuxTmp = mkdtempSync(process.platform === "win32" ? join(tmpdir(), "ptc-") : "/tmp/ptc-");
 		// Native Node's /tmp is not MSYS's /tmp. Give tmux the actual directory;
 		// an inaccessible TMUX_TMPDIR can silently fall back to the owner's server.
-		process.env.TMUX_TMPDIR = realpathSync(tmuxTmp).replace(/\\/g, "/");
+		process.env.TMUX_TMPDIR = realpathSync.native(tmuxTmp).replace(/\\/g, "/");
 		delete process.env.TMUX;
 	});
 	afterAll(() => {

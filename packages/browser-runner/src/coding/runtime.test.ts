@@ -394,7 +394,7 @@ describe("CodingRuntime over the stream-json engine", () => {
 			expect(rt.start({ sessionId: "tilde-1379", repoId: "r1", workDir: "~/dev/proj", clientType: "claude", bin }).workDirResolution).toBeUndefined();
 			// repo-check hands back the machine-independent spelling for the cloud to store.
 			// The guard answers with the REAL path (macOS /tmp is /private/tmp); the home-relative form must survive that.
-			expect(rt.checkRepo({ workDir: join(home, "dev", "proj") })).toMatchObject({ path: realpathSync(join(home, "dev", "proj")), homeRelative: "~/dev/proj" });
+			expect(rt.checkRepo({ workDir: join(home, "dev", "proj") })).toMatchObject({ path: realpathSync.native(join(home, "dev", "proj")), homeRelative: "~/dev/proj" });
 		} finally {
 			if (was === undefined) delete process.env[homeKey];
 			else process.env[homeKey] = was;

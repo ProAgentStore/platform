@@ -166,7 +166,7 @@ function consolePathProducers(base: string): string[] {
 		// longer do, and the explanation must not fail the test that protects it.
 		const code = readFileSync(file, "utf8")
 			.replace(/\/\*[\s\S]*?\*\//g, "")
-			.split("\n")
+			.split(/\r?\n/)
 			.map((l) => l.replace(/(^|[^:])\/\/.*$/, "$1"))
 			.join("\n");
 		if (/["'`]\/console(\/|["'`])/.test(code)) offenders.push(rel);

@@ -304,7 +304,8 @@ describe("the Engine's env (#1252)", () => {
 		const bin = join(dir, "bin");
 		mkdirSync(bin);
 		writeFileSync(join(bin, "gh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-		const report = writeGuardReport(SCOPE, { PATH: bin }, join(dir, "gh-root"));
+		// Windows needs its system directories beside the fake gh, as gh-guard.test.ts does.
+		const report = writeGuardReport(SCOPE, { PATH: process.platform === "win32" ? `${bin}${delimiter}${process.env.PATH ?? ""}` : bin }, join(dir, "gh-root"));
 		expect(report.installed).toBe(true);
 		expect(report.gaps).toEqual(expect.arrayContaining([...PUSH_GUARD_GAPS]));
 		expect(report.gaps.join(" ")).not.toContain("`git push` is not gated");

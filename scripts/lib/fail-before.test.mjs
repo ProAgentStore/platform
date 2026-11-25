@@ -59,7 +59,8 @@ function g(dir, ...args) {
 	return r.stdout.trim();
 }
 const put = (dir, f, text) => writeFileSync(join(dir, f), text);
-const read = (dir, f) => (existsSync(join(dir, f)) ? readFileSync(join(dir, f), "utf8") : null);
+// A Windows checkout with core.autocrlf materialises CRLF; the fixtures compare content, so line endings are normalised on read.
+const read = (dir, f) => (existsSync(join(dir, f)) ? readFileSync(join(dir, f), "utf8").replaceAll("\r\n", "\n") : null);
 
 /** A temp repo with foreign recovery state and owned edits of every kind. */
 function fixture() {

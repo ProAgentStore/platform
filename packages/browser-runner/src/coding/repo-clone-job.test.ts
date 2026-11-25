@@ -111,7 +111,8 @@ describe("cloneIntoOwnFolder — real git, the owner-folder guards (#858)", () =
 		// Async: control returns before git has finished, so the runner keeps serving its relay.
 		expect(pending).toBeInstanceOf(Promise);
 		await pending;
-		expect(readFileSync(join(dir, "README.md"), "utf8")).toBe("grass-karma\n");
+		// A Windows git with core.autocrlf checks the file out with CRLF; the content is what matters.
+		expect(readFileSync(join(dir, "README.md"), "utf8").replaceAll("\r\n", "\n")).toBe("grass-karma\n");
 		expect(git(dir, "remote", "get-url", "origin")).toBe(upstream);
 	});
 
