@@ -3,7 +3,8 @@ import { once } from "node:events";
 import { describe, expect, it } from "vitest";
 import { installerDescendants, runBoundedCommand, terminateInstallerTree } from "../lib/installer-process-tree.mjs";
 
-describe("installer-owned process termination (#1333)", () => {
+// The installer is a POSIX shell script: this kills a process tree by reading `ps` and signalling SIGSTOP/SIGKILL, none of which Windows has (#1723).
+describe.skipIf(process.platform === "win32")("installer-owned process termination (#1333)", () => {
 	it("bounds a real diagnostic command and preserves completed output", async () => {
 		expect(await runBoundedCommand(process.execPath, ["-e", 'console.log("healthy diagnostic")'])).toContain("healthy diagnostic");
 		// Output preservation requires Node to start and write first. Under full-suite load,
