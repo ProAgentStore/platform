@@ -31,7 +31,7 @@ if (argv.includes("grok-9-imaginary")) { process.stderr.write(${JSON.stringify(`
 process.stdout.write(readFileSync(${JSON.stringify(FIXTURE)}, "utf8"));
 `;
 
-describe("the Grok pane coding_session_capture reads (#1201)", () => {
+describe.skipIf(process.platform === "win32")("the Grok pane coding_session_capture reads (#1201)", () => {
 	let dir: string;
 	let bin: string;
 	beforeAll(() => {

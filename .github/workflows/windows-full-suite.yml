@@ -27,6 +27,9 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      # Tests build throwaway repositories and compare what git writes to them byte for byte. Git for Windows defaults to
+      # core.autocrlf=true, which rewrites those files with CRLF; the suite assumes the POSIX default.
+      - run: git config --global core.autocrlf false
       - run: pnpm install --frozen-lockfile
       # The builds ci.yml runs before the suite that tests read. Host pages are not built: vitest aliases a committed stub for them.
       - name: Build SDK, console and admin

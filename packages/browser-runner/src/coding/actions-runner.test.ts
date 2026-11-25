@@ -75,7 +75,7 @@ describe("install (#1209)", () => {
 		const dir = join(HOME, ".proagentstore", "actions-runner", "proappstore-online");
 		expect(job).toMatchObject({ state: "done", service: "needs_admin", dir, runsAs: "owner", serviceNote: expect.stringContaining(`pags actions service install --dir ${dir}`) });
 		expect(d.downloads).toEqual(["https://github.com/actions/runner/releases/download/v2.329.0/actions-runner-osx-arm64-2.329.0.tar.gz"]);
-		expect(d.ran.map((r) => r.file.split("/").pop())).toEqual(["tar", "config.sh"]);
+		expect(d.ran.map((r) => r.file.split(/[\\/]/).pop())).toEqual(["tar", "config.sh"]);
 		const config = d.ran[1].args;
 		expect(config).toEqual(expect.arrayContaining(["--unattended", "--url", ORG.url, "--name", "pink-laptop", "--labels", "pags,pags-pink-laptop", "--runnergroup", "pags-pink-laptop"]));
 		expect(config[config.indexOf("--token") + 1]).toBe(TOKEN); // config needs it…
@@ -88,7 +88,7 @@ describe("install (#1209)", () => {
 		const d = fake();
 		const job = await settle(startRunnerJob("install", ORG, d));
 		expect(job).toMatchObject({ state: "done", service: "installed" });
-		expect(d.ran.slice(-2).map((r) => `${r.file.split("/").pop()} ${r.args[0]}`)).toEqual(["svc.sh install", "svc.sh start"]);
+		expect(d.ran.slice(-2).map((r) => `${r.file.split(/[\\/]/).pop()} ${r.args[0]}`)).toEqual(["svc.sh install", "svc.sh start"]);
 	});
 
 	it("reports a missing prerequisite instead of assuming it", async () => {
@@ -101,7 +101,7 @@ describe("install (#1209)", () => {
 		const d = fake({ platform: "linux", arch: "x64" });
 		const job = await settle(startRunnerJob("install", ORG, d));
 		expect(job).toMatchObject({ state: "done", service: "needs_admin", serviceNote: expect.stringContaining("sudo ./svc.sh install owner") });
-		expect(d.ran.map((r) => r.file.split("/").pop())).toEqual(["tar", "config.sh"]);
+		expect(d.ran.map((r) => r.file.split(/[\\/]/).pop())).toEqual(["tar", "config.sh"]);
 	});
 
 	it("rejects macOS system mode on other hosts before installing", async () => {
@@ -218,7 +218,7 @@ describe("remove (#1209)", () => {
 		d.files.add(join(runnerDir(HOME, ORG.url), ".runner"));
 		const job = await settle(startRunnerJob("remove", ORG, d));
 		expect(job).toMatchObject({ state: "done", service: "removed" });
-		expect(d.ran.map((r) => `${r.file.split("/").pop()} ${r.args[0]}`)).toEqual(["svc.sh stop", "svc.sh uninstall", "config.sh remove"]);
+		expect(d.ran.map((r) => `${r.file.split(/[\\/]/).pop()} ${r.args[0]}`)).toEqual(["svc.sh stop", "svc.sh uninstall", "config.sh remove"]);
 	});
 
 	it("a prior PAGS supervisor config keeps removal on the administrator-approved path even if its plist is missing", async () => {
@@ -255,7 +255,7 @@ describe("remove (#1209)", () => {
 		d.files.add(join(dir, ".pags-supervisor", "removal-approved.json"));
 		const removed = await settle(startRunnerJob("remove", ORG, d));
 		expect(removed.service).toBe("removed");
-		expect(d.ran.map((r) => r.file.split("/").pop())).toEqual(["config.sh"]);
+		expect(d.ran.map((r) => r.file.split(/[\\/]/).pop())).toEqual(["config.sh"]);
 	});
 
 	it("nothing configured: nothing to remove, and nothing is run", async () => {

@@ -241,7 +241,14 @@ async function until(cond: () => boolean, timeoutMs = 8000, description = "condi
 /** A `gh` that reads nothing: a completed merge is then published `unreadable`, with no network and no real `gh` (#1350). */
 const noGh = () => async () => ({ code: 1, stdout: "" });
 
-describe("HeadlessSession (stream-json engine)", () => {
+/**
+ * These fixtures stand in for an engine CLI with a script that starts `#!/usr/bin/env node` and is chmod +x. Windows cannot execute that
+ * ("spawn EFTYPE"): it runs only .exe/.com, and a shim is read for its target by engine-spawn.ts, which has its own tests. Same boundary as
+ * engine-native-claude.test.ts and headless-cleanup.test.ts. Running these against a .cmd wrapper is a separate piece of work (#1723).
+ */
+const NO_SHEBANG_ENGINES = process.platform === "win32";
+
+describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession (stream-json engine)", () => {
 	let dir: string;
 	let bin: string;
 
@@ -639,7 +646,7 @@ describe("HeadlessSession (stream-json engine)", () => {
  * arrive as argv[5]). Saying `command: "codex"` is the test declaring "a bare prefix, so the turn
  * text is argv[2]", instead of depending on the default preset happening to have no flags.
  */
-describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
+describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 	let dir: string;
 	let codexBin: string;
 	let slowBin: string;
@@ -1305,7 +1312,7 @@ rl.on("line", (line) => {
 });
 `;
 
-describe("HeadlessSession — a completed turn reports which inputs it consumed (#1019)", () => {
+describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — a completed turn reports which inputs it consumed (#1019)", () => {
 	let dir: string;
 	let bin: string;
 	let pauser: string;
@@ -1406,7 +1413,7 @@ process.on("SIGTERM", () => {
 });
 `;
 
-describe("HeadlessSession — a replaced process cannot speak for its replacement (#1019)", () => {
+describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — a replaced process cannot speak for its replacement (#1019)", () => {
 	let dir: string;
 	let bin: string;
 
@@ -1457,7 +1464,7 @@ describe("HeadlessSession — a replaced process cannot speak for its replacemen
 	});
 });
 
-describe("HeadlessSession — a stream-json turn reports its own error (#545)", () => {
+describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — a stream-json turn reports its own error (#545)", () => {
 	let dir: string;
 	let bin: string;
 
@@ -1501,7 +1508,7 @@ describe("HeadlessSession — a stream-json turn reports its own error (#545)", 
  * ("a file reaches the Pilot"), and the earlier attribution of this failure to the pane window
  * rather than the runner is what a unit-level check would have missed again.
  */
-describe("HeadlessSession — how much of a file reaches the pane (#700)", () => {
+describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — how much of a file reaches the pane (#700)", () => {
 	let dir: string;
 	let bin: string;
 	const file = fixtureFile();
@@ -1649,7 +1656,7 @@ function readState(path: string, id: string): string | null {
 	}
 }
 
-describe("HeadlessSession — a finishing turn must not clobber a newer one", () => {
+describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — a finishing turn must not clobber a newer one", () => {
 	let dir: string;
 	let slowBin: string;
 	let fastBin: string;
@@ -1816,7 +1823,7 @@ process.stdout.write(JSON.stringify({ type: "turn.completed", usage: {
 } }) + "\\n");
 `;
 
-describe("HeadlessSession — a run that merges to main must leave a record (#294)", () => {
+describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — a run that merges to main must leave a record (#294)", () => {
 	let dir: string;
 
 	beforeAll(() => {
@@ -1923,7 +1930,7 @@ rl.on("line", (line) => {
 });
 `;
 
-describe("HeadlessSession — a `--fill` PR names its number in its own result (#417)", () => {
+describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — a `--fill` PR names its number in its own result (#417)", () => {
 	let dir: string;
 
 	beforeAll(() => {
@@ -1998,7 +2005,7 @@ describe("parseCommand — apostrophes must not pair ACROSS tokens", () => {
 	});
 });
 
-describe("HeadlessSession — a tool result records whether the call FAILED (#597)", () => {
+describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — a tool result records whether the call FAILED (#597)", () => {
 	let dir: string;
 	let bin: string;
 
@@ -2041,7 +2048,7 @@ describe("HeadlessSession — a tool result records whether the call FAILED (#59
  * dropped the `error` events, read the object as the bare word "failed" — and then the exit
  * report overwrote even that with an empty line. The run's summary could only guess.
  */
-describe("HeadlessSession — a failed turn reports the engine's own output (#889)", () => {
+describe.skipIf(NO_SHEBANG_ENGINES)("HeadlessSession — a failed turn reports the engine's own output (#889)", () => {
 	let dir: string;
 	const FAKE_CODEX_401 = `#!/usr/bin/env node
 const out = (o) => process.stdout.write(JSON.stringify(o) + "\\n");

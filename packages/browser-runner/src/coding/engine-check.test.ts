@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { checkEngine, detectEngineLogin } from "./engine-check.js";
 
 const HOME = "/home/me";
-const onPath = (bins: string[]) => (p: string) => bins.some((b) => p === b);
+// The code joins paths with the OS separator; these fixtures are written with "/", so compare the portable form.
+const onPath = (bins: string[]) => (p: string) => bins.some((b) => p.replaceAll("\\", "/") === b);
 
 describe("detectEngineLogin — subscription login presence only (#879)", () => {
 	it("codex: auth.json under CODEX_HOME (default ~/.codex) is the login", () => {
@@ -41,7 +42,8 @@ describe("detectEngineLogin — subscription login presence only (#879)", () => 
 
 	it("grok: xAI's subscription login is auth.json under GROK_HOME (default ~/.grok) — without it the CLI refuses every turn (#1156)", () => {
 		// Verified on xAI's Grok CLI 1.0.62 with no ~/.grok/auth.json: "Not signed in. To authenticate without a browser…".
-		expect(detectEngineLogin("grok", { env: {}, home: HOME, exists: onPath([`${HOME}/.grok/auth.json`]) })).toEqual({ login: "found", where: `${HOME}/.grok/auth.json` });
+		const found = detectEngineLogin("grok", { env: {}, home: HOME, exists: onPath([`${HOME}/.grok/auth.json`]) });
+		expect({ ...found, where: found.where?.replaceAll("\\", "/") }).toEqual({ login: "found", where: `${HOME}/.grok/auth.json` });
 		expect(detectEngineLogin("grok", { env: {}, home: HOME, exists: onPath([]) }).login).toBe("missing");
 		expect(detectEngineLogin("grok", { env: { GROK_HOME: "/cfg/grok" }, home: HOME, exists: onPath(["/cfg/grok/auth.json"]) }).login).toBe("found");
 	});

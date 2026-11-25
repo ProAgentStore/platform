@@ -5,7 +5,7 @@
  */
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, parse } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { CodingRuntime } from "./runtime.js";
 import { readRoots, rootsPath } from "./runner-roots.js";
@@ -28,7 +28,7 @@ const refusal = (fn: () => unknown): string => {
 
 describe("confineWorkDir (#1165)", () => {
 	it("refuses the home folder and everything above it", () => {
-		for (const raw of ["~", HOME, `${HOME}/`, "/", join(HOME, "..")]) expect(refusal(() => confineWorkDir(raw, { home: HOME })), raw).toMatch(/home folder/);
+		for (const raw of ["~", HOME, `${HOME}/`, parse(HOME).root, join(HOME, "..")]) expect(refusal(() => confineWorkDir(raw, { home: HOME })), raw).toMatch(/home folder/);
 	});
 
 	it("refuses a folder inside a credential directory", () => {

@@ -6,6 +6,7 @@
  * a denied permission, a missing app and a timeout each come back as their stable code.
  */
 import { createHash } from "node:crypto";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { type ActDeps, type HaltState, MAC_KEY_CODES, click, halt, launchApp, macOpenArgs, pressKey, psQuote, resume, screenshot, scroll, type ShotFiles, typeText, windowsSendKeys } from "./act.js";
 import { nativeActRoute } from "./act-route.js";
@@ -203,6 +204,8 @@ describe("halt", () => {
 	});
 });
 
+// The code joins with the OS separator, so the expected paths are built the same way.
+const shot = (name: string) => join("/shots", name);
 describe("screenshot", () => {
 	function fakeFiles(sizeOf: (p: string) => number | null = () => 4096) {
 		const removed: string[] = [];
@@ -221,10 +224,10 @@ describe("screenshot", () => {
 		const { exec, calls } = shell([["CGPreflightScreenCaptureAccess", ok("true")], ["screencapture", ok()]]);
 		const { files, written } = fakeFiles();
 		const r = await screenshot({ exec, platform: "darwin", halt: newHalt(), files, shotDir: "/shots", now: () => 5000 });
-		expect(r).toEqual({ ok: true, data: { path: "/shots/shot-5000.png", bytes: 4096, sha256: createHash("sha256").update("PNGBYTES").digest("hex") } });
+		expect(r).toEqual({ ok: true, data: { path: shot("shot-5000.png"), bytes: 4096, sha256: createHash("sha256").update("PNGBYTES").digest("hex") } });
 		expect(JSON.stringify(r)).not.toContain("PNGBYTES");
-		expect(calls.at(-1)).toMatchObject({ cmd: "screencapture", args: ["-x", "-t", "png", "/shots/shot-5000.png"] });
-		expect(written.get("chmod:/shots/shot-5000.png")?.toString()).toBe(String(0o600));
+		expect(calls.at(-1)).toMatchObject({ cmd: "screencapture", args: ["-x", "-t", "png", shot("shot-5000.png")] });
+		expect(written.get(`chmod:${shot("shot-5000.png")}`)?.toString()).toBe(String(0o600));
 	});
 	it("macOS: without Screen Recording it refuses, instead of 'succeeding' with a picture of the wallpaper", async () => {
 		const { exec, calls } = shell([["CGPreflightScreenCaptureAccess", ok("false")]]);
@@ -235,7 +238,7 @@ describe("screenshot", () => {
 		const { exec } = shell([["CGPreflightScreenCaptureAccess", ok("true")], ["screencapture", ok()]]);
 		const { files, removed } = fakeFiles();
 		await screenshot({ exec, platform: "darwin", halt: newHalt(), files, shotDir: "/shots", now: () => 1 });
-		expect(removed).toEqual(["/shots/shot-1000.png", "/shots/shot-1001.png", "/shots/shot-1002.png"]);
+		expect(removed).toEqual([shot("shot-1000.png"), shot("shot-1001.png"), shot("shot-1002.png")]);
 	});
 	it("an empty or missing file is a failure, not an image", async () => {
 		const { exec } = shell([["CGPreflightScreenCaptureAccess", ok("true")], ["screencapture", ok()]]);

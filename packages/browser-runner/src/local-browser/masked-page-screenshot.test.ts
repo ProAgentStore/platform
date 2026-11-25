@@ -132,7 +132,7 @@ describe("no stored frame bypasses the mask (#1067, #1419)", () => {
 				else if (/\.ts$/.test(name) && !/\.test\.ts$/.test(name)) {
 					const source = ts.createSourceFile(full, readFileSync(full, "utf8"), ts.ScriptTarget.Latest, true);
 					const visit = (node: import("typescript").Node) => {
-						if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "screenshot") direct.push(relative(root, full));
+						if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "screenshot") direct.push(relative(root, full).replaceAll("\\", "/"));
 						ts.forEachChild(node, visit);
 					};
 					visit(source);

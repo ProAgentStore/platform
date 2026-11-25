@@ -42,7 +42,7 @@ describe("namedInCommand", () => {
 		expect(namedInCommand("src/a.ts", "sed -i 's/1/2/' src/a.ts", dir)).toBe(true);
 		expect(namedInCommand("src/a.ts", "sed -i s/1/2/ ./src/a.ts", dir)).toBe(true);
 		expect(namedInCommand("src/a.ts", `git mv src lib`, dir)).toBe(true);
-		expect(namedInCommand("src/a.ts", `sed -i s/1/2/ ${join(dir, "src/a.ts")}`, dir)).toBe(true);
+		expect(namedInCommand("src/a.ts", `sed -i s/1/2/ ${join(dir, "src/a.ts").replaceAll("\\", "/")}`, dir)).toBe(true);
 		expect(namedInCommand("src/a.ts", "sed -i s/1/2/ src/*.ts", dir)).toBe(false);
 		expect(namedInCommand("src/a.ts", "biome format --write .", dir)).toBe(false);
 		expect(namedInCommand("src/a.ts", "sed -i s/1/2/ ../src/a.ts", dir)).toBe(false);

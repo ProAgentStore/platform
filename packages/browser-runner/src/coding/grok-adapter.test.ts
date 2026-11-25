@@ -85,7 +85,7 @@ if (argv.includes("streaming-json")) process.stdout.write(readFileSync(process.e
 else process.stdout.write("plain reply\\n");
 `;
 
-describe("a Grok session renders its calls into the pane the evidence check reads (#1187)", () => {
+describe.skipIf(process.platform === "win32")("a Grok session renders its calls into the pane the evidence check reads (#1187)", () => {
 	let dir: string;
 	let bin: string;
 	beforeAll(() => {

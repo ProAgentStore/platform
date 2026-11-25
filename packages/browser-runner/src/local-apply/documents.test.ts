@@ -54,7 +54,7 @@ describe("attachment filenames (#1574)", () => {
 		const dir = temp();
 		const input = { ...parseApplyEnvelope(envelope()), job: { title: "Program Director" }, ownerFacts: facts({ firstName: "Owner", lastName: "Name" }) };
 		const prepared = await prepareApplyDocuments(input, dir, join(dir, "no-home"), () => {}, fakePdf);
-		expect(prepared.artifactPath("resume")).toMatchObject({ path: expect.stringMatching(/\/Owner-Name-Resume-Program-Director\.pdf$/) });
+		expect(prepared.artifactPath("resume")).toMatchObject({ path: expect.stringMatching(/[\\/]Owner-Name-Resume-Program-Director\.pdf$/) });
 	});
 });
 
@@ -71,7 +71,8 @@ describe("cloud application documents (#1468)", () => {
 		expect(events).toContainEqual({ type: "artifact.staged", detail: { kind: "resume", source: "resume.md", path: "resume.pdf", sha256: hash(await fakePdf("Private resume exact owner text")), sourceSha256: input.artifacts[0].sha256, rendererRevision: "application_pdf_v1", mimeType: "application/pdf", bytes: (await fakePdf("Private resume exact owner text")).length } });
 		if (!("path" in upload)) throw new Error("Expected staged file");
 		expect(readFileSync(upload.path)).toEqual(await fakePdf("Private resume exact owner text"));
-		expect(statSync(upload.path).mode & 0o777).toBe(0o600);
+		// POSIX permission bits do not exist on Windows (it reports 0o666); the Windows ACL of a secret is covered by secret-file.test.ts.
+		if (process.platform !== "win32") expect(statSync(upload.path).mode & 0o777).toBe(0o600);
 		expect(JSON.stringify(events)).not.toContain("exact owner text");
 		writeFileSync(upload.path, "changed");
 		expect(prepared.artifactPath("resume")).toEqual({ error: "The approved source or rendered PDF changed; it will not be uploaded." });

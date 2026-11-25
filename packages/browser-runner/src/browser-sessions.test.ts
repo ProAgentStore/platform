@@ -72,7 +72,7 @@ describe("per-agent browser mode (#1429)", () => {
 		await sessions.run("agent-b", "headless", true, async () => {
 			expect(sessions.current).not.toBe(a);
 			expect(sessions.current.dataDir).not.toBe(a.dataDir);
-			expect(a.dataDir).toMatch(/agent-browsers\/[a-f0-9]{64}$/);
+			expect(a.dataDir).toMatch(/agent-browsers[\\/][a-f0-9]{64}$/);
 			expect(a.headless).toBe(false);
 			expect(sessions.current.headless).toBe(true);
 		});

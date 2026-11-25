@@ -72,7 +72,7 @@ if (process.env.GROK_FAKE_FAIL_ONCE && argv[0] === "-r" && !existsSync(process.e
 process.stdout.write("done: " + argv[argv.length - 1] + "\\n");
 `;
 
-describe("a Grok session, in real processes (#1156)", () => {
+describe.skipIf(process.platform === "win32")("a Grok session, in real processes (#1156)", () => {
 	let dir: string;
 	let bin: string;
 	beforeAll(() => {
@@ -203,7 +203,7 @@ out({ type: "tool_call_update", toolCallId: "call-1", status: "completed", conte
 out({ type: "end", stopReason: "end_turn", sessionId: process.env.GROK_FAKE_SESSION, requestId: process.env.GROK_FAKE_REQUEST, usage: { input_tokens: 1000, output_tokens: 50, cache_read_input_tokens: 400, cache_creation_input_tokens: 0, reasoning_tokens: 10, total_tokens: 1450 }, total_cost_usd: 0.0123, modelUsage: { "grok-4.7-build": { costUSD: 0.0123 } } });
 `;
 
-describe("a Grok turn end to end (#1197)", () => {
+describe.skipIf(process.platform === "win32")("a Grok turn end to end (#1197)", () => {
 	let dir: string;
 	let bin: string;
 	const THEIRS = "01a14f36-85b6-7763-8935-36a11d31018b";

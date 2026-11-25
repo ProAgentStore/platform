@@ -127,7 +127,8 @@ describe("the broker credential never becomes part of a task (#841)", () => {
 		expect(stored.broker).toEqual({ url: `${BROKER_URL_PREFIX}run-1` });
 		const file = join(dir, "site-builder", "run-1", "broker.json");
 		expect(readFileSync(file, "utf8")).toContain(BROKER_TOKEN);
-		expect(statSync(file).mode & 0o777).toBe(0o600);
+		// POSIX permission bits do not exist on Windows (it reports 0o666); the Windows ACL of a secret is covered by secret-file.test.ts.
+		if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
 	});
 
 	it("a task whose credential this runner does not hold cannot start", () => {

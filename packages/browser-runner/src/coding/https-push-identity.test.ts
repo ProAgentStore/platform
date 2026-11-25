@@ -69,7 +69,7 @@ describe("resolveHttpsCredential — real git, a scripted credential helper (#14
 		vi.stubEnv("USERPROFILE", home);
 		const helper = join(home, "fake-credential-helper.sh");
 		writeFileSync(helper, "#!/bin/sh\necho username=owner-login\necho password=sk-fake-token\n", { mode: 0o755 });
-		execFileSync("git", ["config", "--global", "credential.helper", helper], { env: { ...process.env, HOME: home } });
+		execFileSync("git", ["config", "--global", "credential.helper", helper.replaceAll("\\", "/")], { env: { ...process.env, HOME: home } });
 		expect(resolveHttpsCredential("github.com")).toEqual({ username: "owner-login", password: "sk-fake-token" });
 	});
 

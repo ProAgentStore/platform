@@ -84,7 +84,7 @@ describe("isolated start (#1708)", () => {
 		chmodSync(bin, 0o755);
 		rt = new CodingRuntime(reposBase);
 		const iso = rt.start({ sessionId: SESSION, repoId: "r1", workDir: shared, clientType: "claude", bin, branch: "main", strategy: "isolated-direct" });
-		expect(iso.checkout?.path).toBe(join(worktreeRootFor(reposBase), iso.checkout?.path.split("/").slice(-2)[0] ?? "", "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"));
+		expect(iso.checkout?.path.replaceAll("\\", "/")).toBe(join(worktreeRootFor(reposBase), iso.checkout?.path.split(/[\\/]/).slice(-2)[0] ?? "", "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa").replaceAll("\\", "/"));
 		expect(rt.diagnostics().find((d: { sessionId: string }) => d.sessionId === SESSION)).toBeDefined();
 		const plain = rt.start({ sessionId: "csess_bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb", repoId: "r1", workDir: shared, clientType: "claude", bin, branch: "main" });
 		expect(plain.checkout).toBeUndefined();
