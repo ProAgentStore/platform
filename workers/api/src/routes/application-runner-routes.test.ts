@@ -5,6 +5,7 @@
  * against the real migrations.
  */
 import { LOST_RUNNER_GRACE_MS } from "../lib/local-apply/apply.js";
+import { QUEUE_MAX_ATTEMPTS } from "../lib/applications/work-queue.js";
 import { Hono } from "hono";
 import { completeRunnerBatch } from "../lib/local-apply/__fixtures__/status.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -2026,6 +2027,146 @@ describe("a busy Runner queues the fill instead of blocking the application (#97
 		expect(later.status).toBe("queued");
 		expect(await appRow("lead-capacity-wait")).toMatchObject({ status: "filling", submit_attempted_at: null });
 		expect(dispatches()).toHaveLength(1);
+	});
+
+	describe("#1411: a legitimate wait behind another run is never mistaken for an orphan, and a real orphan still is", () => {
+		const aged = (id: string, ms: number) => d1.DB.prepare("UPDATE local_apply_runs SET created_at = ?2 WHERE id = ?1").bind(id, Date.now() - ms).run();
+		const OLDER_THAN_GRACE = LOST_RUNNER_GRACE_MS + 60 * 60_000;
+		/** Every ask for this run — the busy-refused first one at creation counts, so "dequeued once" is 2 in total. */
+		const dispatchesOf = (runId: string) => dispatches().filter((d) => (d.body as { runId?: string }).runId === runId);
+		const REFUSED_FIRST_ASK_PLUS_ONE_DEQUEUE = 2;
+		const queueCard = async (id: string) => (await call("GET", "/ap/application-queue")).body.items.find((i: { applicationId: string }) => i.applicationId === id);
+		/** The real flow, no state wiped: A is accepted and runs; B is refused as busy and queued behind it with the runner's own reason. */
+		async function behindARunningRun(a: string, b: string) {
+			await enableAutoSubmit();
+			answers["/local-apply/run"] = { status: 202, body: { status: "running" } };
+			const runA = (await call("POST", "/ap/application-runs", readyApp(a))).body.run;
+			answers["/local-apply/run"] = BUSY;
+			const runB = (await call("POST", "/ap/application-runs", readyApp(b))).body.run;
+			expect(await runRow(runA.id)).toMatchObject({ status: "running" });
+			expect(await runRow(runB.id)).toMatchObject({ status: "queued" });
+			return { runA, runB };
+		}
+		const slotFrees = (runId: string) => {
+			answers["/local-apply/run"] = { status: 202, body: { status: "running" } };
+			runner("ended", { lastSeq: 1, result: RESULT(runId, { outcome: "awaiting_review", filled: 4 }) });
+		};
+
+		it("A holds the slot past the grace, B waits behind it: status reads and scheduled sweeps never mark B runner_lost, and B dispatches exactly once when A ends", async () => {
+			const { runA, runB } = await behindARunningRun("lead-1411-a", "lead-1411-b");
+			await aged(runA.id, OLDER_THAN_GRACE);
+			await aged(runB.id, OLDER_THAN_GRACE - 60_000);
+			const dispatched = dispatches().length;
+
+			const read = await call("GET", `/ap/application-runs/${runB.id}`);
+			expect(read.body.run).toMatchObject({ status: "queued", errorCode: null });
+			await syncApplyRun(env(), "u1", read.body.run, Date.now() + 2 * 60 * 60_000);
+			runner("running", { lastSeq: 0 });
+			await syncActiveApplyRuns(env()); // the scheduled sweep
+			expect(await runRow(runB.id)).toMatchObject({ status: "queued" });
+			expect(String((await runRow(runB.id))?.queued_reason), "the wait keeps the runner's own words").toMatch(/already filling/);
+			expect(await appRow("lead-1411-b")).toMatchObject({ status: "filling", block_reason: null, submit_attempted_at: null });
+			expect(dispatches(), "nothing was offered to a busy machine").toHaveLength(dispatched);
+
+			slotFrees(runA.id);
+			await syncActiveApplyRuns(env());
+			expect(await runRow(runB.id)).toMatchObject({ status: "running" });
+			expect(dispatchesOf(runB.id), "the refused first ask + exactly one dequeue").toHaveLength(REFUSED_FIRST_ASK_PLUS_ONE_DEQUEUE);
+		});
+
+		it("waiters are served first-come first-served, one at a time", async () => {
+			const { runA, runB } = await behindARunningRun("lead-1411-fa", "lead-1411-fb");
+			const runC = (await call("POST", "/ap/application-runs", readyApp("lead-1411-fc"))).body.run;
+			await aged(runB.id, 3 * 60 * 60_000);
+			await aged(runC.id, 2 * 60 * 60_000);
+			slotFrees(runA.id);
+			await syncActiveApplyRuns(env());
+			expect(await runRow(runB.id)).toMatchObject({ status: "running" });
+			expect(await runRow(runC.id), "C waits for B, not for the clock").toMatchObject({ status: "queued" });
+			expect(dispatchesOf(runC.id), "only its refused first ask").toHaveLength(1);
+			slotFrees(runB.id);
+			await syncActiveApplyRuns(env());
+			expect(await runRow(runC.id)).toMatchObject({ status: "running" });
+			expect(dispatchesOf(runB.id)).toHaveLength(REFUSED_FIRST_ASK_PLUS_ONE_DEQUEUE);
+			expect(dispatchesOf(runC.id)).toHaveLength(REFUSED_FIRST_ASK_PLUS_ONE_DEQUEUE);
+		});
+
+		it("a PAUSED predecessor still holds the one browser slot — reported by the runner, not forced in the database", async () => {
+			const { runA, runB } = await behindARunningRun("lead-1411-pa", "lead-1411-pb");
+			runner("paused", { pause: { reason: "owner_requested", handoffRequestId: "owner-pause-1411" }, events: [{ seq: 1, type: "run.paused", at: new Date().toISOString(), pauseReason: "owner_requested" }] });
+			await syncActiveApplyRuns(env());
+			expect(await runRow(runA.id)).toMatchObject({ status: "paused" });
+			await aged(runB.id, OLDER_THAN_GRACE);
+			const asked = dispatches().length;
+			await call("GET", `/ap/application-runs/${runB.id}`);
+			await syncActiveApplyRuns(env());
+			expect(await runRow(runB.id)).toMatchObject({ status: "queued" });
+			expect(await appRow("lead-1411-pb")).toMatchObject({ status: "filling", submit_attempted_at: null });
+			expect(dispatches(), "a paused fill still owns the machine: nothing is offered").toHaveLength(asked);
+		});
+
+		it("two sweeps racing for a freed slot dispatch the waiter exactly once", async () => {
+			const { runA, runB } = await behindARunningRun("lead-1411-ra", "lead-1411-rb");
+			slotFrees(runA.id);
+			await Promise.all([syncActiveApplyRuns(env()), syncActiveApplyRuns(env())]);
+			expect(dispatchesOf(runB.id), "dispatched once, not twice").toHaveLength(REFUSED_FIRST_ASK_PLUS_ONE_DEQUEUE);
+			expect(await runRow(runB.id)).toMatchObject({ status: "running" });
+		});
+
+		it("a claim whose dispatch never happened (the Worker died between claim and ask) is a wait, not an orphan, and is retried once due", async () => {
+			await enableAutoSubmit();
+			answers["/local-apply/run"] = BUSY;
+			const runB = (await call("POST", "/ap/application-runs", readyApp("lead-1411-claim"))).body.run;
+			await aged(runB.id, OLDER_THAN_GRACE);
+			// What `claimQueuedDispatch` leaves behind when the Worker dies right after it: an attempt counted, the next one in the future.
+			await d1.DB.prepare("UPDATE local_apply_runs SET attempts = 1, next_attempt_at = ?2, queued_reason = NULL WHERE id = ?1").bind(runB.id, Date.now() + 10 * 60_000).run();
+			const dispatched = dispatches().length;
+			await call("GET", `/ap/application-runs/${runB.id}`);
+			await syncActiveApplyRuns(env());
+			expect(await runRow(runB.id)).toMatchObject({ status: "queued", attempts: 1 });
+			expect(dispatches(), "not due yet").toHaveLength(dispatched);
+			expect(await appRow("lead-1411-claim")).toMatchObject({ status: "filling", submit_attempted_at: null });
+
+			answers["/local-apply/run"] = { status: 202, body: { status: "running" } };
+			await d1.DB.prepare("UPDATE local_apply_runs SET next_attempt_at = ?2 WHERE id = ?1").bind(runB.id, Date.now() - 1000).run();
+			await syncActiveApplyRuns(env());
+			expect(await runRow(runB.id)).toMatchObject({ status: "running" });
+			expect(dispatchesOf(runB.id)).toHaveLength(REFUSED_FIRST_ASK_PLUS_ONE_DEQUEUE);
+		});
+
+		it("the bounded wait ends honestly: attempts used up settles the run as runner_busy with no submit flag, and sends nothing", async () => {
+			await enableAutoSubmit();
+			answers["/local-apply/run"] = BUSY;
+			const runB = (await call("POST", "/ap/application-runs", readyApp("lead-1411-expiry"))).body.run;
+			await d1.DB.prepare("UPDATE local_apply_runs SET attempts = ?2, next_attempt_at = NULL WHERE id = ?1").bind(runB.id, QUEUE_MAX_ATTEMPTS).run();
+			const dispatched = dispatches().length;
+			await syncActiveApplyRuns(env());
+			expect(await runRow(runB.id)).toMatchObject({ status: "failed" });
+			expect(await appRow("lead-1411-expiry")).toMatchObject({ status: "blocked", block_reason: "runner_busy", submit_attempted_at: null });
+			expect(dispatches()).toHaveLength(dispatched);
+			const stored = await d1.DB.prepare("SELECT error_code, error FROM local_apply_runs WHERE id = ?1").bind(runB.id).first<{ error_code: string; error: string }>();
+			expect(stored).toMatchObject({ error_code: "runner_busy" });
+			expect(stored?.error).toContain(`${QUEUE_MAX_ATTEMPTS} attempts`);
+		});
+
+		it("a run that was recorded but never handed over, with nothing holding the slot, is still ended as runner_lost — with no submit flag invented", async () => {
+			answers["/local-apply/run"] = BUSY;
+			const runB = (await call("POST", "/ap/application-runs", readyApp("lead-1411-orphan"))).body.run;
+			// The Worker died between recording the run and asking the machine: no reason, no attempt.
+			await d1.DB.prepare("UPDATE local_apply_runs SET attempts = 0, next_attempt_at = NULL, queued_reason = NULL, created_at = ?2 WHERE id = ?1").bind(runB.id, Date.now() - OLDER_THAN_GRACE).run();
+			await call("GET", `/ap/application-runs/${runB.id}`);
+			expect(await runRow(runB.id)).toMatchObject({ status: "failed" });
+			expect(await appRow("lead-1411-orphan")).toMatchObject({ status: "blocked", block_reason: "runner_lost", submit_attempted_at: null });
+		});
+
+		it("the card says what a waiting run is waiting on: position, attempts, the reason, and the sentence the owner reads", async () => {
+			const { runB } = await behindARunningRun("lead-1411-xa", "lead-1411-xb");
+			await aged(runB.id, OLDER_THAN_GRACE);
+			await call("GET", `/ap/application-runs/${runB.id}`);
+			const waiting = await queueCard("lead-1411-xb");
+			expect(waiting.queue).toMatchObject({ position: 1, attempts: 0, exhausted: false, reason: expect.stringMatching(/already filling/) });
+			expect(waiting.queue.label).toMatch(/^Waiting for your machine — Next in line/);
+		});
 	});
 
 	it("a genuine 409 conflict still blocks, so a bound run is never retried forever", async () => {
