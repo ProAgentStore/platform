@@ -122,7 +122,7 @@ describe("completed work is not queued again (#1671)", () => {
 		expect(it7).toMatchObject({ action: "excluded" });
 		expect(it7?.reason).toContain("no coding CLI on this machine");
 		expect(queuedRows()).toEqual([]);
-		expect(await issueQuarantine(env, "u1", REPO, 7)).toBeNull(); // an admission outcome never quarantines
+		expect(await issueQuarantine(env, "u1", REPO, 7, NOW.getTime())).toBeNull(); // an admission outcome never quarantines
 		// …and the cooldown lapses by itself: the issue is eligible again once it has passed.
 		const later = await wake(deps, false, new Date(NOW.getTime() + 7 * 3_600_000));
 		expect((await items(later)).find((x) => x.number === 7), JSON.stringify(await items(later))).toMatchObject({ action: "queued" });
@@ -154,9 +154,9 @@ describe("failed-run accounting is truthful and traceable (#1671)", () => {
 	it("five admission failures plus four real failures do not quarantine; the fifth real one does — history intact either way", async () => {
 		for (let n = 1; n <= 5; n++) await recordDrainRefusal(env, { id: `q${n}`, instanceId: "coder", userId: "u1", repoId: "repo-1", objective: `Work issue #12 in ${REPO}: t`, metadata: null }, null, undefined, "x");
 		for (let n = 1; n <= 4; n++) await unsuccessful(`run-${n}`, 12);
-		expect(await issueQuarantine(env, "u1", REPO, 12)).toBeNull();
+		expect(await issueQuarantine(env, "u1", REPO, 12, NOW.getTime())).toBeNull();
 		await unsuccessful("run-5", 12);
-		expect(await issueQuarantine(env, "u1", REPO, 12)).toMatchObject({ attemptCount: 5 });
+		expect(await issueQuarantine(env, "u1", REPO, 12, NOW.getTime())).toMatchObject({ attemptCount: 5 });
 		expect(attemptRows(12)).toHaveLength(10); // every row is still there
 	});
 });
