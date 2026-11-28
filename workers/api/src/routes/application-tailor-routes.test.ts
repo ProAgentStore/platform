@@ -906,3 +906,135 @@ describe("retry_tailoring rechecks the live job through the connected Runner (#1
 		expect(await row()).toMatchObject({ status: "blocked", submit_attempted_at: 1 });
 	});
 });
+
+/**
+ * #1553 — an APPROVED application whose approved documents went missing had no supported way back.
+ *
+ * Live: a retried application with an unused approval stopped at document preflight (`artifact_changed`: the exact approved résumé could
+ * not be read) before any browser or model started. The runner's question said "Re-run tailoring for this application", but the card
+ * offered only resume / retry_fill / defer / archive, because `retry_tailoring` was hidden by ANY approval row and the recovery check
+ * still used an event allowlist that omitted the approved run's own `policy.decision`. The positive receipt (CLI 0.4.225) now decides
+ * it. These run the real route; the stopped fill is seeded exactly as the runner and dispatch leave it.
+ */
+describe("regenerating the documents of an approved application that stopped at document preflight (#1553)", () => {
+	const URL1 = "https://jobs.example.com/role/hcl";
+	const LIVE = { state: "live", jobUrl: URL1, applyUrl: `${URL1}/apply`, evidence: "apply_control_present" };
+	const pathsSent = () => sent.map((x) => x.path);
+	const at = "2026-11-04T00:00:00.000Z";
+	const RUN = "fill-1553";
+
+	function emailEvent() {
+		const plan = planJobLeadTriage({ id: "email-1553", data: { ...LEAD_RECORD.data, source: "Gmail", status: "unverified", url: URL1 } } as never, { action: "apply", sourceInstanceId: "scout" }, { now: "2026-10-07T00:00:00.000Z" });
+		if (!plan.ok || !plan.event) throw new Error("fixture did not plan");
+		return plan.event;
+	}
+	const receiptResult = () => ({
+		runId: RUN, traceId: RUN, outcome: "blocked", mode: "auto_submit", engineAuth: "unknown", filled: 0, uploaded: [], submitAttempted: false, summary: "", blockReason: "artifact_changed",
+		preflightFailure: { schemaVersion: 1, runId: RUN, phase: "documents", reason: "artifact_changed" },
+		executionEvidence: { schemaVersion: 1, fieldCounts: "unmeasured", nativeCalls: { attempted: 0, succeeded: 0, failed: 0, notDispatched: 0, dropped: 0, truncated: false, coverage: "unavailable" }, screenshotsDelivered: 0, screenshotRequests: 0, independentScreenshotAvailable: false, blockingQuestions: 0, optionalQuestions: 0, browser: { state: "unavailable", timeouts: 0 }, causes: [] },
+	});
+	const approvedTrace = () => [
+		{ type: "run.requested", at }, { type: "source.read", at, detail: { role: "profile" } }, { type: "artifact.staged", at },
+		{ type: "policy.decision", at, detail: { class: "submit", decision: "allowed", basis: "application_approval", authorizationId: "auth-1553" } },
+		{ type: "runner.dispatched", at }, { type: "run.ended", at },
+	];
+
+	/** An application blocked at `artifact_changed` after its approved fill stopped at document preflight, holding its (unspent) approval. */
+	async function approvedThenMissing(over: { trace?: unknown[]; result?: unknown; runnerVersion?: string | null; consumed?: boolean; claimed?: boolean } = {}) {
+		d1.exec("UPDATE agent_connections SET enabled = 0 WHERE id = 'c-ready'");
+		await deliverEvent(env(), "scout", "u1", JOB_LEAD_APPLY_EVENT, [emailEvent()], { traceId: "t-1553" });
+		d1.exec("UPDATE agent_connections SET enabled = 1 WHERE id = 'c-ready'");
+		sent.length = 0;
+		const app = (await d1.DB.prepare("SELECT id, state_version FROM job_applications WHERE lead_id = 'email-1553'").first<{ id: string; state_version: number }>())!;
+		await d1.DB.prepare("UPDATE job_applications SET status = 'blocked', block_reason = 'artifact_changed', fill_run_id = ?2 WHERE id = ?1").bind(app.id, RUN).run();
+		await d1.DB.prepare(
+			`INSERT INTO local_apply_runs (id, instance_id, user_id, application_id, request_id, status, policy, result, trace, engine_auth, runner_version, created_at, started_at, ended_at, updated_at)
+			 VALUES (?1, 'next', 'u1', ?2, 'req-1553', 'blocked', ?3, ?4, ?5, 'unknown', ?6, 1, 1, ?7, 1)`,
+		).bind(RUN, app.id, JSON.stringify({ mode: "auto_submit", toolAccess: "full" }), JSON.stringify(over.result ?? receiptResult()), JSON.stringify(over.trace ?? approvedTrace()), over.runnerVersion === undefined ? "0.4.225" : over.runnerVersion, Date.now() - 60_000).run();
+		await d1.DB.prepare(
+			`INSERT INTO job_application_submit_authorizations (id, application_id, instance_id, user_id, approved_by, approved_at, approved_state_version, approved_status, idempotency_key, consumed_at, consumed_run_id,
+			   approval_kind, approved_runner_instance_id, approved_fill_run_id, approved_job_identity, recovery_id, recovery_runner_instance_id)
+			 VALUES ('auth-1553', ?1, 't1', 'u1', 'owner', 1, ?2, 'materials_ready', 'k-1553', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
+		)
+			// A recovery claim only exists on a verified one-click approval (`claimVerifiedOneClickRecovery`); a standard approval never carries one.
+			.bind(app.id, app.state_version, over.consumed ? 5 : null, over.consumed ? RUN : null, over.claimed ? "verified_one_click" : "standard", over.claimed ? "next" : null, over.claimed ? RUN : null, over.claimed ? "job-1553" : null, over.claimed ? "claim-1553" : null, over.claimed ? "next" : null)
+			.run();
+		const version = (await d1.DB.prepare("SELECT state_version FROM job_applications WHERE id = ?1").bind(app.id).first<{ state_version: number }>())!.state_version;
+		return { id: app.id, version };
+	}
+	const card = async (id: string) => (await call("GET", `/t1/application-queue/item?application_id=${id}`)).body.item;
+	const retry = (id: string, version: number) => call("POST", "/t1/application-queue/actions", { action: "retry_tailoring", application_id: id, expected_status: "blocked", expected_version: version });
+	const approval = () => d1.DB.prepare("SELECT id, consumed_at, consumed_run_id, revoked_at FROM job_application_submit_authorizations WHERE id = 'auth-1553'").first<Record<string, unknown>>();
+
+	it("THE REPORTED FAILURE: the card now offers retry_tailoring beside retry_fill, and the retry regenerates the documents", async () => {
+		const a = await approvedThenMissing();
+		const item = await card(a.id);
+		expect(item.submitAuthorization, "the approval exists and is unspent").toMatchObject({ consumedAt: null });
+		expect(item.actions).toContain("retry_tailoring");
+		expect(item.actions).toContain("retry_fill"); // regenerating is offered, not forced: a plain retry is still the owner's choice
+		answers["/local-apply/preflight"] = { status: 200, body: LIVE };
+		const r = await retry(a.id, a.version);
+		expect(r.status, JSON.stringify(r.body)).toBe(200);
+		expect(pathsSent()).toContain("/local-artifact/run");
+		const now = (await d1.DB.prepare("SELECT status, block_reason, submit_attempted_at FROM job_applications WHERE id = ?1").bind(a.id).first<Record<string, unknown>>())!;
+		expect(now).toMatchObject({ status: "tailoring", block_reason: null, submit_attempted_at: null });
+		expect(await appCount()).toBe(1);
+		// Nothing about the approval was spent or forged by regenerating: it is the same row, still unspent.
+		expect(await approval()).toMatchObject({ id: "auth-1553", consumed_at: null, consumed_run_id: null });
+	});
+
+	it("a SPENT approval refuses: a run may have used it, so nothing is inferred and nothing is regenerated", async () => {
+		const a = await approvedThenMissing({ consumed: true });
+		expect((await card(a.id)).actions).not.toContain("retry_tailoring");
+		const r = await retry(a.id, a.version);
+		expect(r.status).toBe(409);
+		expect(pathsSent()).toEqual([]);
+		expect(await d1.DB.prepare("SELECT status FROM job_applications WHERE id = ?1").bind(a.id).first()).toMatchObject({ status: "blocked" });
+	});
+
+	it("a CLAIMED approval (a one-click recovery in flight) refuses", async () => {
+		const a = await approvedThenMissing({ claimed: true });
+		expect((await card(a.id)).actions).not.toContain("retry_tailoring");
+		expect((await retry(a.id, a.version)).status).toBe(409);
+		expect(pathsSent()).toEqual([]);
+	});
+
+	it("an attempted submit refuses, whatever else the run says", async () => {
+		const a = await approvedThenMissing();
+		d1.exec(`UPDATE job_applications SET submit_attempted_at = 1 WHERE id = '${a.id}'`);
+		expect((await card(a.id)).actions).not.toContain("retry_tailoring");
+		expect((await retry(a.id, a.version)).status).toBe(409);
+		expect(pathsSent()).toEqual([]);
+	});
+
+	it("activity the receipt does not allow (a browser event) refuses: a receipt contradicted is no receipt", async () => {
+		const a = await approvedThenMissing({ trace: [...approvedTrace(), { type: "browser.navigated", at }] });
+		expect((await card(a.id)).actions).not.toContain("retry_tailoring");
+		expect((await retry(a.id, a.version)).status).toBe(409);
+		expect(pathsSent()).toEqual([]);
+	});
+
+	it("an approved run from a runner OLDER than the receipt (no positive proof) refuses", async () => {
+		const a = await approvedThenMissing({ runnerVersion: "0.4.224" });
+		expect((await card(a.id)).actions).not.toContain("retry_tailoring");
+		expect((await retry(a.id, a.version)).status).toBe(409);
+		expect(pathsSent()).toEqual([]);
+	});
+
+	it("a result with no preflight receipt refuses: absence of events is not evidence, with an approval in the way", async () => {
+		const { preflightFailure: _drop, ...noReceipt } = receiptResult();
+		const a = await approvedThenMissing({ result: noReceipt });
+		expect((await card(a.id)).actions).not.toContain("retry_tailoring");
+		expect((await retry(a.id, a.version)).status).toBe(409);
+		expect(pathsSent()).toEqual([]);
+	});
+
+	it("a stale second click finds the application already moved and starts nothing more", async () => {
+		const a = await approvedThenMissing();
+		answers["/local-apply/preflight"] = { status: 200, body: LIVE };
+		expect((await retry(a.id, a.version)).status).toBe(200);
+		const runs = await runCount();
+		expect((await retry(a.id, a.version)).status).toBe(409);
+		expect(await runCount()).toBe(runs);
+	});
+});

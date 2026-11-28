@@ -23,6 +23,7 @@ import { tailorRunSignals } from "../applications/run-signals.js";
 import { workKeyForLead } from "../job-lead-triage.js";
 import { claimQueuedDispatch, instancesWithQueuedRuns, nextDueQueuedRun, noteQueued } from "../applications/work-queue-store.js";
 import { QUEUE_MAX_ATTEMPTS, refusalVerdict } from "../applications/work-queue.js";
+import { assertFullSubmissionReconciled } from "../local-apply/reconciliation-store.js";
 import { moveApplication } from "../local-apply/store.js";
 import { hostOfUrl } from "../local-apply/policy.js";
 import { capabilitiesForInstance } from "../agent-capabilities.js";
@@ -362,6 +363,8 @@ export async function retryTailoring(env: Env, instanceId: string, uid: string, 
 	if (!["blocked", "failed", "cancelled"].includes(app.status) || app.submitAttemptedAt || (app.fillRunId && !(await canRecoverMissingMaterials(env, uid, app)))) {
 		throw new HttpError(409, `Tailoring can be retried only for an application that stopped while tailoring; this one is ${app.status}${app.fillRunId ? " and has been filled" : ""}.`);
 	}
+	// A Full browser run's external effects are never inferred from absence: the same reconciliation gate a fill retry passes (#1553). A trusted document-preflight receipt is the one exemption it already makes.
+	if (app.fillRunId) await assertFullSubmissionReconciled(env, uid, app);
 	// The owner's answers to this application's questions are saved to their Profile FIRST, so this
 	// retry and every later Tailor run read them (#1066). They are the owner's facts — kept even if
 	// the run below cannot start right now.

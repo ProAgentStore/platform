@@ -214,7 +214,7 @@ function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRu
 					...(canSaveEndedAnswers(app, approvalRun) ? (["resume"] as const) : []),
 					...(postFillApprovable ? (["approve_and_proceed"] as const) : []),
 					...(canFill && !attemptBlocks ? (["retry_fill"] as const) : []),
-					...(!submissionUncertain && !auth && canRegenerateMissingMaterials(app, approvalRun) ? (["retry_tailoring"] as const) : []),
+					...(!submissionUncertain && canRegenerateMissingMaterials(app, approvalRun, auth) ? (["retry_tailoring"] as const) : []), // #1553: the guard weighs the approval (spent or claimed refuses), not a blanket !auth
 					...assertable,
 					"defer",
 					"archive",
